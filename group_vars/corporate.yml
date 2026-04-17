@@ -3,6 +3,8 @@ short_domain_name: "voltgrid"
 domain_tld_name: "com"
 file_server_alias: "file"
 file_server_ip: "172.16.2.3"
+map_drive_letter: S
+map_drive_path: \\pp-file.voltgrid.com\Share
 
 DomainUsers:
   - name: "simspace"

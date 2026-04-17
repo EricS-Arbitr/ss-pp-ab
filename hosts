@@ -64,6 +64,9 @@ pp-sql
 pp-wec
 pp-syslog
 
+[file]
+pp-file
+
 [corporate:children]
 workstations
 domain_controllers

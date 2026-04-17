@@ -40,3 +40,28 @@
     - additional_dc
   tags:
     - additional_dc
+
+- name: dc_status
+  hosts: pdc,additional_dc
+  gather_facts: false
+  roles:
+    - dc_status
+  tags:
+    - dc_status
+
+- name: File Share
+  hosts: file
+  gather_facts: false
+  roles:
+    - fileserver
+  tags:
+    - fileserver
+
+- name: Mapped Drive
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - role: mapped_drive
+      when: map_drive_letter is defined
+  tags:
+    - mapped_drive
