@@ -24,6 +24,15 @@
   tags:
     - dcpromo
 
+- name: Create Users
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - create_users
+    - group_assignment
+  tags:
+    - create_users
+
 - name: Additional DC
   hosts: additional_dc
   gather_facts: false

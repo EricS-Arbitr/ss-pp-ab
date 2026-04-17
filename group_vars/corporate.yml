@@ -3,3 +3,175 @@ short_domain_name: "voltgrid"
 domain_tld_name: "com"
 file_server_alias: "file"
 file_server_ip: "172.16.2.3"
+
+DomainUsers:
+  - name: "simspace"
+    fullname: "simspace"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "ahmed.ortega"
+    fullname: "Ahmed Ortega"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "barbara.white"
+    fullname: "Barbara White"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "bob.burke"
+    fullname: "Bob Burke"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "charity.bowen"
+    fullname: "Charity Bowen"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "charles.hardy"
+    fullname: "Charles Hardy"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "charles.martinez"
+    fullname: "Charles Martinez"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "ciara.schultz"
+    fullname: "Ciara Schultz"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "dale.hays"
+    fullname: "Dale Hays"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "david.miller"
+    fullname: "David Miller"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "diana.johnson"
+    fullname: "Diana Johnson"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "elizabeth.garcia"
+    fullname: "Elizabeth Garcia"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "eunice.gilmore"
+    fullname: "Eunice Gilmore"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "gavin.horn"
+    fullname: "Gavin Horn"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "irwin.choi"
+    fullname: "Irwin Choi"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "jacob.smith"
+    fullname: "Jacob Smith"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "james.moore"
+    fullname: "James Moore"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "janice.durham"
+    fullname: "Janice Durham"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "jennifer.davis"
+    fullname: "Jennifer Davis"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "jessica.robinson"
+    fullname: "Jessica Robinson"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "joaquin.clayton"
+    fullname: "Joaquin Clayton"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "john.jackson"
+    fullname: "John Jackson"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "joseph.clark"
+    fullname: "Joseph Clark"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "lara.whitaker"
+    fullname: "Lara Whitaker"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "liam.sherman"
+    fullname: "Liam Sherman"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "linda.taylor"
+    fullname: "Linda Taylor"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "makenzie.melton"
+    fullname: "Makenzie Melton"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "marcos.casey"
+    fullname: "Marcos Casey"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "michelle.blanchard"
+    fullname: "Michelle Blanchard"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "ola.burch"
+    fullname: "Ola Burch"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "rosemary.cortez"
+    fullname: "Rosemary Cortez"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "roxanne.farley"
+    fullname: "Roxanne Farley"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "sean.wilkinson"
+    fullname: "Sean Wilkinson"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
+  - name: "tessa.church"
+    fullname: "Tessa Church"
+    password: "Simspace1!Simspace1!"
+    groups:
+      - "Domain Admins"
