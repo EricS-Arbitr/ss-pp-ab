@@ -123,7 +123,7 @@ ot_devices
 # DMZ
 # ------------------------------------------------------------
 [dmz]
-pp-dmz-revproxy
+pp-www
 pp-dmz-dns
 pp-dmz-smtp
 
@@ -164,6 +164,7 @@ pp-ctrl-wkstn-8
 pp-is-wkstn-1
 pp-hist-client
 pp-maint-laptop
+win-hunt-1
 
 [win11]
 pp-eng-wkstn-1
@@ -211,7 +212,10 @@ pp-hmi-1
 pp-hmi-2
 pp-hmi-3
 pp-asterisk-elastix
-pp-dmz-revproxy
+pp-www
+pp-proxy
+pp-splunk
+remnux
 pp-voip-01
 pp-voip-02
 pp-voip-03
@@ -224,6 +228,20 @@ pp-is-wkstn-4
 [linux:children]
 ubuntu22
 ubuntu24
+
+# ------------------------------------------------------------
+# Security / hunt network (pp-security subnet)
+# ------------------------------------------------------------
+[security]
+pp-splunk
+remnux
+win-hunt-1
+
+[splunk]
+pp-splunk
+
+[hunt]
+win-hunt-1
 
 # ------------------------------------------------------------
 # Infrastructure / special systems (not domain-managed)

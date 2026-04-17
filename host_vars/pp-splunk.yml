@@ -1,0 +1,16 @@
+ansible_host: 10.255.240.175
+network_interfaces:
+  - name: "Ethernet0"
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.175"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "Ethernet1"
+    ipv4:
+      type: "ethernet"
+      address: "172.16.9.20"
+      netmask: "255.255.255.0"
+      gateway: "172.16.9.1"
+    dns:
+      - "172.16.2.7"
