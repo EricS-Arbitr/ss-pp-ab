@@ -1,0 +1,25 @@
+---
+- name: Init
+  hosts: windows
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - init
+  tags:
+    - init
+
+- name: Common Role
+  hosts: windows,linux
+  gather_facts: true
+  roles:
+    - common
+  tags:
+    - common
+
+- name: dcpromo
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - dcpromo
+  tags:
+    - dcpromo

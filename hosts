@@ -1,0 +1,233 @@
+# ============================================================
+# PowerPlant Ansible Inventory
+# ============================================================
+
+# ------------------------------------------------------------
+# Corporate IT Workstations
+# ------------------------------------------------------------
+[business_processing]
+pp-bp-wkstn-1
+pp-bp-wkstn-2
+pp-bp-wkstn-3
+pp-bp-wkstn-4
+pp-bp-wkstn-5
+pp-bp-wkstn-6
+pp-bp-wkstn-7
+pp-bp-wkstn-8
+
+[engineering]
+pp-eng-wkstn-1
+pp-eng-wkstn-2
+pp-eng-wkstn-3
+pp-eng-wkstn-4
+pp-eng-wkstn-5
+pp-eng-wkstn-6
+pp-eng-wkstn-7
+
+[legal_staff]
+pp-ls-wkstn-1
+pp-ls-wkstn-2
+pp-ls-wkstn-3
+pp-ls-wkstn-4
+pp-ls-wkstn-5
+pp-ls-wkstn-6
+
+[infosec]
+pp-is-wkstn-1
+pp-is-wkstn-2
+pp-is-wkstn-3
+pp-is-wkstn-4
+
+[workstations:children]
+business_processing
+engineering
+legal_staff
+infosec
+
+# ------------------------------------------------------------
+# Corporate Servers
+# ------------------------------------------------------------
+[domain_controllers]
+pp-dc01
+pp-dc02
+
+[pdc]
+pp-dc01
+
+[additional_dc]
+pp-dc02
+
+[corporate_servers]
+pp-file
+pp-mail
+pp-sql
+pp-wec
+pp-syslog
+
+[corporate:children]
+workstations
+domain_controllers
+corporate_servers
+
+# ------------------------------------------------------------
+# OT / Control Network
+# ------------------------------------------------------------
+[control_workstations]
+pp-ctrl-wkstn-1
+pp-ctrl-wkstn-2
+pp-ctrl-wkstn-3
+pp-ctrl-wkstn-4
+pp-ctrl-wkstn-5
+pp-ctrl-wkstn-6
+pp-ctrl-wkstn-7
+pp-ctrl-wkstn-8
+
+[ot_servers]
+pp-dc03
+pp-dcs-ctlr
+pp-historian
+pp-ics-data-srv
+pp-hist-srv
+
+[hmi]
+pp-hmi-1
+pp-hmi-2
+pp-hmi-3
+
+[voip]
+pp-asterisk-elastix
+pp-voip-01
+pp-voip-02
+pp-voip-03
+pp-voip-04
+pp-voip-05
+
+[ot_devices]
+pp-plc-1
+pp-plc-2
+pp-fwts
+pp-hist-client
+pp-maint-laptop
+
+[ot:children]
+control_workstations
+ot_servers
+hmi
+voip
+ot_devices
+
+# ------------------------------------------------------------
+# DMZ
+# ------------------------------------------------------------
+[dmz]
+pp-dmz-revproxy
+pp-dmz-dns
+pp-dmz-smtp
+
+# ------------------------------------------------------------
+# All servers (corporate + OT)
+# ------------------------------------------------------------
+[servers:children]
+domain_controllers
+corporate_servers
+ot_servers
+
+# ------------------------------------------------------------
+# Windows OS groups
+# ------------------------------------------------------------
+[win10]
+pp-bp-wkstn-1
+pp-bp-wkstn-2
+pp-bp-wkstn-3
+pp-bp-wkstn-4
+pp-bp-wkstn-5
+pp-bp-wkstn-6
+pp-bp-wkstn-7
+pp-bp-wkstn-8
+pp-ls-wkstn-1
+pp-ls-wkstn-2
+pp-ls-wkstn-3
+pp-ls-wkstn-4
+pp-ls-wkstn-5
+pp-ls-wkstn-6
+pp-ctrl-wkstn-1
+pp-ctrl-wkstn-2
+pp-ctrl-wkstn-3
+pp-ctrl-wkstn-4
+pp-ctrl-wkstn-5
+pp-ctrl-wkstn-6
+pp-ctrl-wkstn-7
+pp-ctrl-wkstn-8
+pp-is-wkstn-1
+pp-hist-client
+pp-maint-laptop
+
+[win11]
+pp-eng-wkstn-1
+pp-eng-wkstn-2
+pp-eng-wkstn-3
+pp-eng-wkstn-4
+pp-eng-wkstn-5
+pp-eng-wkstn-6
+pp-eng-wkstn-7
+pp-is-wkstn-2
+pp-is-wkstn-3
+
+[winserver2022]
+pp-dc01
+pp-dc02
+pp-file
+pp-sql
+pp-wec
+
+[winserver2019]
+pp-dc03
+pp-dcs-ctlr
+pp-historian
+pp-ics-data-srv
+pp-hist-srv
+pp-dmz-dns
+
+[winserver2012]
+pp-mail
+pp-dmz-smtp
+
+[windows:children]
+win10
+win11
+winserver2022
+winserver2019
+winserver2012
+
+# ------------------------------------------------------------
+# Linux OS groups
+# ------------------------------------------------------------
+[ubuntu22]
+pp-syslog
+pp-hmi-1
+pp-hmi-2
+pp-hmi-3
+pp-asterisk-elastix
+pp-dmz-revproxy
+pp-voip-01
+pp-voip-02
+pp-voip-03
+pp-voip-04
+pp-voip-05
+
+[ubuntu24]
+pp-is-wkstn-4
+
+[linux:children]
+ubuntu22
+ubuntu24
+
+# ------------------------------------------------------------
+# Infrastructure / special systems (not domain-managed)
+# ------------------------------------------------------------
+[infrastructure]
+ansible
+is-inet
+elgg
+Red-1
+Activity-Emulation

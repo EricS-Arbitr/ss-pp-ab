@@ -1,0 +1,16 @@
+ansible_host: 10.255.240.153
+network_interfaces:
+  - name: "Ethernet0"
+    ipv4:
+      address: "10.255.240.153"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "Ethernet1"
+    ipv4:
+      address: "172.16.4.6"
+      netmask: "255.255.255.0"
+      gateway: "172.16.4.1"
+    dns:
+      - "172.16.2.7"
+logon_user: "janice.durham"
+logon_user_password: "Simspace1!Simspace1!"

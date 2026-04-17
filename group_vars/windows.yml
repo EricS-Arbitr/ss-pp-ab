@@ -1,0 +1,15 @@
+ansible_connection: winrm
+ansible_winrm_transport: ntlm
+ansible_port: 5985
+ansible_user: simspace
+ansible_password: Simspace1!Simspace1!
+ansible_python_interpreter: python
+ansible_become_method: runas
+ansible_become_user: simspace
+staging_dir_windows: "C:\\temp"
+chrome_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Google/Chrome/113.0.5672.93/googlechromestandaloneenterprise64.msi"
+firefox_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Firefox/136.0.1/firefox_setup_136.0.1.msi"
+sysmon_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Microsoft/sysmon/sysmon64.exe"
+splunk_forwarder_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Splunk/Forwarder/8.2.6/splunkforwarder-8.2.6.msi"
+cs_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Crowdstrike/WindowsSensor.exe"
+s1_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/sentinelone/SentinelInstaller.exe"

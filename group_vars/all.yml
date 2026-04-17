@@ -1,0 +1,7 @@
+domain_admin: "simspace"
+domain_admin_password: "Simspace1!Simspace1!"
+cs_certs:
+  - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertHighAssuranceEVRootCA.crt"
+  - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertGlobalRootG2.crt"
+  - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertAssuredIDRootCA.crt"
+ms_cert: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/MicrosoftIdentityVerificationRootCert2020.crt"
