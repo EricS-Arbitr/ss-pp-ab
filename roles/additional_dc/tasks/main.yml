@@ -1,0 +1,31 @@
+---
+- name: Install RSAT ADDS
+  ansible.windows.win_feature:
+    name: "rsat-ADDS"
+    state: present
+
+- name: Install RSAT DNS
+  ansible.windows.win_feature:
+    name: "rsat-DNS-Server"
+    state: present
+
+- name: local admin guest customization fix - Server 2019
+  ansible.windows.win_shell: "net user administrator /passwordreq:yes"
+
+- name: local admin guest customization fix - Server 2022
+  ansible.windows.win_user:
+    name: administrator
+    password: "{{ domain_admin_password }}"
+    password_never_expires: yes
+    account_disabled: no
+
+- name: Promote to additional domain controller
+  microsoft.ad.domain_controller:
+    dns_domain_name: "{{ domain_name }}"
+    domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+    domain_admin_password: "{{ domain_admin_password }}"
+    safe_mode_password: "{{ domain_admin_password }}"
+    install_dns: true
+    state: domain_controller
+  register: additional_dc_task
+  notify: Reboot Windows

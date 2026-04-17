@@ -23,3 +23,11 @@
     - dcpromo
   tags:
     - dcpromo
+
+- name: Additional DC
+  hosts: additional_dc
+  gather_facts: false
+  roles:
+    - additional_dc
+  tags:
+    - additional_dc
