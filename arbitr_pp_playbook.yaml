@@ -65,3 +65,12 @@
       when: map_drive_letter is defined
   tags:
     - mapped_drive
+
+- name: squid
+  hosts: proxy
+  gather_facts: false
+  become: true
+  roles:
+    - squid
+  tags:
+    - squid

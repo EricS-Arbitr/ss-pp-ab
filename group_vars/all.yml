@@ -5,3 +5,7 @@ cs_certs:
   - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertGlobalRootG2.crt"
   - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertAssuredIDRootCA.crt"
 ms_cert: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/MicrosoftIdentityVerificationRootCert2020.crt"
+
+# Upstream proxy configuration
+inet_proxy_addr: "10.255.240.1"
+inet_proxy_port: "3128"

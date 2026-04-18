@@ -1,5 +1,6 @@
 domain_name: "voltgrid.com"
 short_domain_name: "voltgrid"
+proxy_server: 172.16.2.20
 domain_tld_name: "com"
 file_server_alias: "file"
 file_server_ip: "172.16.2.3"

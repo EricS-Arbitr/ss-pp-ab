@@ -252,3 +252,6 @@ is-inet
 elgg
 Red-1
 Activity-Emulation
+
+[proxy]
+pp-proxy
