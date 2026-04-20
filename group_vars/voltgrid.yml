@@ -7,6 +7,65 @@ file_server_ip: "172.16.2.3"
 map_drive_letter: S
 map_drive_path: \\pp-file.voltgrid.com\Share
 
+internal_dns_records:
+  # WordPress site (pp-www, DMZ — not AD-joined)
+  - name: "www"
+    type: "A"
+    value: "172.16.8.5"
+    zone: "{{ domain_name }}"
+  - name: "5.8.16.172.in-addr.arpa"
+    type: "PTR"
+    value: "www.{{ domain_name }}"
+    zone: "8.16.172.in-addr.arpa"
+
+  # Service aliases for AD-joined hosts
+  - name: "mail"
+    type: "A"
+    value: "172.16.2.2"
+    zone: "{{ domain_name }}"
+  - name: "file"
+    type: "A"
+    value: "172.16.2.3"
+    zone: "{{ domain_name }}"
+  - name: "sql"
+    type: "A"
+    value: "172.16.2.4"
+    zone: "{{ domain_name }}"
+
+  # DMZ hosts (not AD-joined — need static records)
+  - name: "pp-dmz-smtp"
+    type: "A"
+    value: "172.16.8.3"
+    zone: "{{ domain_name }}"
+  - name: "smtp"
+    type: "A"
+    value: "172.16.8.3"
+    zone: "{{ domain_name }}"
+  - name: "pp-dmz-dns"
+    type: "A"
+    value: "172.16.8.4"
+    zone: "{{ domain_name }}"
+
+  # Outbound proxy (not AD-joined)
+  - name: "pp-proxy"
+    type: "A"
+    value: "172.16.2.20"
+    zone: "{{ domain_name }}"
+
+  # PTRs for non-AD-joined hosts
+  - name: "3.8.16.172.in-addr.arpa"
+    type: "PTR"
+    value: "pp-dmz-smtp.{{ domain_name }}"
+    zone: "8.16.172.in-addr.arpa"
+  - name: "4.8.16.172.in-addr.arpa"
+    type: "PTR"
+    value: "pp-dmz-dns.{{ domain_name }}"
+    zone: "8.16.172.in-addr.arpa"
+  - name: "20.2.16.172.in-addr.arpa"
+    type: "PTR"
+    value: "pp-proxy.{{ domain_name }}"
+    zone: "2.16.172.in-addr.arpa"
+
 DomainUsers:
   - name: "simspace"
     fullname: "simspace"

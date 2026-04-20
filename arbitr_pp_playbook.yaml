@@ -74,3 +74,21 @@
     - squid
   tags:
     - squid
+
+- name: wordpress-pv
+  hosts: wordpress-pv
+  gather_facts: false
+  become: true
+  roles:
+    - docker
+    - wordpress-pv
+  tags:
+    - wordpress-pv
+
+- name: dns
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - dns      
+  tags:
+    - dns
