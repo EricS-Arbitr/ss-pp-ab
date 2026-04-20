@@ -67,7 +67,7 @@ pp-syslog
 [file]
 pp-file
 
-[corporate:children]
+[voltgrid:children]
 workstations
 domain_controllers
 corporate_servers
