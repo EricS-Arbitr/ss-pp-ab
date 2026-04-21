@@ -97,7 +97,6 @@ pp-file
 pp-mail
 pp-sql
 pp-wec
-win-hunt-1
 
 [voltgrid:children]
 workstations

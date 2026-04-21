@@ -36,10 +36,26 @@ loop: "{{ network_interfaces | map(attribute='name') | list }}"
 
 ## 2026-04-20 · gap · roles/common/tasks/windows.yml
 
-After `xIPAddress` applies a static IP, any leftover APIPA (`169.254.x.x`) address from a pre-static DHCP attempt stays on the adapter. Windows sometimes selects the APIPA as source address for outbound traffic, breaking routing. Observed on the `.2` workstation in every subnet during PowerPlant deploy — domain join failed with "The specified domain either does not exist or could not be contacted."
+After `xIPAddress` applies a static IP, Windows' IPv4 Autoconfiguration feature (separate from DHCP) can assign an APIPA address (`169.254.x.x`) alongside the static during interface startup. Windows sometimes selects the APIPA as source address for outbound traffic, breaking cross-subnet routing. Observed on the `.2` workstation in every subnet during PowerPlant deploy — domain join failed with "The specified domain either does not exist or could not be contacted."
 
-**Fix:** add a follow-up task to remove stale APIPA entries after IP configuration:
+Simply removing the 169.254 address is insufficient: after any reboot, autoconfig re-assigns a new one. The permanent fix is to disable autoconfig globally via registry.
+
+**Fix:** add a preflight block that disables IPv4 autoconfiguration (reboot required, once per host), then cleans any stale APIPA addresses that already exist:
 ```yaml
+- name: Disable IPv4 autoconfiguration globally (prevents APIPA fallback)
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters
+    name: IPAutoconfigurationEnabled
+    data: 0
+    type: dword
+    state: present
+  register: autoconf_reg
+
+- name: Reboot if autoconfig setting changed
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+  when: autoconf_reg.changed
+
 - name: Remove APIPA addresses on configured interfaces
   ansible.windows.win_powershell:
     script: |

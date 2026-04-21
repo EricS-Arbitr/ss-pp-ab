@@ -1,4 +1,18 @@
 ---
+- name: Disable IPv4 autoconfiguration globally (prevents APIPA fallback)
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters
+    name: IPAutoconfigurationEnabled
+    data: 0
+    type: dword
+    state: present
+  register: autoconf_reg
+
+- name: Reboot if autoconfig setting changed
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+  when: autoconf_reg.changed
+
 - name: Remove APIPA addresses from configured interfaces
   ansible.windows.win_powershell:
     script: |
