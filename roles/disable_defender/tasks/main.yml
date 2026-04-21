@@ -1,0 +1,86 @@
+---
+- name: Create the GPO first
+  ansible.windows.win_dsc:
+    resource_name: GroupPolicy
+    Name: "Disable Defender"
+    Ensure: Present
+
+- name: Disable Defender antispyware via GPO
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Disable Defender"
+    Key: "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender"
+    ValueName: DisableAntiSpyware
+    Value: 1
+    ValueType: DWord
+    Ensure: Present
+
+- name: Disable real-time monitoring via GPO
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Disable Defender"
+    Key: "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection"
+    ValueName: DisableRealtimeMonitoring
+    Value: 1
+    ValueType: DWord
+    Ensure: Present
+
+- name: Disable behavior monitoring via GPO
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Disable Defender"
+    Key: "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection"
+    ValueName: DisableBehaviorMonitoring
+    Value: 1
+    ValueType: DWord
+    Ensure: Present
+
+- name: Disable on-access protection via GPO
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Disable Defender"
+    Key: "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection"
+    ValueName: DisableOnAccessProtection
+    Value: 1
+    ValueType: DWord
+    Ensure: Present
+
+- name: Disable scan on real-time enable via GPO
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Disable Defender"
+    Key: "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection"
+    ValueName: DisableScanOnRealtimeEnable
+    Value: 1
+    ValueType: DWord
+    Ensure: Present
+
+- name: Disable cloud-delivered protection via GPO
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Disable Defender"
+    Key: "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet"
+    ValueName: SpynetReporting
+    Value: 0
+    ValueType: DWord
+    Ensure: Present
+
+- name: Disable block at first seen via GPO
+  ansible.windows.win_dsc:
+    resource_name: GPRegistryValue
+    Name: "Disable Defender"
+    Key: "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet"
+    ValueName: DisableBlockAtFirstSeen
+    Value: 1
+    ValueType: DWord
+    Ensure: Present
+
+- name: Link GPO to OU
+  ansible.windows.win_dsc:
+    resource_name: GPLink
+    GPOName: "Disable Defender"
+    Path: "DC={{ short_domain_name }},DC={{ domain_tld_name }}"
+    Enabled: "Yes"
+    Enforced: "No"
+    Order: 1
+    Ensure: Present
