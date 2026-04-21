@@ -89,6 +89,25 @@
   hosts: pdc
   gather_facts: false
   roles:
-    - dns      
+    - dns
   tags:
     - dns
+
+- name: ae_gpo
+  hosts: pdc
+  gather_facts: false
+  roles:
+    - role: ae_gpo
+    - role: disable_defender
+      when: "groups.get('ae', []) | length > 0"
+  tags:
+    - ae_gpo
+    - disable_defender
+
+- name: Join Domain
+  hosts: members
+  gather_facts: false
+  roles:
+    - domain_member_retry
+  tags:
+    - domain_member_retry
