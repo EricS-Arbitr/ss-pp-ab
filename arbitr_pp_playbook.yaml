@@ -33,22 +33,6 @@
   tags:
     - create_users
 
-- name: Additional DC
-  hosts: additional_dc
-  gather_facts: false
-  roles:
-    - additional_dc
-  tags:
-    - additional_dc
-
-- name: dc_status
-  hosts: pdc,additional_dc
-  gather_facts: false
-  roles:
-    - dc_status
-  tags:
-    - dc_status
-
 - name: File Share
   hosts: file
   gather_facts: false
@@ -104,6 +88,14 @@
     - ae_gpo
     - disable_defender
 
+- name: Strip APIPA
+  hosts: members
+  gather_facts: false
+  roles:
+    - strip_apipa
+  tags:
+    - strip_apipa
+
 - name: Join Domain
   hosts: members
   gather_facts: false
@@ -111,3 +103,19 @@
     - domain_member_retry
   tags:
     - domain_member_retry
+
+- name: Additional DC
+  hosts: additional_dc
+  gather_facts: false
+  roles:
+    - additional_dc
+  tags:
+    - additional_dc
+
+- name: dc_status
+  hosts: pdc,additional_dc
+  gather_facts: false
+  roles:
+    - dc_status
+  tags:
+    - dc_status

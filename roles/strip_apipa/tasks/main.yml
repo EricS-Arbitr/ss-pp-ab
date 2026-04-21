@@ -1,0 +1,9 @@
+---
+- name: Remove APIPA addresses from configured interfaces
+  ansible.windows.win_powershell:
+    script: |
+      Get-NetIPAddress -InterfaceAlias "{{ item.name }}" -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object IPAddress -Like '169.254.*' |
+        Remove-NetIPAddress -Confirm:$false
+  loop: "{{ network_interfaces }}"
+  when: network_interfaces is defined
