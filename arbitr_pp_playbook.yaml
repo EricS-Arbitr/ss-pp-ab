@@ -16,6 +16,14 @@
   tags:
     - common
 
+- name: Vyos Role
+  hosts: vyos
+  gather_facts: false
+  roles:
+    - vyos
+  tags:
+    - vyos
+
 - name: dcpromo
   hosts: pdc
   gather_facts: false

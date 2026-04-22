@@ -1,0 +1,42 @@
+ansible_host: "10.255.240.193"
+
+network_interfaces:
+  - name: "eth0"                      # management
+    ipv4:
+      address: "10.255.240.193"
+      netmask: "255.255.240.0"
+      type: "ethernet"
+  - name: "eth1"                      # switch-5 transit to pp-ot-firewall
+    ipv4:
+      address: "172.16.1.1"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+  - name: "eth2"                      # PP-OT-VoIP (gateway)
+    ipv4:
+      address: "172.16.77.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+      ospf: true
+  - name: "eth3"                      # PP-Control-Management (gateway)
+    ipv4:
+      address: "172.16.78.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+      ospf: true
+  - name: "eth4"                      # switch-6 transit to pp-controller-firewall
+    ipv4:
+      address: "172.16.1.10"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+
+bgp:
+  - as: 65001
+    neighbor:
+      ip: "172.16.1.2"                # pp-ot-firewall
+      as: 65001
+  - as: 65001
+    neighbor:
+      ip: "172.16.1.9"                # pp-controller-firewall
+      as: 65001

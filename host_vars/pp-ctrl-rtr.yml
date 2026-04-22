@@ -1,0 +1,30 @@
+ansible_host: "10.255.240.194"
+
+network_interfaces:
+  - name: "eth0"                      # management
+    ipv4:
+      address: "10.255.240.194"
+      netmask: "255.255.240.0"
+      type: "ethernet"
+  - name: "eth1"                      # switch-7 transit to pp-controller-firewall
+    ipv4:
+      address: "172.16.1.17"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+  - name: "eth2"                      # switch-9 transit to pp-modbus-gtwy
+    ipv4:
+      address: "172.16.79.41"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+
+bgp:
+  - as: 65001
+    neighbor:
+      ip: "172.16.1.18"               # pp-controller-firewall
+      as: 65001
+  - as: 65001
+    neighbor:
+      ip: "172.16.79.42"              # pp-modbus-gtwy
+      as: 65001

@@ -1,0 +1,46 @@
+ansible_host: "10.255.240.192"
+
+network_interfaces:
+  - name: "eth0"                      # management
+    ipv4:
+      address: "10.255.240.192"
+      netmask: "255.255.240.0"
+      type: "ethernet"
+  - name: "eth1"                      # pp-security (gateway for security subnet)
+    ipv4:
+      address: "172.16.9.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+      ospf: true
+  - name: "eth2"                      # switch-10 transit to pp-corp-router
+    ipv4:                             # NOTE: ARBITR_PP_120.yml has typo "17.16.0.41" — corrected here
+      address: "172.16.0.41"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+  - name: "eth3"                      # switch-3 transit to pp-internal-firewall
+    ipv4:
+      address: "172.16.0.26"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+  - name: "eth4"                      # switch-4 transit to pp-ot-firewall
+    ipv4:
+      address: "172.16.0.49"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+
+bgp:
+  - as: 65001
+    neighbor:
+      ip: "172.16.0.42"               # pp-corp-router
+      as: 65001
+  - as: 65001
+    neighbor:
+      ip: "172.16.0.25"               # pp-internal-firewall
+      as: 65001
+  - as: 65001
+    neighbor:
+      ip: "172.16.0.50"               # pp-ot-firewall
+      as: 65001

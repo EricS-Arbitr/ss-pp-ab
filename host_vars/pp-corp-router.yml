@@ -1,0 +1,50 @@
+ansible_host: "10.255.240.199"
+
+network_interfaces:
+  - name: "eth0"                      # management
+    ipv4:
+      address: "10.255.240.199"
+      netmask: "255.255.240.0"
+      type: "ethernet"
+  - name: "eth1"                      # PP-Services (gateway)
+    ipv4:
+      address: "172.16.2.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+      ospf: true
+  - name: "eth2"                      # PP-Business-Processing-Department (gateway)
+    ipv4:
+      address: "172.16.3.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+      ospf: true
+  - name: "eth3"                      # PP-Eng-Department (gateway)
+    ipv4:
+      address: "172.16.4.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+      ospf: true
+  - name: "eth4"                      # PP-LS-Department (gateway)
+    ipv4:
+      address: "172.16.5.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+      ospf: true
+  - name: "eth5"                      # PP-IS-Department (gateway)
+    ipv4:
+      address: "172.16.6.1"
+      netmask: "255.255.255.0"
+      type: "ethernet"
+      ospf: true
+  - name: "eth6"                      # switch-10 transit to pp-internal-router
+    ipv4:
+      address: "172.16.0.42"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+
+bgp:
+  - as: 65001
+    neighbor:
+      ip: "172.16.0.41"               # pp-internal-router
+      as: 65001

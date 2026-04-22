@@ -276,6 +276,22 @@ pp-splunk
 win-hunt-1
 
 # ------------------------------------------------------------
+# VyOS routers and firewalls (replaces old Firewall/Router primitives)
+# ------------------------------------------------------------
+[vyos]
+pp-isp-router
+pp-ot-firewall
+pp-external-firewall
+pp-internal-router
+pp-ot-router
+pp-ctrl-rtr
+site-edge-router
+pp-modbus-gtwy
+pp-internal-firewall
+pp-controller-firewall
+pp-corp-router
+
+# ------------------------------------------------------------
 # Infrastructure / special systems (not domain-managed)
 # ------------------------------------------------------------
 [infrastructure]

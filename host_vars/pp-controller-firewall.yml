@@ -1,0 +1,30 @@
+ansible_host: "10.255.240.198"
+
+network_interfaces:
+  - name: "eth0"                      # management
+    ipv4:
+      address: "10.255.240.198"
+      netmask: "255.255.240.0"
+      type: "ethernet"
+  - name: "eth1"                      # switch-6 transit to pp-ot-router
+    ipv4:
+      address: "172.16.1.9"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+  - name: "eth2"                      # switch-7 transit to pp-ctrl-rtr
+    ipv4:
+      address: "172.16.1.18"
+      netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+
+bgp:
+  - as: 65001
+    neighbor:
+      ip: "172.16.1.10"               # pp-ot-router
+      as: 65001
+  - as: 65001
+    neighbor:
+      ip: "172.16.1.17"               # pp-ctrl-rtr
+      as: 65001
