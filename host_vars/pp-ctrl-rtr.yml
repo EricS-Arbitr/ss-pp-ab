@@ -1,18 +1,14 @@
 ansible_host: "10.255.240.194"
 
+# SimSpace provisions: eth0 = first data-plane (shared with mgmt 10.255.240.194/20)
 network_interfaces:
-  - name: "eth0"                      # management
-    ipv4:
-      address: "10.255.240.194"
-      netmask: "255.255.240.0"
-      type: "ethernet"
-  - name: "eth1"                      # switch-7 transit to pp-controller-firewall
+  - name: "eth0"                      # switch-7 transit to pp-controller-firewall (mgmt shares)
     ipv4:
       address: "172.16.1.17"
       netmask: "255.255.255.252"
       type: "ethernet"
       ospf: true
-  - name: "eth2"                      # switch-9 transit to pp-modbus-gtwy
+  - name: "eth1"                      # switch-9 transit to pp-modbus-gtwy
     ipv4:
       address: "172.16.79.41"
       netmask: "255.255.255.252"

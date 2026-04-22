@@ -98,6 +98,59 @@ Role is structurally invalid. `main.yml` sits at the role root (instead of `task
 
 ---
 
+## 2026-04-22 · bug · roles/vyos/tasks/main.yml
+
+Two variable-name / shape mismatches between the role code and the role README:
+
+**1. `source_nat` vs `nat`** — README documents NAT config under `source_nat:` with fields `rule`, `source_address`, `outbound_interface`, `translation_address`. The role code reads from variable `nat:` with fields `source` (rule #), `address`, `outbound_interface`. Result: users following the README silently get no NAT configured.
+
+**2. `static_route` shape** — README shows `static_route` as a list of routes (`- route: ... next_hop: ...`). The role code treats it as a single dict: `{{ static_route.route }}`. The `when: static_route.route is defined` never matches a list, so the task silently skips. Users who follow the README get no static routes.
+
+**Fix:** either rewrite the tasks to match the README (recommended), or rewrite the README to match the tasks. Tasks-match-README would look like:
+
+```yaml
+- name: Configure static routes
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set protocols static route {{ item.route }} next-hop {{ item.next_hop }}"
+    save: true
+  with_items: "{{ static_route | default([]) }}"
+  when: item.route is defined
+
+- name: Configure Source NAT
+  vyos.vyos.vyos_config:
+    match: line
+    lines:
+      - "set nat source rule {{ item.rule }} source address {{ item.source_address }}"
+      - "set nat source rule {{ item.rule }} translation address {{ item.translation_address }}"
+      - "set nat source rule {{ item.rule }} outbound-interface name {{ item.outbound_interface }}"
+    save: true
+  with_items: "{{ source_nat | default([]) }}"
+```
+
+---
+
+## 2026-04-22 · bug · roles/vyos/tasks/main.yml
+
+Interface configuration uses `vyos.vyos.vyos_config` with `match: line`, which only appends missing lines — it never removes outdated ones. If a VyOS device's `network_interfaces` is ever changed (renumbered, re-IP'd), re-running the role **adds** the new addresses on top of the old ones, leaving multiple IPs per interface and broken routing.
+
+Observed in PowerPlant during the initial VyOS deploy: host_vars assumed `eth0` = management and data-plane started at `eth1`. In fact, SimSpace's `managementInterface.position: "FIRST"` means management is assigned as a *secondary* IP on `eth0`, so data-plane starts at `eth0`. The corrected host_vars pushed (for example on pp-corp-router) `172.16.2.1/24` onto `eth0` — which was correct — but when originally mis-numbered, pushed it onto `eth1` on top of `172.16.3.1/24`. The wrong address now persists on `eth1` until manually deleted.
+
+**Fix:** before adding interface addresses, delete all existing user-assigned addresses on the target interfaces. Rough shape:
+```yaml
+- name: Gather current addresses on interfaces we manage
+  vyos.vyos.vyos_command:
+    commands: "show interfaces ethernet {{ item.name }} brief"
+  with_items: "{{ network_interfaces }}"
+  register: current_addrs
+
+# Delete any address on these interfaces not in the target list, then set desired.
+```
+Or, document clearly in the README that the role is not safe to re-run after any interface/IP change without first doing a manual `delete interfaces ethernet ethX address …` pass.
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.

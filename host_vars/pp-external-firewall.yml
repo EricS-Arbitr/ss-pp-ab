@@ -1,33 +1,30 @@
 ansible_host: "10.255.240.191"
 
+# SimSpace provisions: eth0 = first data-plane (shared with mgmt 10.255.240.191/20)
 network_interfaces:
-  - name: "eth0"                      # management
-    ipv4:
-      address: "10.255.240.191"
-      netmask: "255.255.240.0"
-      type: "ethernet"
-  - name: "eth1"                      # PP-DMZ (gateway for DMZ)
+  - name: "eth0"                      # PP-DMZ — DMZ gateway (mgmt shares)
     ipv4:
       address: "172.16.8.1"
       netmask: "255.255.255.0"
       type: "ethernet"
       ospf: true
-  - name: "eth2"                      # switch-1 transit to site-edge-router
+  - name: "eth1"                      # switch-1 transit to site-edge-router
     ipv4:
       address: "172.16.0.9"
       netmask: "255.255.255.252"
       type: "ethernet"
       ospf: true
-  - name: "eth3"                      # switch-0 transit to pp-isp-router (external)
+  - name: "eth2"                      # switch-0 transit to pp-isp-router (external)
     ipv4:
       address: "75.21.1.1"
       netmask: "255.255.255.252"
       type: "ethernet"
       ospf: true
 
+# NOTE: vyos role expects static_route as a dict (not list) per tasks/main.yml
 static_route:
-  - route: "0.0.0.0/0"                # default toward pp-isp-router
-    next_hop: "75.21.1.2"
+  route: "0.0.0.0/0"
+  next_hop: "75.21.1.2"
 
 bgp:
   - as: 65001
@@ -36,11 +33,11 @@ bgp:
       as: 65001
   - as: 65001
     neighbor:
-      ip: "75.21.1.2"                 # pp-isp-router (AS 65002 — external / eBGP)
+      ip: "75.21.1.2"                 # pp-isp-router (AS 65002 — eBGP)
       as: 65002
 
-source_nat:
-  - rule: 10                          # masquerade all internal traffic heading to the internet
-    outbound_interface: "eth3"
-    source_address: "172.16.0.0/16"
-    translation_address: "masquerade"
+# NOTE: vyos role reads `nat` (not `source_nat`) with fields `source`/`address`/`outbound_interface`
+nat:
+  - source: 10                        # masquerade all internal traffic heading to the internet
+    address: "172.16.0.0/16"
+    outbound_interface: "eth2"

@@ -1,24 +1,20 @@
 ansible_host: "10.255.240.189"
 
+# SimSpace provisions: eth0 = first data-plane (shared with mgmt 10.255.240.189/20)
 network_interfaces:
-  - name: "eth0"                      # management
-    ipv4:
-      address: "10.255.240.189"
-      netmask: "255.255.240.0"
-      type: "ethernet"
-  - name: "eth1"                      # switch-0 transit to pp-external-firewall
+  - name: "eth0"                      # switch-0 transit to pp-external-firewall (mgmt shares)
     ipv4:
       address: "75.21.1.2"
       netmask: "255.255.255.252"
       type: "ethernet"
       ospf: true
-  - name: "eth2"                      # red-net (external/red-team sim)
+  - name: "eth1"                      # red-net (external/red-team sim)
     ipv4:
       address: "210.210.210.1"
       netmask: "255.255.255.0"
       type: "ethernet"
       ospf: true
-  - name: "eth3"                      # PowerPlant-External-Placeholder (external sim)
+  - name: "eth2"                      # PowerPlant-External-Placeholder (external sim)
     ipv4:
       address: "200.200.200.1"
       netmask: "255.255.255.0"
