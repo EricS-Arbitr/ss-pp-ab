@@ -127,3 +127,51 @@
     - dc_status
   tags:
     - dc_status
+
+- name: Install root certs
+  hosts: windows
+  gather_facts: false
+  roles:
+    - root_certs
+  tags:
+    - root_certs
+
+- name: apply AUE settings
+  hosts: aue
+  gather_facts: false
+  roles:
+    - disable_uac
+    - disable_firewall
+    - autologin
+    - ue
+    - chrome
+    - sysmon
+    - aue_agent
+    - secpol
+    - drainhole
+  tags:
+    - disable_uac
+    - disable_firewall
+    - autologin
+    - ue
+    - chrome
+    - sysmon
+    - aue_agent
+    - secpol
+    - drainhole
+
+- name: apply AE settings
+  hosts: ae
+  gather_facts: false
+  roles:
+    - disable_uac
+    - disable_firewall
+    - secpol
+    - aue_agent
+    - drainhole
+  tags:
+    - disable_uac
+    - disable_firewall
+    - secpol
+    - aue_agent
+    - drainhole
