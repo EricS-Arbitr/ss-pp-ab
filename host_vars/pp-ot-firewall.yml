@@ -8,10 +8,16 @@ network_interfaces:
       netmask: "255.255.255.252"
       type: "ethernet"
       ospf: true
-  - name: "eth1"                      # switch-5 transit to pp-ot-router
+  - name: "eth1"                      # switch-8 transit to pp-ot-router (new OT topology)
     ipv4:
-      address: "172.16.1.2"
+      address: "192.168.200.201"
       netmask: "255.255.255.252"
+      type: "ethernet"
+      ospf: true
+  - name: "eth2"                      # PP-OT-DMZ gateway (/27)
+    ipv4:
+      address: "192.168.90.129"
+      netmask: "255.255.255.224"
       type: "ethernet"
       ospf: true
 
@@ -22,5 +28,5 @@ bgp:
       as: 65001
   - as: 65001
     neighbor:
-      ip: "172.16.1.1"                # pp-ot-router
+      ip: "192.168.200.202"           # pp-ot-router (new)
       as: 65001

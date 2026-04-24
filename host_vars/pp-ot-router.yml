@@ -1,38 +1,37 @@
-ansible_host: "10.255.240.193"
+ansible_host: "10.255.240.201"
 
-# SimSpace provisions: eth0 = first data-plane (shared with mgmt 10.255.240.193/20)
+# SimSpace provisions: eth0 = first data-plane (shared with mgmt 10.255.240.201/20)
+# NOTE: image is global/RC_NG_OT_Router (not RC-VyOS-Router). Treated here as
+# vyos-managed per user direction; verify the vyos role actually applies if
+# BGP sessions don't come up.
 network_interfaces:
-  - name: "eth0"                      # switch-5 transit to pp-ot-firewall (mgmt shares)
+  - name: "eth0"                      # switch-8 transit to pp-ot-firewall (mgmt shares)
     ipv4:
-      address: "172.16.1.1"
+      address: "192.168.200.202"
       netmask: "255.255.255.252"
       type: "ethernet"
       ospf: true
-  - name: "eth1"                      # PP-OT-VoIP gateway
+  - name: "eth1"                      # Gas-Turbine gateway
     ipv4:
-      address: "172.16.77.1"
+      address: "192.168.95.1"
       netmask: "255.255.255.0"
       type: "ethernet"
       ospf: true
-  - name: "eth2"                      # PP-Control-Management gateway
+  - name: "eth2"                      # Gas-Turbine-Sim gateway (/27)
     ipv4:
-      address: "172.16.78.1"
-      netmask: "255.255.255.0"
+      address: "192.168.90.1"
+      netmask: "255.255.255.224"
       type: "ethernet"
       ospf: true
-  - name: "eth3"                      # switch-6 transit to pp-controller-firewall
+  - name: "eth3"                      # PP-OT-Services gateway (/27)
     ipv4:
-      address: "172.16.1.10"
-      netmask: "255.255.255.252"
+      address: "192.168.90.97"
+      netmask: "255.255.255.224"
       type: "ethernet"
       ospf: true
 
 bgp:
   - as: 65001
     neighbor:
-      ip: "172.16.1.2"                # pp-ot-firewall
-      as: 65001
-  - as: 65001
-    neighbor:
-      ip: "172.16.1.9"                # pp-controller-firewall
+      ip: "192.168.200.201"           # pp-ot-firewall
       as: 65001
