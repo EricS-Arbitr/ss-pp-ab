@@ -104,57 +104,14 @@ domain_controllers
 corporate_servers
 
 # ------------------------------------------------------------
-# OT / Control Network
+# OT — new gas-turbine simulation hosts (hard-coded, no mgmt interface)
 # ------------------------------------------------------------
-[control_workstations]
-pp-ctrl-wkstn-1
-pp-ctrl-wkstn-2
-pp-ctrl-wkstn-3
-pp-ctrl-wkstn-4
-pp-ctrl-wkstn-5
-pp-ctrl-wkstn-6
-pp-ctrl-wkstn-7
-pp-ctrl-wkstn-8
-
-[ot_servers]
-pp-dc03
-pp-dcs-ctlr
-pp-historian
-pp-ics-data-srv
-pp-hist-srv
-
-[hmi]
-pp-hmi-1
-pp-hmi-2
-pp-hmi-3
-
-[voip]
-pp-asterisk-elastix
-pp-voip-01
-pp-voip-02
-pp-voip-03
-pp-voip-04
-pp-voip-05
-
 [ot_devices]
-pp-plc-1
-pp-plc-2
-pp-fwts
-pp-hist-client
-pp-maint-laptop
-# Unmanaged OT systems (no mgmt interface; hard-coded config, not ansible-managed)
 pp-gas-sim
 pp-gasplant-plc
 pp-gasvibsens
 pp-ot-hist
 pp-engws
-
-[ot:children]
-control_workstations
-ot_servers
-hmi
-voip
-ot_devices
 
 # ------------------------------------------------------------
 # DMZ
@@ -173,7 +130,6 @@ pp-www
 [servers:children]
 domain_controllers
 corporate_servers
-ot_servers
 
 # ------------------------------------------------------------
 # Windows OS groups
@@ -266,12 +222,8 @@ pp-ot-firewall
 pp-external-firewall
 pp-internal-router
 pp-ot-router
-pp-ot-router-old
-pp-ctrl-rtr
 site-edge-router
-pp-modbus-gtwy
 pp-internal-firewall
-pp-controller-firewall
 pp-corp-router
 
 # ------------------------------------------------------------
@@ -288,45 +240,9 @@ Activity-Emulation
 pp-proxy
 
 # ------------------------------------------------------------
-# Unmanaged systems — disconnected OT subnets (PP-OT-Services, PP-Control-Management,
-# PP-OT-VoIP, PP-MTU, PP-PLC, PP-Simulation) plus hard-coded new OT sims.
-# Left in inventory for documentation only; NOT targeted by any Ansible play.
+# Unmanaged systems — hard-coded, NOT targeted by any Ansible play.
 # ------------------------------------------------------------
 [unmanaged]
-# Old OT — PP-Control-Management (172.16.78.0/24)
-pp-dc03
-pp-dcs-ctlr
-pp-historian
-pp-ctrl-wkstn-1
-pp-ctrl-wkstn-2
-pp-ctrl-wkstn-3
-pp-ctrl-wkstn-4
-pp-ctrl-wkstn-5
-pp-ctrl-wkstn-6
-pp-ctrl-wkstn-7
-pp-ctrl-wkstn-8
-# Old OT — PP-OT-Services-old (172.16.79.32/29)
-pp-ics-data-srv
-pp-hist-srv
-pp-hist-client
-pp-maint-laptop
-# Old OT — PP-OT-VoIP (172.16.77.0/24)
-pp-asterisk-elastix
-pp-voip-01
-pp-voip-02
-pp-voip-03
-pp-voip-04
-pp-voip-05
-# Old OT — PP-MTU (172.16.80.0/29)
-pp-hmi-1
-pp-hmi-2
-pp-hmi-3
-# Old OT — PP-PLC (172.16.80.8/29)
-pp-plc-1
-pp-plc-2
-# Old OT — PP-Simulation (172.16.80.16/28)
-pp-fwts
-# New OT (hard-coded, no mgmt interface)
 pp-gas-sim
 pp-gasplant-plc
 pp-gasvibsens
