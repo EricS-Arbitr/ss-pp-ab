@@ -9,3 +9,6 @@ ms_cert: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/Micro
 # Upstream proxy configuration
 inet_proxy_addr: "10.255.240.1"
 inet_proxy_port: "3128"
+
+# Container name for the global DNS simulator (referenced by handlers role)
+global_dns_container_name: "is-inet"

@@ -221,7 +221,9 @@ pp-isp-router
 pp-ot-firewall
 pp-external-firewall
 pp-internal-router
-pp-ot-router
+# pp-ot-router excluded — it's a SimSpace RC_NG_OT_Router appliance, not VyOS;
+# the vyos role's `set interface ...` commands are rejected. Self-configures
+# from its image; managed (if at all) via a future role, not this one.
 site-edge-router
 pp-internal-firewall
 pp-corp-router

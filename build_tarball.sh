@@ -137,6 +137,14 @@ cp    "$SS_PP_AB/arbitr_pp_playbook.yaml" "$STAGE/"
 cp    "$SS_PP_AB/deploy.sh"               "$STAGE/"
 chmod +x "$STAGE/deploy.sh"
 
+# --- Verify ----------------------------------------------------------------
+
+if [ -x "$SS_PP_AB/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying Jinja var references ==="
+  python3 "$SS_PP_AB/verify_vars.py" "$STAGE" || true
+fi
+
 # --- Pack ------------------------------------------------------------------
 
 cd "$STAGE"
