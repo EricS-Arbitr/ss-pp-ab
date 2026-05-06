@@ -7,9 +7,29 @@ ansible_python_interpreter: python
 ansible_become_method: runas
 ansible_become_user: simspace
 staging_dir_windows: "C:\\temp"
+
+# Common installers
 chrome_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Google/Chrome/113.0.5672.93/googlechromestandaloneenterprise64.msi"
 firefox_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Firefox/136.0.1/firefox_setup_136.0.1.msi"
 sysmon_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Microsoft/sysmon/sysmon64.exe"
 splunk_forwarder_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Splunk/Forwarder/8.2.6/splunkforwarder-8.2.6.msi"
+
+# Range agent bootstrap (referenced by common role on every Windows host)
+range_agent_bootstrap: range-agent-bootstrap-x64.msi
+range_agent_bootstrap_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/range-agent-bootstrap/{{ range_agent_bootstrap }}"
+
+# AUE agent (used by aue_agent role on [aue]/[ae] hosts)
+aue_agent: aue-agent-latest-setup-x86_64.exe
+aue_agent_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/aue-agent/{{ aue_agent }}"
+
+# Drainhole (used by drainhole role on [aue]/[ae])
+drainhole_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/drainhole/network_mgr.exe"
+
+# Defender onboarding (used by disable_defender / defender posture)
+defender_user_tag: "StackOp-Test-Dev"
+defender_staging_dir: "{{ staging_dir_windows }}\\defender_staging"
+defender_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/defender/WindowsDefenderATPOnboardingPackage.zip"
+
+# EDR sensors (used by crowdstrike / sentinelone roles when scheduled)
 cs_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Crowdstrike/WindowsSensor.exe"
 s1_windows_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/sentinelone/SentinelInstaller.exe"

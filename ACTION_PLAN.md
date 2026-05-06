@@ -82,6 +82,7 @@ Quality-of-life improvements before handoff.
 | E3 | Document the customer Nexus URLs we depend on (every installer URL in `windows.yml` / `linux.yml`) — cache local copies if any are unreliable |
 | E4 | Create a single `README.md` in `ss-pp-ab/` covering: what this overlay does, how to deploy, how to add a play, how to add a host, where to look for help |
 | E5 | Vault the credentials in `group_vars/all.yml` and `group_vars/voltgrid.yml` (currently plaintext) |
+| E6 | Periodically `diff` `ss-pp-ab/group_vars/{windows,linux,all}.yml` against `range-development-ansible/group_vars/*.yml` to catch missing installer/bootstrap vars before they trigger "undefined variable" errors at runtime. Trigger this whenever a new play is added, or build a `build_tarball.sh --verify` step that flags vars referenced by bundled roles but not present in any group_vars |
 
 ---
 

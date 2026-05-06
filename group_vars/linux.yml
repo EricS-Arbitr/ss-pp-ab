@@ -5,5 +5,16 @@ ansible_become_method: sudo
 ansible_become_pass: simspace1
 staging_dir_linux: "/var/tmp"
 cert_dir_linux: "/usr/local/share/ca-certificates"
+ansible_installers: "/var/share/installers/"
+
+# Range agent bootstrap (referenced by common role on every Linux host)
+range_agent_bootstrap: range-agent-bootstrap_linux_amd64.deb
+range_agent_bootstrap_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/range-agent-bootstrap/{{ range_agent_bootstrap }}"
+
+# Splunk server (used by splunk role on [splunk] in Phase B)
+splunk_license: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/licenses/splunk/splunk.license"
+splunk_server_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Splunk/server/splunk.deb"
+
+# EDR sensors
 cs_linux_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Crowdstrike/UbuntuSensor.deb"
 s1_linux_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/sentinelone/SentinelAgent.deb"
