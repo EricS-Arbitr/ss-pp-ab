@@ -98,6 +98,48 @@ Role is structurally invalid. `main.yml` sits at the role root (instead of `task
 
 ---
 
+## 2026-05-07 · gap · roles/common/tasks/windows.yml
+
+The `range-agent-bootstrap using win_get_url with proxy settings` task fails on Windows Server 2012 with `"The request was aborted: Could not create SSL/TLS secure channel"`. Server 2012's .NET 4 / WinHTTP defaults to TLS 1.0 / SSL 3.0; the customer Nexus only accepts TLS 1.2. Server 2022 has TLS 1.2 default-on and is unaffected. Observed on `pp-mail` and `pp-dmz-smtp` in the PowerPlant deploy.
+
+**Fix:** add a Server 2012-aware preflight in `common` (or a sibling role) that sets:
+```
+HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319\SchUseStrongCrypto = 1 (DWORD)
+HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v4.0.30319\SchUseStrongCrypto = 1 (DWORD)
+HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp\DefaultSecureProtocols = 0x00000A00 (DWORD)
+```
+A reboot is required for the registry change to take effect on .NET. Could be conditional on `ansible_facts['distribution_version']` so it's a no-op on Server 2022. Implementation in PowerPlant overlay: `ss-pp-ab/roles/enable_tls12/`.
+
+---
+
+## 2026-05-08 · platform · SimSpace subnet IP reservation
+
+The `.2` IP of every workstation subnet appears to be silently reserved by a SimSpace-managed VM (likely a platform service — agent / telemetry / control plane). Symptom: any range-author-assigned VM at `<subnet>.2` boots, applies its static IP, and Windows DAD immediately marks the address `Duplicate` because something else on the L2 segment is already responding to ARP for it. The colliding VM has a different MAC OUI byte (`00:50:56:98:xx:xx`) than the user-template VMs (`00:50:56:a8:xx:xx`), so it's a distinct VM — not just the workstation's own duplicate.
+
+Effects on a host that gets stuck in `Duplicate`:
+- Connected route for the subnet is never installed (`Get-NetRoute` empty for that subnet)
+- `Find-NetRoute` fails with `Windows System Error 1232: The network location cannot be reached`
+- Outbound ARP requests don't fire — host can't even reach its own gateway, can't join the domain
+- Inbound to `<subnet>.2` works because the *other* device responds, masking the issue
+
+Reproduced on PowerPlant for `172.16.3.2`, `172.16.4.2`, `172.16.5.2`, `172.16.6.2` — exactly the four subnets where range authors had assigned the first workstation to `.2`.
+
+**Fix (range author side):** never assign user VMs to `<subnet>.2`. Skip to `.3` or `.10`+. Worked around in PowerPlant by re-IPing `pp-bp-wkstn-1`, `pp-eng-wkstn-1`, `pp-ls-wkstn-1`, `pp-is-wkstn-1` to `.10`.
+
+**Fix (SimSpace side):** document the reservation in their range-author guide; or better, surface a YAML-validation warning when a `VmInstance.networkInterfaces[].ipAddress` lands on `.2`.
+
+---
+
+## 2026-04-23 · platform · range YAML / SimSpace
+
+VyOS-image VMs (`RC-VyOS-Router`, `RC-VyOS-Firewall`) need `managementInterface.position: "LAST"` to wire data-plane vNICs to their target subnets at the hypervisor level. The default `"FIRST"` (which works for Windows/Linux end-host VMs) leaves VyOS data-plane vNICs unbound — the VM has the right IPs configured but ARP and ICMP fail because the vNICs aren't actually on the target vSwitches.
+
+Symptom: VyOS routers show interfaces "u/u" with correct IPs, but `ping` to directly-connected peers returns `Destination Host Unreachable` and ARP table entries stay `FAILED`. Workstation-to-workstation L2 within the same subnet works fine, confirming end-host vNICs are correct. Reproduced across all three VyOS routers in the PowerPlant range.
+
+**Fix:** range-design template / linter should default `position: "LAST"` for any VmInstance whose image starts with `RC-VyOS-`. Or, in the SimSpace platform itself, change the default vNIC binding behavior for VyOS images. Workaround: range authors must remember to set `position: "LAST"` on every VyOS device manually.
+
+---
+
 ## 2026-04-22 · bug · roles/vyos/tasks/main.yml
 
 Two variable-name / shape mismatches between the role code and the role README:

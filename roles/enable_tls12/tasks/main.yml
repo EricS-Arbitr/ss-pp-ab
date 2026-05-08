@@ -1,0 +1,39 @@
+---
+# Server 2012 ships with TLS 1.0 / SSL 3.0 as the default for .NET and WinHTTP.
+# Modern HTTPS endpoints (the customer Nexus, etc.) require TLS 1.2, which
+# causes win_get_url to fail with "Could not create SSL/TLS secure channel"
+# when downloading installers in the common role. These three registry keys
+# force TLS 1.2 system-wide. A reboot is required for the .NET-based pipeline
+# (which win_get_url uses) to pick them up.
+
+- name: Enable strong crypto for .NET 4 (64-bit)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319
+    name: SchUseStrongCrypto
+    data: 1
+    type: dword
+    state: present
+  register: net4_64
+
+- name: Enable strong crypto for .NET 4 (32-bit / Wow6432Node)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v4.0.30319
+    name: SchUseStrongCrypto
+    data: 1
+    type: dword
+    state: present
+  register: net4_32
+
+- name: Force WinHTTP DefaultSecureProtocols to TLS 1.2 (0x00000A00 = TLS 1.1 + 1.2)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp
+    name: DefaultSecureProtocols
+    data: 0x00000A00
+    type: dword
+    state: present
+  register: winhttp_default
+
+- name: Reboot once if any TLS registry value changed
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+  when: net4_64.changed or net4_32.changed or winhttp_default.changed
