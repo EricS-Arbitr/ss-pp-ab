@@ -6,13 +6,31 @@
 #
 # By the time `common` runs `Check if RangeAgent Service Exists`, the service
 # is already installed and the failing download/install tasks are skipped.
+#
+# Wrapped in block/rescue so a failure here does NOT abort the playbook for
+# unrelated hosts — common's win_get_url path will still attempt the download
+# and may succeed for hosts where TLS 1.2 actually does work end-to-end.
 
-- name: Copy range-agent-bootstrap MSI from controller (TLS bypass)
-  ansible.windows.win_copy:
-    src: "{{ range_agent_bootstrap }}"
-    dest: 'C:\temp\{{ range_agent_bootstrap }}'
+- block:
+    - name: Ensure C:\temp staging directory exists
+      ansible.windows.win_file:
+        path: 'C:\temp'
+        state: directory
 
-- name: Install range-agent-bootstrap
-  ansible.windows.win_package:
-    path: 'C:\temp\{{ range_agent_bootstrap }}'
-    state: present
+    - name: Copy range-agent-bootstrap MSI from controller (TLS bypass)
+      ansible.windows.win_copy:
+        src: "{{ range_agent_bootstrap }}"
+        dest: 'C:\temp\{{ range_agent_bootstrap }}'
+
+    - name: Install range-agent-bootstrap
+      ansible.windows.win_package:
+        path: 'C:\temp\{{ range_agent_bootstrap }}'
+        state: present
+
+  rescue:
+    - name: prestage_range_agent failed — falling back to common's download path
+      ansible.builtin.debug:
+        msg: >-
+          prestage_range_agent failed on {{ inventory_hostname }};
+          continuing playbook so common can attempt win_get_url. If that also
+          fails, install RangeAgent manually on this host.
