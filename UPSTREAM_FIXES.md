@@ -128,6 +128,10 @@ HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Internet Settings\Wi
 
 A reboot is required after the SChannel keys change. Could be conditional on `ansible_facts['distribution_version']` so it's a no-op on Server 2022. Implementation in PowerPlant overlay: `ss-pp-ab/roles/enable_tls12/`.
 
+**Update 2026-05-08:** even with the full prescription above applied (registry verified post-reboot on Server 2012 R2 / build 6.3.9600), `win_get_url` against Nexus still fails with `Could not create SSL/TLS secure channel`. Reproduced both via `win_get_url` and via direct `System.Net.WebClient.DownloadFile()` in PowerShell with `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12` set explicitly in the session. Cipher-suite enumeration (`Get-TlsCipherSuite`) isn't available on 2012 R2 to confirm a cipher-suite mismatch with Nexus, but the symptom is consistent with one. **Workaround:** pre-install the MSI via `win_copy` from the Ansible controller before `common` runs — its `Check if RangeAgent Service Exists` then returns `True` and the failing download is skipped. Implemented as `ss-pp-ab/roles/prestage_range_agent/` in the PowerPlant overlay.
+
+**Suggested upstream improvement:** the `common` role's `range-agent-bootstrap` task pair should support a `range_agent_bootstrap_local_path` variable that, when set, copies a controller-local MSI via `win_copy` instead of attempting `win_get_url`. Defaults to current behavior; opt-in for problem hosts.
+
 ---
 
 ## 2026-05-08 · platform · SimSpace subnet IP reservation

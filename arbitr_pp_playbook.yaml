@@ -16,6 +16,14 @@
   tags:
     - enable_tls12
 
+- name: Pre-stage range-agent on Server 2012 (Nexus TLS bypass)
+  hosts: winserver2012
+  gather_facts: false
+  roles:
+    - prestage_range_agent
+  tags:
+    - prestage_range_agent
+
 - name: Common Role
   hosts: windows,linux
   gather_facts: true

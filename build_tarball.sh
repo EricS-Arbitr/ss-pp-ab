@@ -6,7 +6,13 @@
 # dependencies), then bundles:
 #   1. base roles from ../range-development-ansible/roles/
 #   2. custom roles from ./roles/ (override base if same name)
-#   3. host_vars/, group_vars/, hosts, arbitr_pp_playbook.yaml, deploy.sh
+#   3. files/ (pre-staged installers — refreshed from Nexus when reachable)
+#   4. host_vars/, group_vars/, hosts, arbitr_pp_playbook.yaml, deploy.sh
+#
+# Before staging, Nexus is checked for any installer in NEXUS_FETCH below.
+# If the remote is reachable and differs from the local copy, the local file
+# is replaced. If Nexus is unreachable (e.g., running this script outside the
+# customer network), the existing local file is used and a warning is printed.
 #
 # UPSTREAM_FIXES.md is intentionally excluded.
 #
@@ -20,6 +26,12 @@ PLAYBOOK="$SS_PP_AB/arbitr_pp_playbook.yaml"
 ARCHIVE="$SS_PP_AB/ab_pp.tgz"
 STAGE_PARENT="$(mktemp -d)"
 STAGE="$STAGE_PARENT/abpp_build"
+
+# Files we pull from Nexus before each build. Add more rows as needed.
+# Format: "<remote-url>|<local-path-relative-to-ss-pp-ab>"
+NEXUS_FETCH=(
+  "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/range-agent-bootstrap/range-agent-bootstrap-x64.msi|files/range-agent-bootstrap-x64.msi"
+)
 
 trap 'rm -rf "$STAGE_PARENT"' EXIT
 
@@ -71,6 +83,52 @@ in_array() {
   done
   return 1
 }
+
+# Refresh a single file from Nexus if reachable. Falls back to existing local
+# copy on any network error. Errors only if neither remote nor local exists.
+update_from_nexus() {
+  local url="$1"
+  local dest="$2"
+  local label
+  label="$(basename "$dest")"
+  local tmp="${dest}.tmp"
+
+  mkdir -p "$(dirname "$dest")"
+
+  if curl -sSfL --insecure --connect-timeout 10 --max-time 120 \
+          -o "$tmp" "$url" 2>/dev/null; then
+    if [ -s "$tmp" ]; then
+      if [ ! -f "$dest" ] || ! cmp -s "$dest" "$tmp"; then
+        mv "$tmp" "$dest"
+        echo "  refreshed from Nexus: $label"
+      else
+        rm -f "$tmp"
+        echo "  up-to-date (matches Nexus): $label"
+      fi
+    else
+      rm -f "$tmp"
+      echo "  WARN: Nexus returned empty body for $label; keeping local copy"
+    fi
+  else
+    rm -f "$tmp"
+    if [ -f "$dest" ]; then
+      echo "  Nexus unreachable; using existing local copy: $label"
+    else
+      echo "  ERROR: Nexus unreachable AND no local copy at $dest" >&2
+      return 1
+    fi
+  fi
+}
+
+# --- Refresh installers from Nexus ----------------------------------------
+
+echo "=== Refreshing installer files from Nexus ==="
+for entry in "${NEXUS_FETCH[@]}"; do
+  url="${entry%%|*}"
+  rel="${entry##*|}"
+  update_from_nexus "$url" "$SS_PP_AB/$rel"
+done
+echo ""
 
 # --- Discovery -------------------------------------------------------------
 
@@ -137,6 +195,13 @@ cp    "$SS_PP_AB/arbitr_pp_playbook.yaml" "$STAGE/"
 cp    "$SS_PP_AB/deploy.sh"               "$STAGE/"
 chmod +x "$STAGE/deploy.sh"
 
+# Pre-staged installers (referenced via win_copy with bare filename)
+if [ -d "$SS_PP_AB/files" ]; then
+  cp -R "$SS_PP_AB/files" "$STAGE/"
+  # Strip macOS .DS_Store noise so it doesn't ride along to /etc/ansible
+  find "$STAGE/files" -name '.DS_Store' -delete 2>/dev/null || true
+fi
+
 # --- Verify ----------------------------------------------------------------
 
 if [ -x "$SS_PP_AB/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
@@ -148,8 +213,9 @@ fi
 # --- Pack ------------------------------------------------------------------
 
 cd "$STAGE"
-tar --no-xattrs -czf "$ARCHIVE" \
-    roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh
+TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh)
+[ -d "files" ] && TAR_PATHS+=(files)
+tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
 
 echo ""
 echo "=== Archive built ==="
