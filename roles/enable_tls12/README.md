@@ -9,12 +9,14 @@ Symptom this role fixes: `win_get_url` fails with `"The request was aborted: Cou
 None.
 
 ## What it does
-Sets three registry values:
-1. `HKLM\SOFTWARE\Microsoft\.NETFramework\v4.0.30319\SchUseStrongCrypto = 1`
-2. `HKLM\SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v4.0.30319\SchUseStrongCrypto = 1`
-3. `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp\DefaultSecureProtocols = 0x00000A00`
+Server 2012 / 2012 R2 require both **SChannel-level** TLS 1.2 enablement *and* `.NET` / `WinHTTP` defaults to be updated — `SchUseStrongCrypto` alone is not enough because SChannel itself refuses TLS 1.2 without the protocol keys. This role sets the full Microsoft-recommended set:
 
-Reboots the host once if any of those values changed; idempotent on subsequent runs.
+1. SChannel TLS 1.2 client + server (`Enabled=1`, `DisabledByDefault=0`)
+2. `.NET 4.0` `SchUseStrongCrypto` + `SystemDefaultTlsVersions` (64-bit and 32-bit)
+3. `.NET 2.0/3.5` `SchUseStrongCrypto` (64-bit and 32-bit)
+4. WinHTTP `DefaultSecureProtocols = 0x00000A00` (TLS 1.1 + 1.2; 64-bit and 32-bit)
+
+Reboots once after any of those values changed; idempotent on subsequent runs.
 
 ## Where to apply
 Target the `[winserver2012]` group in the playbook **before** the `common` role runs (which performs the win_get_url that hits Nexus).

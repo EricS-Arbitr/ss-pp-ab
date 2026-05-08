@@ -102,13 +102,31 @@ Role is structurally invalid. `main.yml` sits at the role root (instead of `task
 
 The `range-agent-bootstrap using win_get_url with proxy settings` task fails on Windows Server 2012 with `"The request was aborted: Could not create SSL/TLS secure channel"`. Server 2012's .NET 4 / WinHTTP defaults to TLS 1.0 / SSL 3.0; the customer Nexus only accepts TLS 1.2. Server 2022 has TLS 1.2 default-on and is unaffected. Observed on `pp-mail` and `pp-dmz-smtp` in the PowerPlant deploy.
 
-**Fix:** add a Server 2012-aware preflight in `common` (or a sibling role) that sets:
+**Fix:** add a Server 2012-aware preflight in `common` (or a sibling role). Note: `SchUseStrongCrypto` *alone* is NOT sufficient — Server 2012 SChannel refuses TLS 1.2 unless the protocol-specific keys are explicitly enabled. The full minimum set is:
+
 ```
-HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319\SchUseStrongCrypto = 1 (DWORD)
-HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v4.0.30319\SchUseStrongCrypto = 1 (DWORD)
-HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp\DefaultSecureProtocols = 0x00000A00 (DWORD)
+# 1. Enable TLS 1.2 in SChannel itself
+HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client\Enabled = 1
+HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client\DisabledByDefault = 0
+HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server\Enabled = 1
+HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server\DisabledByDefault = 0
+
+# 2. Force .NET 4.x to use system-default TLS (now includes 1.2)
+HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319\SchUseStrongCrypto = 1
+HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319\SystemDefaultTlsVersions = 1
+HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v4.0.30319\SchUseStrongCrypto = 1
+HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v4.0.30319\SystemDefaultTlsVersions = 1
+
+# 3. Force .NET 2.0/3.5 to use strong crypto
+HKLM:\SOFTWARE\Microsoft\.NETFramework\v2.0.50727\SchUseStrongCrypto = 1
+HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v2.0.50727\SchUseStrongCrypto = 1
+
+# 4. Force WinHTTP DefaultSecureProtocols to TLS 1.1+1.2 (0x00000A00)
+HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp\DefaultSecureProtocols = 0x00000A00
+HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp\DefaultSecureProtocols = 0x00000A00
 ```
-A reboot is required for the registry change to take effect on .NET. Could be conditional on `ansible_facts['distribution_version']` so it's a no-op on Server 2022. Implementation in PowerPlant overlay: `ss-pp-ab/roles/enable_tls12/`.
+
+A reboot is required after the SChannel keys change. Could be conditional on `ansible_facts['distribution_version']` so it's a no-op on Server 2022. Implementation in PowerPlant overlay: `ss-pp-ab/roles/enable_tls12/`.
 
 ---
 
