@@ -7,7 +7,7 @@ network_interfaces:
       gateway: ""
   - name: "Ethernet1"
     ipv4:
-      address: "172.16.2.2"
+      address: "172.16.2.5"
       netmask: "255.255.255.0"
       gateway: "172.16.2.1"
     dns:

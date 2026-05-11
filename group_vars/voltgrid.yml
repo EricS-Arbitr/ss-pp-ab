@@ -21,7 +21,7 @@ internal_dns_records:
   # Service aliases for AD-joined hosts
   - name: "mail"
     type: "A"
-    value: "172.16.2.2"
+    value: "172.16.2.5"
     zone: "{{ domain_name }}"
   - name: "file"
     type: "A"

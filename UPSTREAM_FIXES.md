@@ -146,7 +146,7 @@ Effects on a host that gets stuck in `Duplicate`:
 
 Reproduced on PowerPlant for `172.16.3.2`, `172.16.4.2`, `172.16.5.2`, `172.16.6.2` — exactly the four subnets where range authors had assigned the first workstation to `.2`.
 
-**Fix (range author side):** never assign user VMs to `<subnet>.2`. Skip to `.3` or `.10`+. Worked around in PowerPlant by re-IPing `pp-bp-wkstn-1`, `pp-eng-wkstn-1`, `pp-ls-wkstn-1`, `pp-is-wkstn-1` to `.10`.
+**Fix (range author side):** never assign user VMs to `<subnet>.2`. Skip to `.3` or `.10`+. Worked around in PowerPlant by re-IPing `pp-bp-wkstn-1`, `pp-eng-wkstn-1`, `pp-ls-wkstn-1`, `pp-is-wkstn-1` to `.10` (2026-05-08), and `pp-mail` from `172.16.2.2` → `172.16.2.5` (2026-05-11). The reservation applies to **server subnets as well** (PP-Services 172.16.2.0/24), not just workstation subnets.
 
 **Fix (SimSpace side):** document the reservation in their range-author guide; or better, surface a YAML-validation warning when a `VmInstance.networkInterfaces[].ipAddress` lands on `.2`.
 

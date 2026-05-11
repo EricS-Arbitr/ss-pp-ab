@@ -4,12 +4,13 @@
 # range-agent-bootstrap MSI from the controller (via WinRM, no HTTPS) bypasses
 # the failing win_get_url in the upstream `common` role.
 #
-# By the time `common` runs `Check if RangeAgent Service Exists`, the service
-# is already installed and the failing download/install tasks are skipped.
+# Some SimSpace images ship with Range Agent Bootstrap pre-installed at a newer
+# version than our bundled MSI. In that case the install is skipped — common's
+# service check downstream will detect the existing agent and skip its own
+# download path too.
 #
-# Wrapped in block/rescue so a failure here does NOT abort the playbook for
-# unrelated hosts — common's win_get_url path will still attempt the download
-# and may succeed for hosts where TLS 1.2 actually does work end-to-end.
+# Wrapped in block/rescue so any unexpected failure here does NOT abort the
+# playbook for unrelated hosts.
 
 - block:
     - name: Ensure C:\temp staging directory exists
@@ -17,15 +18,33 @@
         path: 'C:\temp'
         state: directory
 
-    - name: Copy range-agent-bootstrap MSI from controller (TLS bypass)
+    - name: Detect existing Range Agent Bootstrap install (any version)
+      ansible.windows.win_shell: |
+        $found = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' `
+          -ErrorAction SilentlyContinue |
+          Where-Object { $_.DisplayName -like 'Range Agent Bootstrap*' } |
+          Select-Object -First 1 -ExpandProperty DisplayVersion
+        if ($found) { Write-Output $found } else { Write-Output '' }
+      register: rab_existing
+      changed_when: false
+
+    - name: Copy range-agent-bootstrap MSI from controller (only if not already installed)
       ansible.windows.win_copy:
         src: "{{ range_agent_bootstrap }}"
         dest: 'C:\temp\{{ range_agent_bootstrap }}'
+      when: (rab_existing.stdout | default('') | trim) == ''
 
-    - name: Install range-agent-bootstrap
+    - name: Install range-agent-bootstrap (only if not already installed)
       ansible.windows.win_package:
         path: 'C:\temp\{{ range_agent_bootstrap }}'
         state: present
+      when: (rab_existing.stdout | default('') | trim) == ''
+
+    - name: Note that Range Agent Bootstrap was already present (skipping install)
+      ansible.builtin.debug:
+        msg: "Range Agent Bootstrap version {{ rab_existing.stdout | trim }} already installed; prestage skipped."
+      when: (rab_existing.stdout | default('') | trim) != ''
 
   rescue:
     - name: prestage_range_agent failed — falling back to common's download path
