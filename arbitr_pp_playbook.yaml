@@ -8,22 +8,6 @@
   tags:
     - init
 
-- name: Enable TLS 1.2 on Server 2012 (Nexus HTTPS prerequisite)
-  hosts: winserver2012
-  gather_facts: false
-  roles:
-    - enable_tls12
-  tags:
-    - enable_tls12
-
-- name: Pre-stage range-agent on Server 2012 (Nexus TLS bypass)
-  hosts: winserver2012
-  gather_facts: false
-  roles:
-    - prestage_range_agent
-  tags:
-    - prestage_range_agent
-
 - name: Common Role
   hosts: windows,linux
   gather_facts: true
@@ -151,14 +135,6 @@
     - root_certs
   tags:
     - root_certs
-
-- name: Pre-stage AUE agent on Server 2012 R2 (Nexus TLS bypass)
-  hosts: winserver2012:&ae
-  gather_facts: false
-  roles:
-    - prestage_aue_agent
-  tags:
-    - prestage_aue_agent
 
 - name: apply AUE settings
   hosts: aue

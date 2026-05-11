@@ -100,6 +100,10 @@ Role is structurally invalid. `main.yml` sits at the role root (instead of `task
 
 ## 2026-05-07 · gap · roles/common/tasks/windows.yml
 
+**PowerPlant status (2026-05-11): resolved by host migration.** `pp-mail` and `pp-dmz-smtp` were re-imaged from Server 2012 R2 to Server 2019 (which has TLS 1.2 default-on). No Server 2012 hosts remain in this range. The `enable_tls12` and `prestage_range_agent` overlay roles, and their plays, have been removed. The upstream fix remains worth doing for future ranges that need Server 2012 hosts.
+
+---
+
 The `range-agent-bootstrap using win_get_url with proxy settings` task fails on Windows Server 2012 with `"The request was aborted: Could not create SSL/TLS secure channel"`. Server 2012's .NET 4 / WinHTTP defaults to TLS 1.0 / SSL 3.0; the customer Nexus only accepts TLS 1.2. Server 2022 has TLS 1.2 default-on and is unaffected. Observed on `pp-mail` and `pp-dmz-smtp` in the PowerPlant deploy.
 
 **Fix:** add a Server 2012-aware preflight in `common` (or a sibling role). Note: `SchUseStrongCrypto` *alone* is NOT sufficient — Server 2012 SChannel refuses TLS 1.2 unless the protocol-specific keys are explicitly enabled. The full minimum set is:
@@ -132,7 +136,7 @@ A reboot is required after the SChannel keys change. Could be conditional on `an
 
 **Suggested upstream improvement:** the `common` role's `range-agent-bootstrap` task pair should support a `range_agent_bootstrap_local_path` variable that, when set, copies a controller-local MSI via `win_copy` instead of attempting `win_get_url`. Defaults to current behavior; opt-in for problem hosts.
 
-**Update 2026-05-11:** the same TLS-to-Nexus failure recurs in **every** role that does `win_get_url` against Nexus on Server 2012 R2 — confirmed on `aue_agent` (`aue-agent-latest-setup-x86_64.exe`). PowerPlant workaround: added `ss-pp-ab/roles/prestage_aue_agent/` (controller→host WinRM copy + install) and a local override of `ss-pp-ab/roles/aue_agent/` that adds a `win_stat`-based skip-if-installed gate on the `win_get_url` task. The upstream `win_package` already has `creates_path` for idempotency; only `win_get_url` needed the gate. Expect this pattern to repeat for `drainhole`, `sysmon`, and any other role that hits Nexus on a Server 2012 R2 host. The clean upstream fix is to add a `<role>_local_path` opt-in variable on each download role, or to add a generic "use the local copy if `<playbook_dir>/files/<filename>` exists" preflight before any `win_get_url`.
+**Update 2026-05-11:** the same TLS-to-Nexus failure recurs in **every** role that does `win_get_url` against Nexus on Server 2012 R2 — confirmed on `aue_agent` (`aue-agent-latest-setup-x86_64.exe`). Pre-staging is a workable per-role workaround (proven for `range-agent-bootstrap`) but requires authoring a parallel install pipeline and a local override of the upstream role for every affected installer. In PowerPlant we chose to **exclude pp-mail from `[ae]`** rather than carry that infrastructure for a single host whose mail-server use case doesn't need user-activity simulation. If more Server 2012 R2 hosts join `[ae]`/`[aue]` later, the prestage pattern (see `prestage_range_agent`) is the precedent. The cleaner upstream fix remains: add a `<role>_local_path` opt-in variable on each download role, or add a generic "use the local copy if `<playbook_dir>/files/<filename>` exists" preflight before any `win_get_url`.
 
 ---
 

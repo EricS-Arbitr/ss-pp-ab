@@ -172,8 +172,6 @@ pp-wec
 
 [winserver2019]
 pp-dmz-dns
-
-[winserver2012]
 pp-mail
 pp-dmz-smtp
 
@@ -182,7 +180,6 @@ win10
 win11
 winserver2022
 winserver2019
-winserver2012
 
 # ------------------------------------------------------------
 # Linux OS groups

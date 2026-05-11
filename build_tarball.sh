@@ -29,10 +29,9 @@ STAGE="$STAGE_PARENT/abpp_build"
 
 # Files we pull from Nexus before each build. Add more rows as needed.
 # Format: "<remote-url>|<local-path-relative-to-ss-pp-ab>"
-NEXUS_FETCH=(
-  "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/range-agent-bootstrap/range-agent-bootstrap-x64.msi|files/range-agent-bootstrap-x64.msi"
-  "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/aue-agent/aue-agent-latest-setup-x86_64.exe|files/aue-agent-latest-setup-x86_64.exe"
-)
+# (Empty for now — all hosts can download from Nexus directly. Re-populate
+# if a host needs to bypass HTTPS for any reason.)
+NEXUS_FETCH=()
 
 trap 'rm -rf "$STAGE_PARENT"' EXIT
 
@@ -123,13 +122,15 @@ update_from_nexus() {
 
 # --- Refresh installers from Nexus ----------------------------------------
 
-echo "=== Refreshing installer files from Nexus ==="
-for entry in "${NEXUS_FETCH[@]}"; do
-  url="${entry%%|*}"
-  rel="${entry##*|}"
-  update_from_nexus "$url" "$SS_PP_AB/$rel"
-done
-echo ""
+if [ ${#NEXUS_FETCH[@]} -gt 0 ]; then
+  echo "=== Refreshing installer files from Nexus ==="
+  for entry in "${NEXUS_FETCH[@]}"; do
+    url="${entry%%|*}"
+    rel="${entry##*|}"
+    update_from_nexus "$url" "$SS_PP_AB/$rel"
+  done
+  echo ""
+fi
 
 # --- Discovery -------------------------------------------------------------
 
