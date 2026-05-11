@@ -31,6 +31,7 @@ STAGE="$STAGE_PARENT/abpp_build"
 # Format: "<remote-url>|<local-path-relative-to-ss-pp-ab>"
 NEXUS_FETCH=(
   "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/range-agent-bootstrap/range-agent-bootstrap-x64.msi|files/range-agent-bootstrap-x64.msi"
+  "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/aue-agent/aue-agent-latest-setup-x86_64.exe|files/aue-agent-latest-setup-x86_64.exe"
 )
 
 trap 'rm -rf "$STAGE_PARENT"' EXIT

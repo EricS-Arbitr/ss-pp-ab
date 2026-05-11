@@ -132,6 +132,8 @@ A reboot is required after the SChannel keys change. Could be conditional on `an
 
 **Suggested upstream improvement:** the `common` role's `range-agent-bootstrap` task pair should support a `range_agent_bootstrap_local_path` variable that, when set, copies a controller-local MSI via `win_copy` instead of attempting `win_get_url`. Defaults to current behavior; opt-in for problem hosts.
 
+**Update 2026-05-11:** the same TLS-to-Nexus failure recurs in **every** role that does `win_get_url` against Nexus on Server 2012 R2 — confirmed on `aue_agent` (`aue-agent-latest-setup-x86_64.exe`). PowerPlant workaround: added `ss-pp-ab/roles/prestage_aue_agent/` (controller→host WinRM copy + install) and a local override of `ss-pp-ab/roles/aue_agent/` that adds a `win_stat`-based skip-if-installed gate on the `win_get_url` task. The upstream `win_package` already has `creates_path` for idempotency; only `win_get_url` needed the gate. Expect this pattern to repeat for `drainhole`, `sysmon`, and any other role that hits Nexus on a Server 2012 R2 host. The clean upstream fix is to add a `<role>_local_path` opt-in variable on each download role, or to add a generic "use the local copy if `<playbook_dir>/files/<filename>` exists" preflight before any `win_get_url`.
+
 ---
 
 ## 2026-05-08 · platform · SimSpace subnet IP reservation
