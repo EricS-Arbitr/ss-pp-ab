@@ -175,3 +175,44 @@
     - secpol
     - aue_agent
     - drainhole
+
+- name: configure hunt 
+  hosts: hunt
+  gather_facts: false
+  roles:
+    - chrome
+    - autologin
+  tags:
+    - chrome
+    - autologin
+
+- name: splunk server
+  hosts: splunk
+  gather_facts: true
+  become: true
+  roles:
+    - splunk
+    - splunk-es
+  tags:
+    - splunk
+    - splunk-es
+
+- name: global_dns
+  hosts: global_dns
+  gather_facts: true
+  become: true
+  roles:
+    - global_dns
+  tags:
+    - global_dns
+
+- name: splunk forwarder
+  hosts: splunk-forwarder
+  gather_facts: true
+  become: true
+  roles:
+    - role: splunk-forwarder
+      when: splunk_server_ip is defined
+  tags:
+    - splunk-forwarder
+

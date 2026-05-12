@@ -207,6 +207,17 @@ win-hunt-1
 [splunk]
 pp-splunk
 
+
+[splunk-forwarder]
+pp-proxy
+
+[splunk-forwarder:children]
+domain_controllers
+corporate_servers
+dmz
+workstations
+
+
 [hunt]
 win-hunt-1
 

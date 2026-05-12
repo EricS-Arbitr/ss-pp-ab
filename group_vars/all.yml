@@ -12,3 +12,22 @@ inet_proxy_port: "3128"
 
 # Container name for the global DNS simulator (referenced by handlers role)
 global_dns_container_name: "is-inet"
+
+# Splunk server + forwarder shared config
+splunk_admin: "admin"
+splunk_admin_password: "simspace1"
+splunk_user: "admin"
+splunk_password: "simspace1"
+splunk_server_ip: "172.16.9.20"          # pp-splunk's PP-Security IP
+splunk_forwarder_port: "9997"
+
+# Splunk indices created by the splunk role on pp-splunk.
+# Grouped by CIM data model / log volume: Sysmon is split out from
+# the rest of the Windows event logs because of volume + security value.
+indices:
+  - wineventlog   # Windows System/Security/Application/PowerShell Operational
+  - sysmon        # Sysmon (separated — high volume, high value)
+  - linux         # Linux syslog + Logbeats
+  - netfw         # Firewall: pfsense + vyatta
+  - proxy         # Forward proxy (Squid)
+  - mail          # Microsoft Exchange

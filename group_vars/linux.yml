@@ -14,6 +14,7 @@ range_agent_bootstrap_installer: "https://nexus.dev.ng.simspace.lan/repository/n
 # Splunk server (used by splunk role on [splunk] in Phase B)
 splunk_license: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/licenses/splunk/splunk.license"
 splunk_server_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Splunk/server/splunk.deb"
+splunk_forwarder_installer_deb: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Splunk/Forwarder/9.4.1/splunkfwd.deb"
 
 # EDR sensors
 cs_linux_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/Crowdstrike/UbuntuSensor.deb"
