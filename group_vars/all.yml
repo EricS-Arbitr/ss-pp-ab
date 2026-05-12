@@ -25,9 +25,9 @@ splunk_forwarder_port: "9997"
 # Grouped by CIM data model / log volume: Sysmon is split out from
 # the rest of the Windows event logs because of volume + security value.
 indices:
-  - wineventlog   # Windows System/Security/Application/PowerShell Operational
-  - sysmon        # Sysmon (separated — high volume, high value)
-  - linux         # Linux syslog + Logbeats
-  - netfw         # Firewall: pfsense + vyatta
-  - proxy         # Forward proxy (Squid)
-  - mail          # Microsoft Exchange
+  - name: "wineventlog"   # Windows System/Security/Application/PowerShell Operational
+  - name: "sysmon"        # Sysmon (separated — high volume, high value)
+  - name: "linux"         # Linux syslog + Logbeats
+  - name: "netfw"         # Firewall: pfsense + vyatta
+  - name: "proxy"         # Forward proxy (Squid)
+  - name: "mail"          # Microsoft Exchange
