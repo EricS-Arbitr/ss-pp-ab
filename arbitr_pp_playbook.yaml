@@ -22,7 +22,6 @@
       ansible.builtin.apt:
         name: network-manager
         state: present
-        update_cache: true
     - name: Opt eth* devices into NetworkManager management
       ansible.builtin.copy:
         dest: /etc/NetworkManager/conf.d/99-pp-eth-managed.conf
