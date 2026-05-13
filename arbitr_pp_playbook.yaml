@@ -26,9 +26,12 @@
       ansible.builtin.copy:
         dest: /etc/NetworkManager/conf.d/99-pp-eth-managed.conf
         content: |
+          [keyfile]
+          unmanaged-devices=
+
           [device-eth-managed]
           match-device=interface-name:eth*
-          managed=1
+          managed=true
         owner: root
         group: root
         mode: '0644'
@@ -39,6 +42,19 @@
         state: restarted
         enabled: true
       when: nm_managed_conf.changed
+    - name: Wait for NetworkManager to settle after restart
+      ansible.builtin.pause:
+        seconds: 3
+      when: nm_managed_conf.changed
+    - name: Force eth devices into managed state at runtime
+      ansible.builtin.shell: |
+        nmcli device set "{{ item }}" managed yes
+      loop:
+        - eth0
+        - eth1
+      register: nmcli_set_managed
+      changed_when: "'successfully' in (nmcli_set_managed.stdout | default(''))"
+      failed_when: false
   tags:
     - common
     - nm_managed_eth
