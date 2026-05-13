@@ -8,6 +8,42 @@
   tags:
     - init
 
+# Pre-bootstrap for Linux: drop a NetworkManager conf snippet that opts eth*
+# devices INTO management before the common role's nmcli tasks run. Without
+# this, netplan's renderer:NetworkManager stub (with no `ethernets:` listed)
+# causes NM to mark eth0/eth1 as unmanaged, and nmcli activation fails with
+# "No suitable device found for this connection".
+- name: Linux NM managed-devices pre-config
+  hosts: linux
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Ensure NetworkManager is installed
+      ansible.builtin.apt:
+        name: network-manager
+        state: present
+        update_cache: true
+    - name: Opt eth* devices into NetworkManager management
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/99-pp-eth-managed.conf
+        content: |
+          [device-eth-managed]
+          match-device=interface-name:eth*
+          managed=1
+        owner: root
+        group: root
+        mode: '0644'
+      register: nm_managed_conf
+    - name: Restart NetworkManager if config changed
+      ansible.builtin.systemd:
+        name: NetworkManager
+        state: restarted
+        enabled: true
+      when: nm_managed_conf.changed
+  tags:
+    - common
+    - nm_managed_eth
+
 - name: Common Role
   hosts: windows,linux
   gather_facts: true
