@@ -83,6 +83,48 @@
   delay: 15
   until: splunk_api_check.status == 200
 
+# Splunk's REST server caps threads at httpServer.maxThreads (default 8 on a
+# 4-vCPU box from the base server.conf.j2). The splunk_secure_gateway modular
+# input alone hammers this limit during ES bootstrap, leaving no slots for
+# essinstall — which then gets HTTP 503 with an HTML body and dies with
+# JSONDecodeError. Disable SSG (unused in a closed range) and raise the cap
+# before running essinstall.
+- name: Disable Splunk Secure Gateway (unused in range, hogs REST threads)
+  ansible.builtin.shell: >
+    /opt/splunk/bin/splunk disable app splunk_secure_gateway
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
+  register: disable_ssg_result
+  changed_when: "'disabled' in (disable_ssg_result.stdout | default('')) and 'already' not in (disable_ssg_result.stdout | default(''))"
+  failed_when: false
+  notify: Restart Splunk Service
+
+- name: Raise [httpServer] maxThreads in server.conf for ES bootstrap
+  community.general.ini_file:
+    path: /opt/splunk/etc/system/local/server.conf
+    section: httpServer
+    option: maxThreads
+    value: "64"
+    mode: '0644'
+  register: maxthreads_conf
+  notify: Restart Splunk Service
+
+- name: Flush handlers to apply SSG-disable + maxThreads change
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Splunk REST API again after second restart
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:8089/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: splunk_api_check_2
+  retries: 20
+  delay: 15
+  until: splunk_api_check_2.status == 200
+
 # Pre-warm: essinstall calls /services/admin/localapps, which is heavy on a
 # freshly-installed Splunk. Poll it directly with long retries so we don't
 # fire essinstall before that endpoint is willing to answer.
