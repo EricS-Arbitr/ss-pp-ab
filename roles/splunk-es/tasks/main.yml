@@ -89,12 +89,17 @@
 # essinstall — which then gets HTTP 503 with an HTML body and dies with
 # JSONDecodeError. Disable SSG (unused in a closed range) and raise the cap
 # before running essinstall.
-- name: Disable Splunk Secure Gateway (unused in range, hogs REST threads)
+- name: Pre-disable Splunk apps that interfere with ES bootstrap
+  # splunk_secure_gateway: not used in a closed range; modular input hogs REST threads
+  # missioncontrol: essinstall tries to disable it; its endpoint hangs and times out essinstall
   ansible.builtin.shell: >
-    /opt/splunk/bin/splunk disable app splunk_secure_gateway
+    /opt/splunk/bin/splunk disable app {{ item }}
     -auth {{ splunk_admin }}:{{ splunk_admin_password }}
-  register: disable_ssg_result
-  changed_when: "'disabled' in (disable_ssg_result.stdout | default('')) and 'already' not in (disable_ssg_result.stdout | default(''))"
+  loop:
+    - splunk_secure_gateway
+    - missioncontrol
+  register: disable_apps_result
+  changed_when: "'disabled' in (disable_apps_result.stdout | default('')) and 'already' not in (disable_apps_result.stdout | default(''))"
   failed_when: false
   notify: Restart Splunk Service
 
