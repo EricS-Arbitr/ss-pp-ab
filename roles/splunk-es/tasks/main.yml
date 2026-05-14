@@ -43,7 +43,9 @@
     -auth {{ splunk_admin }}:{{ splunk_admin_password }} -update true
   with_items: "{{ splunk_apps.files }}"
   register: install_apps_result
-  failed_when: install_apps_result.rc != 0
+  retries: 6
+  delay: 20
+  until: install_apps_result.rc == 0
   changed_when: install_apps_result.rc == 0
 
 - name: Copy Enterprise Security App
@@ -58,8 +60,10 @@
     /opt/splunk/bin/splunk install app {{ staging_dir_linux }}/splunk/splunk-es.spl
     -auth {{ splunk_admin }}:{{ splunk_admin_password }} -update true
   register: install_es_result
+  retries: 6
+  delay: 30
+  until: install_es_result.rc == 0
   changed_when: false
-  failed_when: install_es_result.rc != 0
   notify: Restart Splunk Service
 
 - name: Flush handlers
