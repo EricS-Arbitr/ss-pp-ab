@@ -1,0 +1,59 @@
+- name: Ensure Temp Directory Exists
+  ansible.windows.win_file:
+    path: "C:\\temp"
+    state: directory
+
+- name: Download Splunk Forwarder using win_get_url with proxy settings
+  ansible.windows.win_get_url:
+    url: "{{ splunk_forwarder_installer }}"
+    dest: "C:\\temp\\splunkfwd.msi"
+    method: GET
+    follow_redirects: all
+    use_proxy: yes
+    proxy_url: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+    proxy_use_default_credential: yes
+    timeout: 300
+    validate_certs: no
+    headers:
+      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
+
+- name: "Install Splunk forwarder for Windows silently"
+  ansible.windows.win_package:
+    path: "c:\\temp\\splunkfwd.msi"
+    arguments: >-
+      AGREETOLICENSE=Yes
+      SERVICESTARTTYPE=auto
+      LAUNCHSPLUNK=1
+      USE_LOCAL_SYSTEM=1
+      SPLUNKUSERNAME="{{ splunk_user }}"
+      SPLUNKPASSWORD="{{ splunk_password }}"
+  when: ansible_distribution_version is version("6.1.7601", ">=")
+  vars:
+    ansible_become_method: runas
+  register: splunk_install_result
+
+- name: "copy templated inputs.conf"
+  ansible.builtin.template:
+    src: /etc/ansible/roles/splunk-forwarder/templates/inputs.conf.j2
+    dest: "{{ splunk_forwarder_win_dir }}/etc/system/local/inputs.conf"
+  register: inputs_conf_stat
+
+- name: "copy templated outputs.conf"
+  ansible.builtin.template:
+    src: /etc/ansible/roles/splunk-forwarder/templates/outputs.conf.j2
+    dest: "{{ splunk_forwarder_win_dir }}/etc/system/local/outputs.conf"
+  register: outputs_conf_stat
+
+- name: "copy templated limits.conf"
+  ansible.builtin.template:
+    src: /etc/ansible/roles/splunk-forwarder/templates/limits.conf.j2
+    dest: "{{ splunk_forwarder_win_dir }}/etc/system/local/limits.conf"
+  register: limits_conf_stat
+
+- name: "Define the splunk services"
+  set_fact:
+    splunk_service: "SplunkForwarder"
+
+- name: "Reboot after install when needed"
+  ansible.windows.win_reboot:
+  when: splunk_install_result is changed

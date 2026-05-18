@@ -1,0 +1,171 @@
+---
+- name: Create splunk group
+  ansible.builtin.group:
+    name: "splunk"
+    state: present
+
+- name: Create splunk user
+  ansible.builtin.user:
+    name: "{{ splunk_user }}"
+    group: "splunk"
+    create_home: yes
+    shell: /bin/bash
+    state: present
+
+- name: Create SPLUNK_HOME directory
+  ansible.builtin.file:
+    path: "/opt/splunkforwarder"
+    state: directory
+    owner: "{{ splunk_user }}"
+    group: "splunk"
+    mode: '0755'
+
+- name: Download Splunk Forwarder for Debian/Ubuntu
+  ansible.builtin.get_url:
+    url: "{{ splunk_forwarder_installer_deb }}"
+    dest: /tmp/splunkfwd.deb
+    mode: '0644'
+    use_proxy: yes
+    timeout: 300
+    validate_certs: no
+  environment:
+    http_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+    https_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+  when:
+    - ansible_os_family == "Debian"
+
+- name: Install Splunk Forwarder package
+  ansible.builtin.apt:
+    deb: /tmp/splunkfwd.deb
+    state: present
+  when:
+    - ansible_os_family == "Debian"
+
+- name: Set ownership of splunk directory
+  ansible.builtin.file:
+    path: "/opt/splunkforwarder"
+    owner: "{{ splunk_user }}"
+    group: "splunk"
+    recurse: yes
+    state: directory
+
+- name: Add splunk user to adm group
+  ansible.builtin.user:
+    name: "{{ splunk_user }}"
+    groups: adm
+    append: yes
+  become: yes
+
+- name: Add splunkfwd user to adm group
+  ansible.builtin.user:
+    name: splunkfwd
+    groups: adm
+    append: yes
+  become: yes
+
+- name: Add splunk user to docker group
+  ansible.builtin.user:
+    name: "{{ splunk_user }}"
+    groups: docker
+    append: yes
+  become: yes
+  when: "'wordpress-pv' in group_names"
+
+- name: Add splunkfwd user to docker group
+  ansible.builtin.user:
+    name: splunkfwd
+    groups: docker
+    append: yes
+  become: yes
+  when: "'wordpress-pv' in group_names"
+
+- name: Add splunk user to proxy group
+  ansible.builtin.user:
+    name: "{{ splunk_user }}"
+    groups: proxy
+    append: yes
+  become: yes
+  when: "'proxy' in group_names"
+
+- name: Add splunkfwd user to proxy group
+  ansible.builtin.user:
+    name: splunkfwd
+    groups: proxy
+    append: yes
+  become: yes
+  when: "'proxy' in group_names"
+
+- name: Copy templated inputs
+  ansible.builtin.template:
+    src: /etc/ansible/roles/splunk-forwarder/templates/lin_inputs.conf.j2
+    dest: "/opt/splunkforwarder/etc/system/local/inputs.conf"
+  register: inputs_conf_stat
+
+- name: Copy templated outputs
+  ansible.builtin.template:
+    src: /etc/ansible/roles/splunk-forwarder/templates/outputs.conf.j2
+    dest: "/opt/splunkforwarder/etc/system/local/outputs.conf"
+  register: outputs_conf_stat
+
+- name: Copy templated limits
+  ansible.builtin.template:
+    src: /etc/ansible/roles/splunk-forwarder/templates/limits.conf.j2
+    dest: "/opt/splunkforwarder/etc/system/local/limits.conf"
+  register: limits_conf_stat
+
+- name: Copy admin seed file
+  ansible.builtin.template:
+    src: /etc/ansible/roles/splunk-forwarder/templates/user-seed.conf.j2
+    dest: "/opt/splunkforwarder/etc/system/local/user-seed.conf"
+  register: user_seed_conf_stat
+
+- name: Configure rsyslog to use correct hostname
+  ansible.builtin.template:
+    src: templates/rsyslog-hostname.conf.j2
+    dest: /etc/rsyslog.d/00-hostname.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+  register: rsyslog_config_deployed
+
+- name: Restart rsyslog if configuration changed
+  ansible.builtin.systemd:
+    name: rsyslog
+    state: restarted
+  become: yes
+  when: rsyslog_config_deployed.changed
+
+- name: Check if Splunk has been started before
+  ansible.builtin.stat:
+    path: "/opt/splunkforwarder/etc/splunk-launch.conf"
+  register: splunk_launch_conf
+
+- name: Start Splunk forwarder for first time and accept license
+  ansible.builtin.command:
+    cmd: "/opt/splunkforwarder/bin/splunk start --accept-license --answer-yes --no-prompt"
+    creates: "/opt/splunkforwarder/var/run/splunk/splunkd.pid"
+  become_user: "{{ splunk_user }}"
+  when: not splunk_launch_conf.stat.exists
+
+- name: Check if SplunkForwarder service file exists
+  ansible.builtin.stat:
+    path: /etc/systemd/system/SplunkForwarder.service
+  register: splunk_service_file
+
+- name: Enable Splunk forwarder to start at boot
+  ansible.builtin.command:
+    cmd: "/opt/splunkforwarder/bin/splunk enable boot-start -user {{ splunk_user }} --accept-license --answer-yes --no-prompt"
+  when: not splunk_service_file.stat.exists
+  register: boot_start_result
+
+- name: Reload systemd daemon if service was created
+  ansible.builtin.systemd:
+    daemon_reload: yes
+  when: boot_start_result is changed
+
+- name: Ensure Splunk forwarder service is enabled and running
+  ansible.builtin.systemd:
+    name: SplunkForwarder
+    state: started
+    enabled: yes

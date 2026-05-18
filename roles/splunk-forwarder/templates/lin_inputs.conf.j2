@@ -1,0 +1,24 @@
+[default]
+host = {{ inventory_hostname }}
+
+[monitor:///var/log/syslog]
+index = linux
+sourcetype = linux_messages_syslog
+
+[monitor:///var/log/auth.log]
+index = linux
+sourcetype = linux_messages_syslog
+
+{% if 'proxy' in group_names %}
+[monitor:///var/log/squid/access.log]
+index = proxy
+sourcetype = squid:access:recommended
+{% endif %}
+
+{% if 'wordpress-pv' in group_names %}
+[monitor:///var/lib/docker/containers/*/*-json.log]
+disabled = false
+index = main
+sourcetype = docker:container
+crcSalt = <SOURCE>
+{% endif %}
