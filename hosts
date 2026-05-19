@@ -23,6 +23,7 @@ pp-eng-wkstn-4
 pp-eng-wkstn-5
 pp-eng-wkstn-6
 pp-eng-wkstn-7
+pp-eng-wkstn-8
 
 [legal_staff]
 pp-ls-wkstn-1
@@ -61,7 +62,6 @@ pp-dc02
 pp-file
 pp-mail
 pp-sql
-pp-wec
 pp-syslog
 
 [file]
@@ -84,6 +84,7 @@ pp-eng-wkstn-4
 pp-eng-wkstn-5
 pp-eng-wkstn-6
 pp-eng-wkstn-7
+pp-eng-wkstn-8
 pp-ls-wkstn-1
 pp-ls-wkstn-2
 pp-ls-wkstn-3
@@ -93,10 +94,10 @@ pp-ls-wkstn-6
 pp-is-wkstn-1
 pp-is-wkstn-2
 pp-is-wkstn-3
+pp-is-wkstn-4
 pp-file
 pp-mail
 pp-sql
-pp-wec
 
 [voltgrid:children]
 workstations
@@ -160,15 +161,16 @@ pp-eng-wkstn-4
 pp-eng-wkstn-5
 pp-eng-wkstn-6
 pp-eng-wkstn-7
+pp-eng-wkstn-8
 pp-is-wkstn-2
 pp-is-wkstn-3
+pp-is-wkstn-4
 
 [winserver2022]
 pp-dc01
 pp-dc02
 pp-file
 pp-sql
-pp-wec
 
 [winserver2019]
 pp-dmz-dns
@@ -190,12 +192,8 @@ pp-www
 pp-proxy
 pp-splunk
 
-[ubuntu24]
-pp-is-wkstn-4
-
 [linux:children]
 ubuntu22
-ubuntu24
 
 # ------------------------------------------------------------
 # Security / hunt network (pp-security subnet)
@@ -275,6 +273,7 @@ pp-eng-wkstn-4
 pp-eng-wkstn-5
 pp-eng-wkstn-6
 pp-eng-wkstn-7
+pp-eng-wkstn-8
 pp-ls-wkstn-1
 pp-ls-wkstn-2
 pp-ls-wkstn-3
@@ -284,11 +283,11 @@ pp-ls-wkstn-6
 pp-is-wkstn-1
 pp-is-wkstn-2
 pp-is-wkstn-3
+pp-is-wkstn-4
 
 [ae]
 pp-dc01
 pp-dc02
 pp-file
 pp-sql
-pp-wec
 pp-mail

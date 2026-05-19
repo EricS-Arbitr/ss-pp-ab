@@ -1,14 +1,12 @@
 ansible_host: 10.255.240.125
 network_interfaces:
-  - name: "eth0"
+  - name: "Ethernet0"
     ipv4:
-      type: "ethernet"
       address: "10.255.240.125"
       netmask: "255.255.240.0"
       gateway: ""
-  - name: "eth1"
+  - name: "Ethernet1"
     ipv4:
-      type: "ethernet"
       address: "172.16.6.5"
       netmask: "255.255.255.0"
       gateway: "172.16.6.1"
