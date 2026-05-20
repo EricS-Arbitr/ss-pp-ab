@@ -187,6 +187,14 @@
   tags:
     - root_certs
 
+- name: Enable network discovery and suppress the Public/Private popup
+  hosts: windows
+  gather_facts: false
+  roles:
+    - network_discovery
+  tags:
+    - network_discovery
+
 - name: apply AUE settings
   hosts: aue
   gather_facts: false

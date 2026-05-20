@@ -21,6 +21,10 @@ network_interfaces:
       type: "ethernet"
       ospf: true
 
+static_route:
+  route: "0.0.0.0/0"
+  next_hop: "200.200.200.2"           # is-inet — owns all simulated public IP /32s on lo
+
 bgp:
   - as: 65002
     neighbor:

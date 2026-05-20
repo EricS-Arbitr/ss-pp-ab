@@ -1,0 +1,51 @@
+---
+# Make Windows hosts discoverable on their LAN without prompting the user.
+#
+# Three pieces of Windows behavior are involved:
+#   1. NLA (Network Location Awareness) prompts on first connection to a
+#      network it hasn't classified yet. Until answered, the network stays
+#      Public and Network Discovery is firewalled off. The registry key
+#      NewNetworkWindowOff suppresses that prompt entirely.
+#   2. NetConnectionProfile.NetworkCategory must be Private (or
+#      DomainAuthenticated, which is set automatically once a DC is
+#      reachable) for the discovery firewall rules to apply.
+#   3. The Network Discovery firewall rule group and the four Function
+#      Discovery / SSDP / UPnP services must be enabled and running for
+#      the host to actually advertise itself.
+
+- name: Suppress NLA Public-or-Private network popup
+  ansible.windows.win_regedit:
+    path: HKLM:\System\CurrentControlSet\Control\Network\NewNetworkWindowOff
+    state: present
+
+- name: Reclassify any Public network profiles as Private
+  # Domain-joined hosts will already be DomainAuthenticated by the time
+  # this runs; this only acts on hosts whose profile is still Public.
+  ansible.windows.win_shell: |
+    Get-NetConnectionProfile | ForEach-Object {
+      if ($_.NetworkCategory -eq 'Public') {
+        Set-NetConnectionProfile -InterfaceIndex $_.InterfaceIndex -NetworkCategory Private
+      }
+    }
+  changed_when: false
+
+- name: Enable Network Discovery firewall rule group
+  ansible.windows.win_shell: |
+    Enable-NetFirewallRule -DisplayGroup "Network Discovery"
+  changed_when: false
+
+- name: Enable File and Printer Sharing firewall rule group
+  ansible.windows.win_shell: |
+    Enable-NetFirewallRule -DisplayGroup "File and Printer Sharing"
+  changed_when: false
+
+- name: Ensure discovery services are running and set to Automatic
+  ansible.windows.win_service:
+    name: "{{ item }}"
+    state: started
+    start_mode: auto
+  loop:
+    - FDResPub   # Function Discovery Resource Publication
+    - SSDPSRV    # SSDP Discovery
+    - fdPHost    # Function Discovery Provider Host
+    - upnphost   # UPnP Device Host

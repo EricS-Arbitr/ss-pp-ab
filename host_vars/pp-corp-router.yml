@@ -39,6 +39,10 @@ network_interfaces:
       type: "ethernet"
       ospf: true
 
+static_route:
+  route: "0.0.0.0/0"
+  next_hop: "172.16.0.41"             # pp-internal-router (default chain toward pp-isp-router/is-inet)
+
 bgp:
   - as: 65001
     neighbor:
