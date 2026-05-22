@@ -8,6 +8,43 @@
   tags:
     - init
 
+# Pre-bootstrap for Windows: rename network adapters to canonical
+# Ethernet0/Ethernet1/... by ifIndex order. The customer's common role
+# (xIPAddress / xDefaultGatewayAddress / xDNSServerAddress) keys on
+# InterfaceAlias = "Ethernet0" etc. — but some SimSpace Windows images
+# (notably RDP_Windows_Server_2019:1.1.0 on pp-mail) ship with default names
+# like "Ethernet"/"Ethernet 2", which makes DSC fail with
+# "Interface 'Ethernet0' is not available."
+# All Windows hosts use managementInterface.position: FIRST, so mgmt gets the
+# lowest ifIndex and becomes Ethernet0 after rename, matching host_vars.
+- name: Windows adapter rename pre-config
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Rename Windows adapters to canonical Ethernet0/EthernetN by ifIndex order
+      ansible.windows.win_powershell:
+        script: |
+          $adapters = Get-NetAdapter | Sort-Object ifIndex
+          $idx = 0
+          $renamed = @()
+          foreach ($a in $adapters) {
+            $target = "Ethernet$idx"
+            if ($a.Name -ne $target) {
+              Rename-NetAdapter -Name $a.Name -NewName $target -ErrorAction Stop
+              $renamed += "$($a.Name) -> $target"
+            }
+            $idx++
+          }
+          if ($renamed.Count -gt 0) {
+            $Ansible.Changed = $true
+            Write-Output ($renamed -join '; ')
+          } else {
+            $Ansible.Changed = $false
+          }
+  tags:
+    - common
+    - win_adapter_rename
+
 # Pre-bootstrap for Linux: drop a NetworkManager conf snippet that opts eth*
 # devices INTO management before the common role's nmcli tasks run. Without
 # this, netplan's renderer:NetworkManager stub (with no `ethernets:` listed)
@@ -127,6 +164,15 @@
     - wordpress-pv
   tags:
     - wordpress-pv
+
+- name: billing_site
+  hosts: wordpress-pv
+  gather_facts: false
+  become: true
+  roles:
+    - billing_site
+  tags:
+    - billing_site
 
 - name: dns
   hosts: pdc

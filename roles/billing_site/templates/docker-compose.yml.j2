@@ -1,0 +1,31 @@
+services:
+  billing:
+    build:
+      context: ./app
+    restart: always
+    environment:
+      SECRET_KEY: "{{ billing_secret_key | default('voltgrid-dev-secret-change-me') }}"
+      DB_PATH: /data/billing.db
+    volumes:
+      - billing_data:/data
+    networks:
+      - frontend
+
+  nginx-proxy:
+    image: nginx:1.27-alpine
+    restart: always
+    ports:
+      - "0.0.0.0:80:80"
+    volumes:
+      - ./nginx-default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - billing
+    networks:
+      - frontend
+
+volumes:
+  billing_data:
+
+networks:
+  frontend:
+    external: true

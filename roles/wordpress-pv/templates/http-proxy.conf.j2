@@ -1,0 +1,5 @@
+[Service]
+Environment="HTTP_PROXY=http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+Environment="HTTPS_PROXY=http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+Environment="NO_PROXY=localhost,127.0.0.1"
+

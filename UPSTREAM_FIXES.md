@@ -221,6 +221,126 @@ Or, document clearly in the README that the role is not safe to re-run after any
 
 ---
 
+## 2026-05-13 · bug · roles/common — Linux interface naming contract
+
+The role's README example shows `network_interfaces[].name: "Ethernet0"` for Linux hosts, but stock Ubuntu 22 images on SimSpace name kernel devices `eth0`/`eth1` (no rename udev rule). The `community.general.nmcli` task binds `ifname: "{{ item.name }}"` — so on Linux it creates connection profiles bound to non-existent devices that *silently* fail to activate. The mgmt NIC happened to come up via DHCP from the SimSpace platform with the desired IP, masking the bug, while the data-plane NIC pulled a random `.4` lease from VyOS-side DHCP.
+
+Symptoms in PowerPlant: pp-splunk console showed `eth1` at `172.16.9.4` instead of host_vars-configured `172.16.9.20`; `nmcli con show` listed `Ethernet0`/`Ethernet1` profiles with empty `DEVICE` columns. Reproduced on every Linux host (pp-splunk, pp-www, pp-proxy, pp-syslog, pp-is-wkstn-4 when it was Ubuntu) until host_vars were rewritten to use `eth0`/`eth1`.
+
+**Fix:** either (a) document in the README that Linux hosts should use kernel-default names (`eth0`/`eth1`) while Windows hosts continue to use `Ethernet0`/`Ethernet1`, or (b) have the `common` role discover the real interface (by MAC or PCI position) and rename it to the configured value before the `nmcli` task. PowerPlant overlay went with (a) — host_vars on `pp-splunk`, `pp-www`, `pp-proxy`, `pp-syslog`, and `pp-is-wkstn-4` (when it was Linux) all use `eth*`.
+
+---
+
+## 2026-05-13 · gap · roles/common/tasks/linux.yml
+
+The role drops `files/99-netcfg-vmware.yaml` with `renderer: NetworkManager` and an empty `ethernets:` block. Netplan then generates `/run/NetworkManager/conf.d/10-globally-managed-devices.conf` containing `unmanaged-devices=*` (effectively "manage nothing"), so NetworkManager refuses to activate any nmcli-created connection profile. `nmcli con up eth1` returns `Connection activation failed: No suitable device found (device is strictly unmanaged)`.
+
+Worked around in PowerPlant by adding a `Linux NM managed-devices pre-config` play before `Common Role` that drops `/etc/NetworkManager/conf.d/99-pp-eth-managed.conf` with `[keyfile] unmanaged-devices=` (blank) and a `[device-eth-managed] match-device=interface-name:eth* managed=true` block, plus a runtime `nmcli device set eth* managed yes` as belt-and-suspenders.
+
+**Fix:** either drop a managed-devices opt-in conf as part of the `common` role on Linux hosts, or list the relevant interfaces under `netplan.ethernets:` (which would make netplan whitelist them rather than blacklist all).
+
+---
+
+## 2026-05-13 · bug · roles/splunk/tasks/main.yml
+
+`Create Indices` task loops over `indices` with `loop: "{{ indices }}"` and accesses `item.name` in both the condition and the `splunk add index` command. The role's README example shows `indices` as a list of `- name: "..."` dicts, but ranges following more concise YAML conventions (or copying from the simpler `splunk_user`/`admin_users` shapes nearby) easily land on a flat list of strings. Result: `error while evaluating conditional 'item.name not in existing_indices.stdout_lines': 'str object' has no attribute 'name'`.
+
+**Fix:** either (a) coerce strings to dicts at the top of the task (`indices: "{{ indices | map('default', {}) | ... }}"` style normalisation) so both shapes work, or (b) tighten the README to make the dict requirement loud — current example is buried in a long YAML block. PowerPlant resolved by switching `group_vars/all.yml` to the dict form.
+
+---
+
+## 2026-05-18 · bug · roles/splunk-forwarder/templates/inputs.conf.j2
+
+Every `[WinEventLog://...]` stanza in `templates/inputs.conf.j2` hardcodes `index = windows`. `lin_inputs.conf.j2` hardcodes `index = linux` (and `index = main` for the wordpress-pv docker-monitor branch). The `splunk` role's `Create Indices` task creates whatever index names appear in `indices` — but if the range author picks different names (e.g. `wineventlog`, `sysmon` split-out), Splunk silently drops every event because the destination index doesn't exist. Diagnosed in PowerPlant after `| metadata type=hosts index=*` showed only `pp-www` (its docker logs in `main`) — every other forwarder was sending events to non-existent `wineventlog`.
+
+**Fix:** parameterise the index in the templates via group_vars (`windows_index: "windows"`, `linux_index: "linux"`, `sysmon_index: "windows"`, `squid_index: "linux"`, with sensible defaults). Range authors who want to split Sysmon into its own index or send Squid to a `proxy` index could then override without forking the role. PowerPlant resolved by overlaying the role and changing the templates directly (sysmon → `sysmon`, squid → `proxy`).
+
+---
+
+## 2026-05-18 · gap · roles/splunk-forwarder/tasks/linux.yml
+
+The role adds the splunk service user (`admin`) to the `adm` group **after** the deb is installed, but before any `splunk start` task runs the first time. That happens to work on fresh installs because the role then starts splunkd via `splunk enable boot-start`, which forks a *new* process that inherits the updated group set. But re-runs (or re-runs after a host respin where splunkd is already running and only the inputs.conf needs to be updated) silently leave the live splunkd without `adm` group access — it monitors `/var/log/syslog` but can't read it, fails silently, and no events flow.
+
+**Fix:** add `notify: Restart SplunkForwarder` to the `Add splunk user to adm group` task (and the matching `splunkfwd` and `proxy` group tasks) so any group change triggers a service restart at handler-flush time. The current play assumes process credentials track group membership live, which Linux processes don't.
+
+---
+
+## 2026-05-13 · bug · roles/splunk-es/tasks/main.yml
+
+`Get Splunk Apps` uses `delegate_to: localhost` to list installer files on the Ansible controller. The play that loads this role typically sets `become: true` (the customer's `playbook.yaml` does), so the delegated task tries `sudo` on the controller. The controller's `simspace` user doesn't have passwordless sudo by default, and no `ansible_become_pass` is set for `localhost` (the `[linux]` group's value doesn't apply to the implicit localhost). Result: `sudo: a password is required`, role fails before any app installs.
+
+**Fix:** add `become: false` to that one task — listing files for a `find` lookup doesn't need root. The current implementation only inherits the play-level become for what amounts to a directory read. PowerPlant worked around it by adding `host_vars/localhost.yml` with `ansible_become_pass: simspace1`, but per-task `become: false` is the correct fix.
+
+---
+
+## 2026-05-14 · bug+gap (multi-part) · roles/splunk-es/tasks/main.yml
+
+ES bootstrap (`essinstall`) is fragile under realistic VM sizing. Five distinct failures observed in PowerPlant, each requiring its own workaround in the `ss-pp-ab` overlay:
+
+**(a) `Install Splunk Apps` HTTP-thread saturation.** The role installs each `.tgz` in a serial loop via `splunk install app`. After a few installs Splunkd's REST server hits `httpServer.maxThreads` (default `vcpus*2` per the role's own `server.conf.j2`) and starts rejecting with `HTTP 503 Too many HTTP threads (8) already running, try again later`. No retries — a single 503 fails the task. **Fix:** add `retries: 6, delay: 20, until: rc == 0` to the loop, and raise `[httpServer] maxThreads` to `64` (or expose it as a var) before the app-install loop runs.
+
+**(b) `Install Enterprise Security App` same root cause.** Single shot, no retry. Same fix.
+
+**(c) `Configure Enterprise Security App` (essinstall) races bootstrap.** The role only waits for `/services/server/info` to return 200 before firing `essinstall`. That endpoint comes up far before `/services/admin/localapps` (which `essinstall` actually hits), so essinstall fails with `JSONDecodeError: Expecting value: line 1 column 1 (char 0)` — an HTML 503 body being parsed as JSON. **Fix:** add a second readiness probe on `/services/admin/localapps?count=0` with `retries: 30, delay: 30` between the existing wait and essinstall.
+
+**(d) essinstall's `disable_apps` stage hangs on `missioncontrol`.** essinstall preemptively disables Splunk Mission Control before installing ES. Mission Control's own modular inputs hold REST threads, the disable call to `/services/admin/localapps/missioncontrol/disable` times out, and essinstall dies. **Fix:** pre-disable `missioncontrol` (and `splunk_secure_gateway`, which has the same shape) before essinstall runs.
+
+**(e) essinstall under memory pressure.** With default-sized Splunk VMs (8 vCPU, 8–16 GB RAM), essinstall's restart cycles trigger SIGKILLs of search processes (`splunkd.log` shows `vm_major=3108` page faults — swap thrashing). **Fix is environmental, not in the role:** ES on this app set needs ≥16 vCPU / ≥32 GB RAM. In PowerPlant the SimSpace VM spec for `pp-splunk` was bumped to that floor and essinstall completes cleanly.
+
+PowerPlant's full overlay lives in `ss-pp-ab/roles/splunk-es/tasks/main.yml`.
+
+---
+
+## 2026-05-20 · gap · roles/vyos/tasks/main.yml — BGP default-route propagation
+
+The role auto-adds `set protocols bgp address-family ipv4-unicast redistribute static` whenever `bgp` is defined. In FRR this redistributes non-default static routes but **not** `0.0.0.0/0` — by design, to prevent accidental default-leakage. To propagate a default route through iBGP, FRR requires `neighbor X default-originate` per-neighbor, which the role doesn't expose.
+
+Symptom in PowerPlant: pp-external-firewall had `static_route: 0.0.0.0/0 → 75.21.1.2` (toward pp-isp-router) and BGP redistribution turned on. pp-corp-router never learned the default; workstations got `Destination net unreachable` from pp-corp-router for anything off-prefix (e.g. `8.8.8.8` hosted on is-inet). Worked around by adding a static `0.0.0.0/0` to *each* internal VyOS hop pointing toward pp-external-firewall, plus one on pp-isp-router pointing at is-inet.
+
+**Fix:** expose `default_originate: true` per BGP neighbor in the role's schema:
+```yaml
+bgp:
+  - as: 65001
+    neighbor:
+      ip: "172.16.0.10"
+      as: 65001
+      default_originate: true
+```
+which would render `set protocols bgp neighbor 172.16.0.10 address-family ipv4-unicast default-originate`. Or add a `default_originate_to: [list-of-neighbors]` shortcut.
+
+While at it, also worth extending `static_route` to accept a list (currently a single dict) — overlapping with the 2026-04-22 entry on README-vs-code mismatch, but specifically: a router that needs *both* a default route *and* a more-specific static can't currently express it.
+
+---
+
+## 2026-05-20 · enhancement · roles/common/tasks/windows.yml — NLA "Public/Private" popup
+
+On first login, fresh Windows hosts pop the "Do you want to allow your PC to be discoverable on this network?" prompt. Until answered, the network stays classified as `Public` and Network Discovery / File-and-Printer-Sharing firewall groups are off — Windows hosts can't see each other in File Explorer's Network pane. Domain-joined hosts auto-promote to `DomainAuthenticated` once a DC is reachable, but the prompt still fires once before that, and non-domain-joined hosts (e.g. `win-hunt-1`) never auto-classify at all.
+
+**Fix:** add a small `network_discovery` role to the customer repo (or fold it into `common`) that:
+1. Creates `HKLM:\System\CurrentControlSet\Control\Network\NewNetworkWindowOff` (suppresses the prompt globally).
+2. Sets any still-`Public` NetConnectionProfiles to `Private` (`Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private`).
+3. Enables the `Network Discovery` and `File and Printer Sharing` firewall rule groups.
+4. Ensures `FDResPub`, `SSDPSRV`, `fdPHost`, `upnphost` are `Started + Automatic`.
+
+PowerPlant's overlay lives at `ss-pp-ab/roles/network_discovery/`.
+
+---
+
+## 2026-05-21 · bug · roles/common/tasks/windows.yml — Windows adapter naming
+
+The `xIPAddress` / `xDefaultGatewayAddress` / `xDNSServerAddress` tasks use `InterfaceAlias: "{{ item.name }}"` keyed on `network_interfaces[].name` (e.g. `Ethernet0`, `Ethernet1`). The role assumes Windows adapters are already named that way — there's no rename step. Most SimSpace Windows images do ship with that pattern, but the `RDP_Windows_Server_2019:1.1.0` image (used by pp-mail, pp-dmz-dns, pp-dmz-smtp on PowerPlant) leaves the default Windows names like `Ethernet`, `Ethernet 2`. Result: DSC fails on the first task with `Interface "Ethernet0" is not available. Please select a valid interface and try again. Parameter name: InterfaceAlias`.
+
+PowerPlant worked around it by adding a `Windows adapter rename pre-config` play before `Common Role` that:
+1. `Get-NetAdapter | Sort-Object ifIndex`
+2. Renames each adapter in order to `Ethernet0`, `Ethernet1`, `Ethernet2`, ...
+3. Reports `changed` only if at least one rename happened (idempotent on re-run).
+
+All Windows hosts in PowerPlant use `managementInterface.position: FIRST`, so mgmt gets `ifIndex 0` and becomes `Ethernet0` — matching the host_vars convention.
+
+**Fix:** add the rename step as a preflight in the `common` role for Windows. Optionally, if positional renaming is too fragile, support a MAC-based mapping in host_vars (`network_interfaces[].mac: "00:50:56:a8:..."`) and rename by MAC match.
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.

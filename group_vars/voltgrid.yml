@@ -18,6 +18,12 @@ internal_dns_records:
     value: "www.{{ domain_name }}"
     zone: "8.16.172.in-addr.arpa"
 
+  # Billing portal (pp-www, same host as WordPress — vhost routed by nginx)
+  - name: "billing"
+    type: "A"
+    value: "172.16.8.5"
+    zone: "{{ domain_name }}"
+
   # Service aliases for AD-joined hosts
   - name: "mail"
     type: "A"

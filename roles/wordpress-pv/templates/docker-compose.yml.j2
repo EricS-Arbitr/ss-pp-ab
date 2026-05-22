@@ -1,0 +1,43 @@
+services:
+  wordpress:
+    image: nexus-docker.dev.ng.simspace.lan/simspace/wordpress-pv:latest
+    restart: always
+    # Host port bindings removed in this overlay.
+    # billing_site's nginx-proxy takes host port 80 and reverse-proxies
+    # WordPress via the shared `frontend` network.
+    environment:
+      enabled: "false"
+      ALLOW_EMPTY_PASSWORD: "yes"
+      PHP_MEMORY_LIMIT: 512M
+      MARIADB_HOST: db
+      WORDPRESS_DATABASE_NAME: wp
+      WORDPRESS_DATABASE_USER: wp
+      WORDPRESS_DATABASE_PASSWORD: simspace1
+      WORDPRESS_PLUGINS: wp-statistics, 3dprint-lite
+    volumes:
+      - wordpress:/bitnami/wordpress
+    depends_on:
+      - db
+    networks:
+      - frontend
+      - default
+
+  db:
+    image: nexus-docker.dev.ng.simspace.lan/mariadb:10.6.4-focal
+    restart: always
+    environment:
+      MYSQL_ROOT_USER: root
+      MYSQL_ROOT_PASSWORD: simspace1
+      MYSQL_DATABASE: wp
+      MYSQL_USER: wp
+      MYSQL_PASSWORD: simspace1
+    volumes:
+      - db:/var/lib/mysql
+
+volumes:
+  wordpress:
+  db:
+
+networks:
+  frontend:
+    external: true
