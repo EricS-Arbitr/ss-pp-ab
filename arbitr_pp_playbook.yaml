@@ -212,6 +212,31 @@
   tags:
     - dns
 
+# The customer's `dns` role creates AD zones and records but doesn't touch
+# DNS forwarders, so anything outside voltgrid.com is unresolvable on the
+# domain workstations. Point both DCs at is-inet (200.200.200.2), which
+# answers DNS for the entire simulated public-internet alias set.
+- name: Configure DNS forwarders to is-inet
+  hosts: domain_controllers
+  gather_facts: false
+  tasks:
+    - name: Point Windows DNS forwarder at is-inet
+      ansible.windows.win_powershell:
+        script: |
+          $current = @((Get-DnsServerForwarder).IPAddress.IPAddressToString | Sort-Object)
+          $desired = @('200.200.200.2')
+          if (-not (Compare-Object $current $desired -SyncWindow 0)) {
+            $Ansible.Changed = $false
+            Write-Output "DNS forwarder already set to: $($desired -join ', ')"
+          } else {
+            Set-DnsServerForwarder -IPAddress $desired -UseRootHint $false -Timeout 3
+            $Ansible.Changed = $true
+            Write-Output "DNS forwarder updated to: $($desired -join ', ')"
+          }
+  tags:
+    - dns
+    - dns_forwarder
+
 - name: ae_gpo
   hosts: pdc
   gather_facts: false

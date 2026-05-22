@@ -348,6 +348,26 @@ PowerPlant's pre-play in `arbitr_pp_playbook.yaml` implements both rails.
 
 ---
 
+## 2026-05-22 · gap · roles/dns/tasks/main.yml — no forwarder configuration
+
+The `dns` role creates AD-integrated forward/reverse zones and `internal_dns_records` entries, but never configures DNS forwarders on the DC. Result: domain-joined hosts can resolve names within the AD zones (e.g. `voltgrid.com`) but every lookup for anything else times out — Windows DNS has nothing to forward to and no working root hints in a sealed range.
+
+Symptom in PowerPlant after deploy: `nslookup www.voltgrid.com` resolves, `nslookup hbo.com` times out with `*** Request to pp-dc01.voltgrid.com timed-out`. is-inet was up and reachable, listening on `200.200.200.2` (plus aliases like `8.8.8.8`) with simulated public DNS — but pp-dc01 wasn't asking it.
+
+**Fix:** add an optional `dns_forwarders` variable to the role and, when set, run:
+```yaml
+- name: Configure DNS forwarders
+  ansible.windows.win_powershell:
+    script: |
+      Set-DnsServerForwarder -IPAddress {{ dns_forwarders | join(',') }} -UseRootHint $false -Timeout 3
+  when: dns_forwarders is defined
+```
+Range authors then declare `dns_forwarders: ['200.200.200.2']` (or whatever the simulated-internet DNS IP is) in group_vars. Disabling root hints is important in sealed ranges — otherwise queries that miss the forwarder fall back to root hints and consume the full `forwarder_timeout` window before failing.
+
+PowerPlant overlay adds a one-task play after the `dns` play in `arbitr_pp_playbook.yaml` that runs against `domain_controllers` (covers both the primary DC and any additional DCs — forwarder config is per-DC, not replicated via AD).
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.
