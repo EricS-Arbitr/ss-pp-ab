@@ -33,17 +33,6 @@
     state: directory
     mode: '0755'
 
-# Shared with billing_site role. WordPress + billing + nginx-proxy all attach
-# to this network so the front-door proxy can reach them by service name.
-- name: Ensure shared `frontend` docker network exists
-  ansible.builtin.command:
-    cmd: docker network create frontend
-  register: net_create
-  changed_when: net_create.rc == 0
-  failed_when:
-    - net_create.rc != 0
-    - "'already exists' not in net_create.stderr"
-
 - name: Deploy docker-compose.yml
   ansible.builtin.template:
     src: docker-compose.yml.j2

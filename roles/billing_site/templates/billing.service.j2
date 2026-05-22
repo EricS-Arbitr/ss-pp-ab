@@ -1,0 +1,18 @@
+[Unit]
+Description=Voltgrid Power billing portal (Flask via gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=simspace
+Group=simspace
+WorkingDirectory=/opt/billing/app
+Environment=DB_PATH=/var/lib/billing/billing.db
+Environment=SECRET_KEY={{ billing_secret_key | default('voltgrid-dev-secret-change-me') }}
+ExecStart=/opt/billing/venv/bin/gunicorn --bind 127.0.0.1:5000 --workers 2 --access-logfile - app:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

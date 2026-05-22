@@ -1,68 +1,123 @@
 ---
 # billing_site — Voltgrid Power customer billing portal on pp-www.
 #
-# Deploys a Flask + SQLite app and an nginx reverse-proxy that takes host
-# port 80 and routes by Host: header. WordPress (deployed by wordpress-pv)
-# is also reverse-proxied via the same shared `frontend` docker network.
-# Requires the wordpress-pv overlay in this repo (which releases host port 80
-# and joins the `frontend` network).
+# Architecture (host-direct, no Docker for billing itself):
+#   - Flask + gunicorn runs as a systemd service bound to 127.0.0.1:5000
+#   - Host nginx terminates :80 and reverse-proxies by Host header:
+#       billing.voltgrid.com -> 127.0.0.1:5000   (Flask)
+#       (everything else)    -> 127.0.0.1:8080   (WordPress container from
+#                                                 wordpress-pv role)
+#   - SQLite DB lives at /var/lib/billing/billing.db, seeded once by init_db.py
+#
+# Requires the wordpress-pv overlay in this repo, which binds the WordPress
+# container on 127.0.0.1:8080 so host nginx can reach it on loopback.
 
-- name: Ensure billing stack directory exists
+- name: Ensure billing directories exist
   ansible.builtin.file:
-    path: /opt/billing
+    path: "{{ item }}"
     state: directory
+    owner: simspace
+    group: simspace
     mode: '0755'
+  loop:
+    - /opt/billing
+    - /opt/billing/app
+    - /var/lib/billing
 
-- name: Ensure shared `frontend` docker network exists
-  ansible.builtin.command:
-    cmd: docker network create frontend
-  register: net_create
-  changed_when: net_create.rc == 0
-  failed_when:
-    - net_create.rc != 0
-    - "'already exists' not in net_create.stderr"
+- name: Install host packages for billing portal
+  ansible.builtin.apt:
+    name:
+      - python3
+      - python3-venv
+      - python3-pip
+      - nginx
+    state: present
+    update_cache: false
 
-- name: Sync Flask app source to /opt/billing/app
+- name: Sync Flask app source
   ansible.builtin.copy:
     src: app/
     dest: /opt/billing/app/
+    owner: simspace
+    group: simspace
     mode: preserve
   register: app_sync
+  notify: restart billing
 
-- name: Render docker-compose.yml
+- name: Create Python virtualenv at /opt/billing/venv
+  ansible.builtin.command:
+    cmd: python3 -m venv /opt/billing/venv
+    creates: /opt/billing/venv/bin/activate
+  become_user: simspace
+
+- name: Install Flask + Werkzeug + gunicorn into virtualenv (via corp proxy)
+  ansible.builtin.pip:
+    requirements: /opt/billing/app/requirements.txt
+    virtualenv: /opt/billing/venv
+  become_user: simspace
+  environment:
+    HTTP_PROXY:  "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+    HTTPS_PROXY: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+  notify: restart billing
+
+- name: Seed billing SQLite DB (idempotent — skips if file exists)
+  ansible.builtin.command:
+    cmd: /opt/billing/venv/bin/python /opt/billing/app/init_db.py
+    creates: /var/lib/billing/billing.db
+  become_user: simspace
+  environment:
+    DB_PATH: /var/lib/billing/billing.db
+
+- name: Render billing systemd unit
   ansible.builtin.template:
-    src: docker-compose.yml.j2
-    dest: /opt/billing/docker-compose.yml
+    src: billing.service.j2
+    dest: /etc/systemd/system/billing.service
     mode: '0644'
-  register: compose_tmpl
+  notify: restart billing
 
-- name: Render nginx default.conf for billing-proxy
+- name: Render nginx vhost — billing.voltgrid.com
   ansible.builtin.template:
-    src: nginx-default.conf.j2
-    dest: /opt/billing/nginx-default.conf
+    src: billing.voltgrid.com.conf.j2
+    dest: /etc/nginx/sites-available/billing.voltgrid.com.conf
     mode: '0644'
-  register: nginx_tmpl
+  notify: reload nginx
 
-# Build the Flask image up-front so `up -d` doesn't need to wait on a build.
-# --pull keeps the python:3.11-slim base layer fresh between range refreshes.
-- name: Build the billing image
-  ansible.builtin.command:
-    cmd: docker compose build --pull billing
-    chdir: /opt/billing
-  register: build_result
-  changed_when: "'Building' in build_result.stdout or 'Building' in build_result.stderr"
-  when: app_sync.changed or compose_tmpl.changed
+- name: Render nginx default vhost — WordPress
+  ansible.builtin.template:
+    src: wordpress-default.conf.j2
+    dest: /etc/nginx/sites-available/wordpress-default.conf
+    mode: '0644'
+  notify: reload nginx
 
-- name: Bring up the billing stack
-  ansible.builtin.command:
-    cmd: docker compose up -d
-    chdir: /opt/billing
-  register: compose_up
-  changed_when: "'Started' in compose_up.stdout or 'Created' in compose_up.stdout or 'Recreated' in compose_up.stdout"
+- name: Enable billing nginx vhost
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/billing.voltgrid.com.conf
+    dest: /etc/nginx/sites-enabled/billing.voltgrid.com.conf
+    state: link
+  notify: reload nginx
 
-- name: Reload nginx-proxy if its config changed
-  ansible.builtin.command:
-    cmd: docker compose exec -T nginx-proxy nginx -s reload
-    chdir: /opt/billing
-  changed_when: false
-  when: nginx_tmpl.changed
+- name: Enable WordPress default nginx vhost
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/wordpress-default.conf
+    dest: /etc/nginx/sites-enabled/wordpress-default.conf
+    state: link
+  notify: reload nginx
+
+- name: Remove stock nginx default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Enable + start billing service
+  ansible.builtin.systemd:
+    name: billing
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Ensure nginx is enabled and running
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: true
