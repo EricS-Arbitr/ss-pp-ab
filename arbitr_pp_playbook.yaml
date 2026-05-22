@@ -195,6 +195,15 @@
   tags:
     - billing_site
 
+- name: voltgrid_site
+  hosts: wordpress-pv
+  gather_facts: false
+  become: true
+  roles:
+    - voltgrid_site
+  tags:
+    - voltgrid_site
+
 - name: dns
   hosts: pdc
   gather_facts: false

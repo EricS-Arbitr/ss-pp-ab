@@ -1,0 +1,56 @@
+---
+# voltgrid_site — populates the WordPress install on pp-www with the
+# Voltgrid Power Co. corporate site (5 pages, menu, static front page).
+# Drives WP-CLI inside the wordpress container via `docker compose exec`.
+# Requires the wordpress-pv role to have already brought the container up.
+
+- name: Wait for WordPress to respond on 127.0.0.1:8080
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8080/"
+    status_code: [200, 301, 302]
+    timeout: 10
+  register: wp_ready
+  retries: 30
+  delay: 10
+  until: wp_ready.status in [200, 301, 302]
+
+- name: Stage Voltgrid site content on host
+  ansible.builtin.file:
+    path: /opt/voltgrid-content
+    state: directory
+    mode: '0755'
+
+- name: Copy page content + WP-CLI driver script to host
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: 'content/',         dest: '/opt/voltgrid-content/',     mode: '0644' }
+    - { src: 'setup-content.sh', dest: '/opt/voltgrid-content/setup-content.sh', mode: '0755' }
+  register: content_sync
+
+- name: Discover the wordpress container ID
+  ansible.builtin.command:
+    cmd: docker compose ps -q wordpress
+    chdir: /opt/wordpress
+  register: wp_container
+  changed_when: false
+
+- name: Fail if no wordpress container is running
+  ansible.builtin.assert:
+    that:
+      - wp_container.stdout | length > 0
+    fail_msg: "No wordpress container found via `docker compose ps -q wordpress` in /opt/wordpress."
+
+- name: Copy content directory into the wordpress container
+  ansible.builtin.command:
+    cmd: "docker cp /opt/voltgrid-content/. {{ wp_container.stdout }}:/tmp/voltgrid-content/"
+  changed_when: false
+
+- name: Run WP-CLI provisioning inside the wordpress container
+  ansible.builtin.command:
+    cmd: docker compose exec -T wordpress bash /tmp/voltgrid-content/setup-content.sh
+    chdir: /opt/wordpress
+  register: wpcli_run
+  changed_when: "'voltgrid_site: WordPress content provisioned.' in wpcli_run.stdout"
