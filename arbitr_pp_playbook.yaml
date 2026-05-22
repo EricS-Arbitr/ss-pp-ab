@@ -24,23 +24,44 @@
     - name: Rename Windows adapters to canonical Ethernet0/EthernetN by ifIndex order
       ansible.windows.win_powershell:
         script: |
-          $adapters = Get-NetAdapter | Sort-Object ifIndex
-          $idx = 0
+          $adapters = @(Get-NetAdapter | Sort-Object ifIndex)
+          $names = @($adapters | ForEach-Object { $_.Name })
+          $count = $adapters.Count
+
+          # If all expected canonical names already exist among the adapters,
+          # the image's naming is correct — leave it alone. Doing otherwise
+          # risks swapping the mgmt/data-plane mapping when ifIndex ordering
+          # doesn't match the image's existing Name ordering (which it often
+          # doesn't on SimSpace Windows 10/11 images).
+          $allCanonical = $true
+          for ($i = 0; $i -lt $count; $i++) {
+            if ($names -notcontains "Ethernet$i") { $allCanonical = $false; break }
+          }
+          if ($allCanonical) {
+            $Ansible.Changed = $false
+            Write-Output "All adapter names already canonical; no rename."
+            return
+          }
+
+          # Non-canonical naming (e.g. Server 2019 image ships with
+          # "Ethernet"/"Ethernet 2"). Rename via a temp-name pass first so
+          # the final names can't collide with existing names mid-loop.
+          $tempPrefix = "_ppRename_"
+          $tempIdx = 0
+          foreach ($a in $adapters) {
+            Rename-NetAdapter -Name $a.Name -NewName "$tempPrefix$tempIdx" -ErrorAction Stop
+            $tempIdx++
+          }
           $renamed = @()
+          $idx = 0
           foreach ($a in $adapters) {
             $target = "Ethernet$idx"
-            if ($a.Name -ne $target) {
-              Rename-NetAdapter -Name $a.Name -NewName $target -ErrorAction Stop
-              $renamed += "$($a.Name) -> $target"
-            }
+            Rename-NetAdapter -Name "$tempPrefix$idx" -NewName $target -ErrorAction Stop
+            $renamed += "$($a.Name) -> $target"
             $idx++
           }
-          if ($renamed.Count -gt 0) {
-            $Ansible.Changed = $true
-            Write-Output ($renamed -join '; ')
-          } else {
-            $Ansible.Changed = $false
-          }
+          $Ansible.Changed = $true
+          Write-Output ($renamed -join '; ')
   tags:
     - common
     - win_adapter_rename

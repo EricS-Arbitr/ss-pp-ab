@@ -339,6 +339,13 @@ All Windows hosts in PowerPlant use `managementInterface.position: FIRST`, so mg
 
 **Fix:** add the rename step as a preflight in the `common` role for Windows. Optionally, if positional renaming is too fragile, support a MAC-based mapping in host_vars (`network_interfaces[].mac: "00:50:56:a8:..."`) and rename by MAC match.
 
+**Update 2026-05-22:** the naive "sort by ifIndex, rename to `Ethernet$i`" approach is unsafe on SimSpace Windows 10/11 images. Those images ship with canonical `Ethernet0`/`Ethernet1` names already assigned and the IP/role mapping correct, but Windows' `ifIndex` ordering doesn't correspond to the existing alphabetic Name ordering — so a sort-by-ifIndex pass tries to "fix" already-correct hosts, races on the existing names (`Rename-NetAdapter` fails with `Windows System Error 698 / Object Exists`), and would silently swap the mgmt/data-plane mapping if it succeeded. Two safety rails for any implementation:
+
+1. **Skip if all canonical names already exist among the adapters.** A host whose `Get-NetAdapter | Select Name` includes every `EthernetN` for `N in 0..count-1` is already correctly named — don't touch it.
+2. **When a rename is needed, do a two-pass swap through temp names** (`_temp_0`, `_temp_1`, ...). Otherwise the first rename can collide with an existing target name and the role aborts mid-loop, leaving the host in a broken half-renamed state.
+
+PowerPlant's pre-play in `arbitr_pp_playbook.yaml` implements both rails.
+
 ---
 
 ## 2026-04-17 · enhancement · deploy.sh
