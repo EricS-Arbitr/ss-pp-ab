@@ -348,6 +348,46 @@ PowerPlant's pre-play in `arbitr_pp_playbook.yaml` implements both rails.
 
 ---
 
+## 2026-05-22 · platform · SimSpace RC-IS-INET image — wrong netmask on eth1
+
+The `RC-IS-INET:1.0.6` image (used for PowerPlant's `is-inet` VM) brings up its data-plane interface (`eth1`) with a `/32` mask instead of the `/24` specified in the range YAML's `PowerPlant-External-Placeholder` subnet. With `/32`, is-inet has **no connected route to its own LAN segment** — the only IPv4 routes are `10.255.240.0/20` on `eth0` (management) and the host's own `/32`. The image also ships with **no default gateway** on the data plane.
+
+Effects:
+- pp-isp-router (`200.200.200.1`) can ARP-resolve `200.200.200.2` and deliver frames to is-inet, but is-inet has no return route — every reply gets `ENETUNREACH` and is silently dropped.
+- ICMP echo from a NAT'd LAN host appears to "work" only because the trace's final hop reports the destination on TTL-exhaustion at upstream routers; the actual ICMP echo reply never makes it back.
+- DNS queries hit unbound but the response can't escape the box.
+
+Visible from `is-inet$ ip -br addr | grep eth1`:
+```
+eth1   UP   200.200.200.2/32 ...
+```
+…and `ip route` shows no `200.200.200.0/24` line and no `default via …`.
+
+**Workaround (non-persistent — reverts on reboot):**
+```bash
+sudo ip addr del 200.200.200.2/32 dev eth1
+sudo ip addr add 200.200.200.2/24 dev eth1
+sudo ip route add default via 200.200.200.1
+```
+
+**Durable fix in PowerPlant overlay:** wrap the above in a small `is_inet_fix` role (planned), so it re-asserts after each provision.
+
+**Fix (SimSpace side):** the image's cloud-init / netplan should honor the YAML-declared `prefix: 24` and configure a default gateway pointing at the subnet's `GATEWAY`-roled neighbor. Today the image silently downgrades to `/32` and skips the gateway entirely.
+
+---
+
+## 2026-05-22 · platform · SimSpace RC-IS-INET image — DNS service binds only to alias IPs
+
+is-inet's unbound (running in a host-network docker container) binds to `8.8.8.8`, `8.8.4.4`, `1.1.1.1` (and possibly others among the thousands of `/32` aliases on `lo`), but **not** to the primary data-plane IP `200.200.200.2`. A query to `200.200.200.2:53` from any source returns `connection refused` (TCP) or times out (UDP).
+
+Visible from `is-inet$ sudo ss -lntu | grep :53` — listening sockets are on the alias IPs only.
+
+Consequence for range authors: a DNS forwarder configured to point at is-inet's "obvious" primary IP (`200.200.200.2`) will silently fail. PowerPlant's `dns_forwarder` play forwards to `8.8.8.8` and `8.8.4.4` instead.
+
+**Fix (SimSpace side):** either bind unbound to `0.0.0.0:53` so the primary IP also answers, or document the alias-IP-only binding so range authors don't burn time chasing a "DNS server not responding" symptom.
+
+---
+
 ## 2026-05-22 · gap · roles/dns/tasks/main.yml — no forwarder configuration
 
 The `dns` role creates AD-integrated forward/reverse zones and `internal_dns_records` entries, but never configures DNS forwarders on the DC. Result: domain-joined hosts can resolve names within the AD zones (e.g. `voltgrid.com`) but every lookup for anything else times out — Windows DNS has nothing to forward to and no working root hints in a sealed range.
