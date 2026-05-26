@@ -1,0 +1,12 @@
+# Connection settings for the [pfsense] inventory group.
+# pfsensible.core modules drive pfSense via SSH + PHP, so we use plain SSH
+# (not winrm). pfSense 2.7+ ships Python at /usr/local/bin/python3.11.
+ansible_connection: ssh
+ansible_user: admin
+ansible_ssh_pass: pfsense
+ansible_become: false
+ansible_python_interpreter: /usr/local/bin/python3.11
+
+# Suppress strict host-key checking — SimSpace re-provisions VMs with new
+# host keys each range refresh.
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'

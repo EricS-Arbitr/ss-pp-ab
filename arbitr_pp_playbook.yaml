@@ -133,6 +133,35 @@
   tags:
     - vyos
 
+# The customer's vyos role's `static_route` field is a single dict, not a
+# list. Hosts that need more than one static route (e.g. pp-internal-router
+# after the pp-ot-firewall pfSense swap) declare additional routes here in
+# host_vars as `extra_static_routes: [{network, next_hop, descr}]`. The
+# role's auto `redistribute static` picks these up into iBGP.
+- name: Additional VyOS static routes
+  hosts: vyos
+  gather_facts: false
+  tasks:
+    - name: Push extra static routes via vyos_config
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "set protocols static route {{ item.network }} next-hop {{ item.next_hop }}"
+        save: true
+      loop: "{{ extra_static_routes | default([]) }}"
+      when: extra_static_routes is defined and (extra_static_routes | length) > 0
+  tags:
+    - vyos
+    - extra_static_routes
+
+- name: pfSense firewalls
+  hosts: pfsense
+  gather_facts: false
+  roles:
+    - pfsense_ot_firewall
+  tags:
+    - pfsense
+
 - name: dcpromo
   hosts: pdc
   gather_facts: false

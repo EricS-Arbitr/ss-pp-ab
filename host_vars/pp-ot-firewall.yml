@@ -1,32 +1,71 @@
 ansible_host: "10.255.240.190"
 
-# SimSpace provisions: eth0 = first data-plane (shared with mgmt 10.255.240.190/20)
-network_interfaces:
-  - name: "eth0"                      # switch-4 transit to pp-internal-router (mgmt shares)
-    ipv4:
-      address: "172.16.0.50"
-      netmask: "255.255.255.252"
-      type: "ethernet"
-      ospf: true
-  - name: "eth1"                      # switch-8 transit to pp-ot-router (new OT topology)
-    ipv4:
-      address: "192.168.200.201"
-      netmask: "255.255.255.252"
-      type: "ethernet"
-      ospf: true
-  - name: "eth2"                      # PP-OT-DMZ gateway (/27)
-    ipv4:
-      address: "192.168.90.129"
-      netmask: "255.255.255.224"
-      type: "ethernet"
-      ospf: true
+# pfSense — replacing the VyOS RC-VyOS-Firewall image on this single host.
+# managementInterface.position: LAST in the SimSpace YAML, so mgmt lands on
+# em3 (NIC index 3) and data-plane interfaces are em0..em2.
+#
+# Static routing only (no BGP). The "ripple" — static routes on
+# pp-internal-router covering 192.168.0.0/16 — is configured in that host's
+# host_vars under `extra_static_routes`. pp-ot-router gets a default route
+# pointing back through this firewall via its standard `static_route`.
 
-bgp:
-  - as: 65001
-    neighbor:
-      ip: "172.16.0.49"               # pp-internal-router
-      as: 65001
-  - as: 65001
-    neighbor:
-      ip: "192.168.200.202"           # pp-ot-router (new)
-      as: 65001
+pfsense_hostname: "pp-ot-firewall"
+pfsense_domain: "voltgrid.com"
+
+# Interfaces. `descr` is the pfSense "friendly name" — used as the
+# interface key everywhere else in this file (gateways, routes, rules).
+pfsense_interfaces:
+  - descr: "WAN_INTERNAL"        # em0 — switch-4 transit to pp-internal-router
+    interface: em0
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.16.0.50"
+    ipv4_prefixlen: 30
+
+  - descr: "OT_TRANSIT"          # em1 — switch-8 transit to pp-ot-router
+    interface: em1
+    enable: true
+    ipv4_type: static
+    ipv4_address: "192.168.200.201"
+    ipv4_prefixlen: 30
+
+  - descr: "OT_DMZ"              # em2 — PP-OT-DMZ subnet gateway
+    interface: em2
+    enable: true
+    ipv4_type: static
+    ipv4_address: "192.168.90.129"
+    ipv4_prefixlen: 27
+
+# Gateways — pfSense routing uses named gateways referenced by routes.
+pfsense_gateways:
+  - name: "GW_INTERNAL"
+    interface: "WAN_INTERNAL"
+    gateway: "172.16.0.49"       # pp-internal-router
+    default_gw: true             # default route 0.0.0.0/0 → here
+
+  - name: "GW_OT_ROUTER"
+    interface: "OT_TRANSIT"
+    gateway: "192.168.200.202"   # pp-ot-router
+
+# Static routes — three OT prefixes reachable via pp-ot-router.
+pfsense_routes:
+  - network: "192.168.95.0/24"   # Gas-Turbine
+    gateway: "GW_OT_ROUTER"
+    descr: "OT Gas-Turbine via pp-ot-router"
+  - network: "192.168.90.0/27"   # Gas-Turbine-Sim
+    gateway: "GW_OT_ROUTER"
+    descr: "OT Gas-Turbine-Sim via pp-ot-router"
+  - network: "192.168.90.96/27"  # PP-OT-Services
+    gateway: "GW_OT_ROUTER"
+    descr: "OT PP-OT-Services via pp-ot-router"
+
+# Firewall rules — lab mode: permit any-any on every interface so the
+# pfSense doesn't silently drop transit traffic. Tighten later if you want
+# to use this for security training scenarios.
+pfsense_rules:
+  - name: "Allow any on WAN_INTERNAL (lab)"
+    interface: "WAN_INTERNAL"
+  - name: "Allow any on OT_TRANSIT (lab)"
+    interface: "OT_TRANSIT"
+  - name: "Allow any on OT_DMZ (lab)"
+    interface: "OT_DMZ"

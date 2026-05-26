@@ -1,0 +1,59 @@
+---
+# pfsense_ot_firewall — configure pp-ot-firewall (running pfSense) using the
+# pfsensible.core collection. Driven entirely by host_vars on pp-ot-firewall:
+#   pfsense_hostname, pfsense_domain
+#   pfsense_interfaces[]   — descr + physical NIC + ipv4
+#   pfsense_gateways[]     — named gateways; one marked default_gw: true
+#   pfsense_routes[]       — static routes referencing a gateway name
+#   pfsense_rules[]        — firewall rules (lab-mode permit-any by default)
+#
+# The pfsensible.core collection must be installed on the Ansible controller
+# (see ss-pp-ab/requirements.yml).
+
+- name: Set hostname and domain
+  pfsensible.core.pfsense_setup:
+    hostname: "{{ pfsense_hostname }}"
+    domain: "{{ pfsense_domain | default('localdomain') }}"
+  when: pfsense_hostname is defined
+
+- name: Configure pfSense interfaces
+  pfsensible.core.pfsense_interface:
+    state: present
+    descr: "{{ item.descr }}"
+    interface: "{{ item.interface }}"
+    enable: "{{ item.enable | default(true) }}"
+    ipv4_type: "{{ item.ipv4_type | default('static') }}"
+    ipv4_address: "{{ item.ipv4_address }}"
+    ipv4_prefixlen: "{{ item.ipv4_prefixlen }}"
+  loop: "{{ pfsense_interfaces | default([]) }}"
+
+- name: Configure pfSense gateways
+  pfsensible.core.pfsense_gateway:
+    state: present
+    name: "{{ item.name }}"
+    interface: "{{ item.interface }}"
+    gateway: "{{ item.gateway }}"
+    ipprotocol: "{{ item.ipprotocol | default('inet') }}"
+    default_gw: "{{ item.default_gw | default(false) }}"
+  loop: "{{ pfsense_gateways | default([]) }}"
+
+- name: Configure pfSense static routes
+  pfsensible.core.pfsense_route:
+    state: present
+    descr: "{{ item.descr | default('Static route to ' + item.network) }}"
+    network: "{{ item.network }}"
+    gateway: "{{ item.gateway }}"
+  loop: "{{ pfsense_routes | default([]) }}"
+
+# Lab-mode firewall: permit any-any on each named interface. Tighten by
+# overriding `pfsense_rules` in host_vars later if you want per-rule control.
+- name: Configure pfSense firewall rules (permit-any lab mode)
+  pfsensible.core.pfsense_rule:
+    state: present
+    name: "{{ item.name }}"
+    interface: "{{ item.interface }}"
+    action: "{{ item.action | default('pass') }}"
+    protocol: "{{ item.protocol | default('any') }}"
+    source: "{{ item.source | default('any') }}"
+    destination: "{{ item.destination | default('any') }}"
+  loop: "{{ pfsense_rules | default([]) }}"

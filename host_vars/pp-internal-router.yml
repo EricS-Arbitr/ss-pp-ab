@@ -31,6 +31,15 @@ static_route:
   route: "0.0.0.0/0"
   next_hop: "172.16.0.26"             # pp-internal-firewall (default chain toward pp-isp-router/is-inet)
 
+# Re-introduce the OT prefix range into the iBGP after pp-ot-firewall was
+# migrated to pfSense (static routing only — no BGP advertisement out of OT).
+# The vyos role's auto `redistribute static` propagates this throughout the
+# AS so pp-corp-router et al. still know how to reach OT.
+extra_static_routes:
+  - network: "192.168.0.0/16"
+    next_hop: "172.16.0.50"           # pp-ot-firewall (pfSense)
+    descr: "OT subnets via pp-ot-firewall"
+
 bgp:
   - as: 65001
     neighbor:

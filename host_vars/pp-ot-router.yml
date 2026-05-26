@@ -30,8 +30,11 @@ network_interfaces:
       type: "ethernet"
       ospf: true
 
-bgp:
-  - as: 65001
-    neighbor:
-      ip: "192.168.200.201"           # pp-ot-firewall
-      as: 65001
+# pp-ot-firewall was migrated from VyOS to pfSense (static routing only),
+# so the BGP peering through it is gone. Replaced with a static default
+# route inward through the new firewall.
+static_route:
+  route: "0.0.0.0/0"
+  next_hop: "192.168.200.201"         # pp-ot-firewall (pfSense)
+
+bgp: []

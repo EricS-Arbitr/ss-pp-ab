@@ -196,6 +196,10 @@ cp    "$SS_PP_AB/hosts"                   "$STAGE/"
 cp    "$SS_PP_AB/arbitr_pp_playbook.yaml" "$STAGE/"
 cp    "$SS_PP_AB/deploy.sh"               "$STAGE/"
 chmod +x "$STAGE/deploy.sh"
+# Ansible Galaxy collection requirements (pfsensible.core etc.)
+if [ -f "$SS_PP_AB/requirements.yml" ]; then
+  cp "$SS_PP_AB/requirements.yml" "$STAGE/"
+fi
 
 # Pre-staged installers (referenced via win_copy with bare filename)
 if [ -d "$SS_PP_AB/files" ]; then
@@ -216,6 +220,7 @@ fi
 
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh)
+[ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)
 tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
 
