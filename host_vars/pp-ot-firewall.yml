@@ -2,7 +2,8 @@ ansible_host: "10.255.240.190"
 
 # pfSense — replacing the VyOS RC-VyOS-Firewall image on this single host.
 # managementInterface.position: LAST in the SimSpace YAML, so mgmt lands on
-# em3 (NIC index 3) and data-plane interfaces are em0..em2.
+# vmx3 (NIC index 3 — assigned as LAN with mgmt IP) and data-plane interfaces
+# are vmx0..vmx2 (driver = `vmx`, FreeBSD's VMXNET3 driver).
 #
 # Static routing only (no BGP). The "ripple" — static routes on
 # pp-internal-router covering 192.168.0.0/16 — is configured in that host's
@@ -15,22 +16,22 @@ pfsense_domain: "voltgrid.com"
 # Interfaces. `descr` is the pfSense "friendly name" — used as the
 # interface key everywhere else in this file (gateways, routes, rules).
 pfsense_interfaces:
-  - descr: "WAN_INTERNAL"        # em0 — switch-4 transit to pp-internal-router
-    interface: em0
+  - descr: "WAN_INTERNAL"        # vmx0 — switch-4 transit to pp-internal-router
+    interface: vmx0
     enable: true
     ipv4_type: static
     ipv4_address: "172.16.0.50"
     ipv4_prefixlen: 30
 
-  - descr: "OT_TRANSIT"          # em1 — switch-8 transit to pp-ot-router
-    interface: em1
+  - descr: "OT_TRANSIT"          # vmx1 — switch-8 transit to pp-ot-router
+    interface: vmx1
     enable: true
     ipv4_type: static
     ipv4_address: "192.168.200.201"
     ipv4_prefixlen: 30
 
-  - descr: "OT_DMZ"              # em2 — PP-OT-DMZ subnet gateway
-    interface: em2
+  - descr: "OT_DMZ"              # vmx2 — PP-OT-DMZ subnet gateway
+    interface: vmx2
     enable: true
     ipv4_type: static
     ipv4_address: "192.168.90.129"

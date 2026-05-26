@@ -348,6 +348,31 @@ PowerPlant's pre-play in `arbitr_pp_playbook.yaml` implements both rails.
 
 ---
 
+## 2026-05-26 · platform · SimSpace OT-pfSense image — first-boot interactive setup required
+
+The `OT-pfSense:1.0.0` image (used to replace VyOS on pp-ot-firewall) does **not** apply SimSpace's YAML interface assignments at first boot. It arrives at the pfSense interactive interface-assignment wizard prompting the operator to map physical NICs (named `vmx0..vmx3` — VMXNET3 driver) to WAN/LAN/OPT roles. The `a` (auto-detect) option doesn't work in VMs because it relies on physically unplugging cables. As a result:
+
+- No management IP is bound to any NIC on first boot, so Ansible can't reach the host (`No route to host` from `10.255.240.0/20`).
+- SSH is not enabled by default; the `admin` user has no shell privilege by default. Both are required for `pfsensible.core` to drive config.
+
+**Workaround in PowerPlant overlay (one-time manual step per provision):**
+
+On the pfSense console:
+1. Walk the wizard, assigning WAN=vmx0, LAN=vmx3 (where `position: LAST` places mgmt), OPT1=vmx1, OPT2=vmx2.
+2. Menu option `2` → LAN → static IP `10.255.240.190/20`, no gateway, no DHCP server.
+3. Browse `https://10.255.240.190`, log in `admin/pfsense`, enable SSH under System → Advanced → Admin Access, and add "User - System: Shell account access" to the admin user under System → User Manager.
+
+After that, the Ansible `pfsense_ot_firewall` role drives the rest of the config (interfaces, gateways, routes, firewall rules).
+
+**Fix (SimSpace side):** the `RC-IS-INET` and `RC-VyOS-*` images already self-configure their interfaces from the YAML's `networkInterfaces` block at first boot. `OT-pfSense:1.0.0` should do the same — drop a `config.xml` (or run `pfSsh.php playback assigninterfaces ...`) during cloud-init that:
+- Assigns NICs to roles based on the YAML's interface order
+- Sets the mgmt IP on whichever NIC corresponds to `managementInterface.position`
+- Enables SSH and gives the default admin user shell access (or ships with a known-good credential pair pre-configured for Ansible)
+
+Until that lands, every fresh provision of an OT-pfSense VM requires the manual console step above.
+
+---
+
 ## 2026-05-22 · platform · SimSpace RC-IS-INET image — wrong netmask on eth1
 
 The `RC-IS-INET:1.0.6` image (used for PowerPlant's `is-inet` VM) brings up its data-plane interface (`eth1`) with a `/32` mask instead of the `/24` specified in the range YAML's `PowerPlant-External-Placeholder` subnet. With `/32`, is-inet has **no connected route to its own LAN segment** — the only IPv4 routes are `10.255.240.0/20` on `eth0` (management) and the host's own `/32`. The image also ships with **no default gateway** on the data plane.
