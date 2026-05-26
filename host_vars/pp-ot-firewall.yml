@@ -22,6 +22,11 @@ pfsense_interfaces:
     ipv4_type: static
     ipv4_address: "172.16.0.50"
     ipv4_prefixlen: 30
+    # WAN-roled interfaces default to "Block private networks" + "Block bogons"
+    # — both fire before any custom pass rule. Our corp traffic IS RFC1918, so
+    # those defaults silently drop all inbound from the LAN side. Turn off.
+    blockpriv: false
+    blockbogons: false
 
   - descr: "OT_TRANSIT"          # vmx1 — switch-8 transit to pp-ot-router
     interface: vmx1

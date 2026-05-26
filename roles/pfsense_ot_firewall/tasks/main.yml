@@ -25,6 +25,8 @@
     ipv4_type: "{{ item.ipv4_type | default('static') }}"
     ipv4_address: "{{ item.ipv4_address }}"
     ipv4_prefixlen: "{{ item.ipv4_prefixlen }}"
+    blockpriv: "{{ item.blockpriv | default(omit) }}"
+    blockbogons: "{{ item.blockbogons | default(omit) }}"
   loop: "{{ pfsense_interfaces | default([]) }}"
 
 - name: Configure pfSense gateways
@@ -36,6 +38,44 @@
     ipprotocol: "{{ item.ipprotocol | default('inet') }}"
     descr: "{{ item.descr | default(item.name) }}"
   loop: "{{ pfsense_gateways | default([]) }}"
+
+# pfsensible.core 0.7.x doesn't expose pfSense's IPv4 default-gateway
+# selection (defaultgw4). The SimSpace OT-pfSense image ships with a stale
+# auto-created "GW_WAN" gateway pointing at 192.168.90.1 (left over from
+# the image's pre-baked config) which becomes the system default. The bad
+# default causes pfSense's antispoof on WAN_INTERNAL to silently drop all
+# corp→OT traffic (uRPF reply path mismatch). Remove the rogue gateway and
+# pin GW_INTERNAL as the IPv4 default.
+- name: Remove stale GW_WAN and pin GW_INTERNAL as default IPv4 gateway
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/system.inc");
+            require_once("/etc/inc/filter.inc");
+            $gws = config_get_path("gateways/gateway_item", []);
+            $cleaned = [];
+            $removed = [];
+            foreach ($gws as $gw) {
+              if (isset($gw["name"]) && $gw["name"] === "GW_WAN") {
+                $removed[] = $gw["name"];
+              } else {
+                $cleaned[] = $gw;
+              }
+            }
+            $current = config_get_path("gateways/defaultgw4", "");
+            $needs_change = (count($removed) > 0) || ($current !== "GW_INTERNAL");
+            if ($needs_change) {
+              config_set_path("gateways/gateway_item", $cleaned);
+              config_set_path("gateways/defaultgw4", "GW_INTERNAL");
+              write_config("Pin GW_INTERNAL as IPv4 default; remove GW_WAN");
+              system_routing_configure();
+              filter_configure();
+              echo "CHANGED: removed=" . implode(",", $removed) .
+                   " defaultgw4=" . config_get_path("gateways/defaultgw4") . "\n";
+            } else {
+              echo "OK: defaultgw4 already GW_INTERNAL and no GW_WAN present\n";
+            }'
+  register: pfsense_gw_fix
+  changed_when: "'CHANGED' in pfsense_gw_fix.stdout"
 
 - name: Configure pfSense static routes
   pfsensible.core.pfsense_route:
