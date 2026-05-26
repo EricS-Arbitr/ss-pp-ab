@@ -34,7 +34,7 @@
     interface: "{{ item.interface }}"
     gateway: "{{ item.gateway }}"
     ipprotocol: "{{ item.ipprotocol | default('inet') }}"
-    default_gw: "{{ item.default_gw | default(false) }}"
+    descr: "{{ item.descr | default(item.name) }}"
   loop: "{{ pfsense_gateways | default([]) }}"
 
 - name: Configure pfSense static routes
