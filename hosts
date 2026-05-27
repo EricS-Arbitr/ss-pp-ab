@@ -224,21 +224,22 @@ win-hunt-1
 # ------------------------------------------------------------
 [vyos]
 pp-isp-router
-pp-external-firewall
 pp-internal-router
 # pp-ot-router excluded — it's a SimSpace RC_NG_OT_Router appliance, not VyOS;
 # the vyos role's `set interface ...` commands are rejected. Self-configures
 # from its image; managed (if at all) via a future role, not this one.
 site-edge-router
-pp-internal-firewall
 pp-corp-router
-# pp-ot-firewall moved to [pfsense] (image swap 2026-05-26)
+# pp-ot-firewall, pp-internal-firewall, pp-external-firewall moved to
+# [pfsense] (image swap; all three firewalls now pfSense, static routing only)
 
 # ------------------------------------------------------------
 # pfSense firewalls
 # ------------------------------------------------------------
 [pfsense]
 pp-ot-firewall
+pp-internal-firewall
+pp-external-firewall
 
 # ------------------------------------------------------------
 # VyOS-CLI-compatible boxes that the customer's full `vyos` role

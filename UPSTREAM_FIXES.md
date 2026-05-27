@@ -371,6 +371,14 @@ After that, the Ansible `pfsense_ot_firewall` role drives the rest of the config
 
 Until that lands, every fresh provision of an OT-pfSense VM requires the manual console step above.
 
+**Post-wizard config quirks (also worked around in PowerPlant overlay)**:
+
+1. **Stale `GW_WAN` gateway pointing at `192.168.90.1`** survives in `config.xml` regardless of what we configure with `pfsensible.core.pfsense_gateway`. pfSense's `<defaultgw4>` is auto-set to this stale entry, which then becomes the system default route on the wrong interface (`vmx1`/OT_TRANSIT). The bad default triggers `antispoof` to silently drop inbound packets on `WAN_INTERNAL` (uRPF reply path mismatch). Worked around by a `php -r` task that deletes any `gateway_item` named `GW_WAN` and pins `<defaultgw4>` to our `GW_INTERNAL`.
+
+2. **Automatic Outbound NAT is wrong for a transit firewall**. The default mode rewrites every local-subnet source IP to the WAN interface IP when egressing — fine for an internet edge, wrong for an internal transit point where defenders/monitoring need to see real device source IPs. Worked around by a `php -r` task that sets `<nat><outbound><mode>` to `disabled`.
+
+3. **`pfsensible.core 0.7.x` doesn't expose `<defaultgw4>` or `<nat><outbound><mode>`** — both fixes have to bypass the collection and call `config_set_path()` via `php -r` on the appliance. Worth filing an enhancement against pfsensible.core to expose these in `pfsense_gateway` and `pfsense_nat_outbound` respectively.
+
 ---
 
 ## 2026-05-22 · platform · SimSpace RC-IS-INET image — wrong netmask on eth1

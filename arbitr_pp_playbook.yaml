@@ -158,7 +158,7 @@
   hosts: pfsense
   gather_facts: false
   roles:
-    - pfsense_ot_firewall
+    - pfsense_firewall
   tags:
     - pfsense
 

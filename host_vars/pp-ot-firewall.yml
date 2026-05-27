@@ -43,10 +43,11 @@ pfsense_interfaces:
     ipv4_prefixlen: 27
 
 # Gateways — pfSense routing uses named gateways referenced by routes.
-# Note: pfsensible.core 0.7.x dropped the `default_gw` parameter. pfSense
-# auto-selects the default gateway as the (lowest-weighted, lowest-tier)
-# gateway on the WAN interface. GW_INTERNAL is on WAN_INTERNAL (= the renamed
-# WAN), so it'll become the default automatically.
+# Note: pfsensible.core 0.7.x dropped the `default_gw` parameter. The role's
+# php -r cleanup task removes the stale image-baked GW_WAN and pins
+# `pfsense_default_gw_name` as the IPv4 default.
+pfsense_default_gw_name: "GW_INTERNAL"
+
 pfsense_gateways:
   - name: "GW_INTERNAL"
     interface: "WAN_INTERNAL"

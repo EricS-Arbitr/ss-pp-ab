@@ -19,6 +19,37 @@ static_route:
   route: "0.0.0.0/0"
   next_hop: "172.16.0.9"              # pp-external-firewall (default chain toward pp-isp-router/is-inet)
 
+# Both former iBGP peers (pp-internal-firewall .18 and pp-external-firewall
+# .9) are now pfSense — no BGP. site-edge-router previously learned the
+# corp /24s and OT from .18 via iBGP. Replace with per-/24 statics inward
+# (need per-/24 rather than 172.16.0.0/16 broad because 172.16.8.0/24 DMZ
+# lives on pp-external-firewall, the opposite direction).
+extra_static_routes:
+  - network: "172.16.2.0/24"
+    next_hop: "172.16.0.18"           # pp-internal-firewall
+    descr: "Corp PP-Services via pp-internal-firewall"
+  - network: "172.16.3.0/24"
+    next_hop: "172.16.0.18"
+    descr: "Corp BP via pp-internal-firewall"
+  - network: "172.16.4.0/24"
+    next_hop: "172.16.0.18"
+    descr: "Corp Eng via pp-internal-firewall"
+  - network: "172.16.5.0/24"
+    next_hop: "172.16.0.18"
+    descr: "Corp LS via pp-internal-firewall"
+  - network: "172.16.6.0/24"
+    next_hop: "172.16.0.18"
+    descr: "Corp IS via pp-internal-firewall"
+  - network: "172.16.9.0/24"
+    next_hop: "172.16.0.18"
+    descr: "Security via pp-internal-firewall"
+  - network: "192.168.0.0/16"
+    next_hop: "172.16.0.18"
+    descr: "OT via pp-internal-firewall"
+
+# BGP peers are stale (both .18 and .9 are now pfSense). Sessions will not
+# form; reachability now comes from the statics above. Left declared for
+# minimal-diff safety.
 bgp:
   - as: 65001
     neighbor:

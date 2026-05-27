@@ -1,43 +1,80 @@
 ansible_host: "10.255.240.191"
 
-# SimSpace provisions: eth0 = first data-plane (shared with mgmt 10.255.240.191/20)
-network_interfaces:
-  - name: "eth0"                      # PP-DMZ — DMZ gateway (mgmt shares)
-    ipv4:
-      address: "172.16.8.1"
-      netmask: "255.255.255.0"
-      type: "ethernet"
-      ospf: true
-  - name: "eth1"                      # switch-1 transit to site-edge-router
-    ipv4:
-      address: "172.16.0.9"
-      netmask: "255.255.255.252"
-      type: "ethernet"
-      ospf: true
-  - name: "eth2"                      # switch-0 transit to pp-isp-router (external)
-    ipv4:
-      address: "75.21.1.1"
-      netmask: "255.255.255.252"
-      type: "ethernet"
-      ospf: true
+# pfSense — replacing VyOS on pp-external-firewall. Same OT-pfSense image as
+# the other two firewalls. 3 data-plane NICs + mgmt:
+#   vmx0 (eth0 in old VyOS) → DMZ        172.16.8.1/24    (PP-DMZ gateway)
+#   vmx1 (eth1 in old VyOS) → EDGE       172.16.0.9/30    (to site-edge-router)
+#   vmx2 (eth2 in old VyOS) → WAN_ISP    75.21.1.1/30     (to pp-isp-router)
+#   vmx3                    → LAN (mgmt 10.255.240.191/20, role does not touch)
+#
+# managementInterface.position: LAST → mgmt is the highest-index NIC (vmx3).
+# WAN is NOT vmx0 here — during the one-time interactive wizard the user
+# MUST assign WAN=vmx2 (the ISP-facing NIC), LAN=vmx3, OPT1=vmx0 (DMZ),
+# OPT2=vmx1 (EDGE). Otherwise the renames below match the wrong NICs and
+# routing breaks.
+#
+# Static routing only (no BGP). Default outward via pp-isp-router
+# (GW_ISP → 75.21.1.2). Inward (corp + OT return paths) via
+# site-edge-router (GW_EDGE_TRANSIT → 172.16.0.10).
 
-# NOTE: vyos role expects static_route as a dict (not list) per tasks/main.yml
-static_route:
-  route: "0.0.0.0/0"
-  next_hop: "75.21.1.2"
+pfsense_hostname: "pp-external-firewall"
+pfsense_domain: "voltgrid.com"
 
-bgp:
-  - as: 65001
-    neighbor:
-      ip: "172.16.0.10"               # site-edge-router
-      as: 65001
-  - as: 65001
-    neighbor:
-      ip: "75.21.1.2"                 # pp-isp-router (AS 65002 — eBGP)
-      as: 65002
+pfsense_interfaces:
+  - descr: "DMZ"                 # vmx0 — PP-DMZ subnet gateway
+    interface: vmx0
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.16.8.1"
+    ipv4_prefixlen: 24
 
-# NOTE: vyos role reads `nat` (not `source_nat`) with fields `source`/`address`/`outbound_interface`
-nat:
-  - source: 10                        # masquerade all internal traffic heading to the internet
-    address: "172.16.0.0/16"
-    outbound_interface: "eth2"
+  - descr: "EDGE_TRANSIT"        # vmx1 — switch-1 transit to site-edge-router
+    interface: vmx1
+    enable: true
+    ipv4_type: static
+    ipv4_address: "172.16.0.9"
+    ipv4_prefixlen: 30
+
+  - descr: "WAN_ISP"             # vmx2 — switch-0 transit to pp-isp-router
+    interface: vmx2
+    enable: true
+    ipv4_type: static
+    ipv4_address: "75.21.1.1"
+    ipv4_prefixlen: 30
+    # WAN role defaults block private + bogons. 75.21.1.0/30 is the only
+    # "public" link in the lab but corp traffic still flows over it; turn
+    # off the defaults to avoid silent drops.
+    blockpriv: false
+    blockbogons: false
+
+# Default IPv4 gateway: outward to pp-isp-router → is-inet.
+pfsense_default_gw_name: "GW_ISP"
+
+pfsense_gateways:
+  - name: "GW_ISP"
+    interface: "WAN_ISP"
+    gateway: "75.21.1.2"         # pp-isp-router (default 0.0.0.0/0 path)
+
+  - name: "GW_EDGE_TRANSIT"
+    interface: "EDGE_TRANSIT"
+    gateway: "172.16.0.10"       # site-edge-router (corp + OT return paths)
+
+# Static routes — corp + OT umbrellas via site-edge-router. The own
+# connected subnets (172.16.8.0/24 DMZ, 172.16.0.8/30 transit) are more
+# specific than 172.16.0.0/16 so they win locally; the /16 catches every
+# other 172.16/16 host.
+pfsense_routes:
+  - network: "172.16.0.0/16"     # all corp via site-edge-router
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "Corp 172.16.0.0/16 via site-edge-router"
+  - network: "192.168.0.0/16"    # OT via site-edge-router → pp-internal-firewall → pp-internal-router → pp-ot-firewall
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "OT subnets via site-edge-router"
+
+pfsense_rules:
+  - name: "Allow any on DMZ (lab)"
+    interface: "DMZ"
+  - name: "Allow any on EDGE_TRANSIT (lab)"
+    interface: "EDGE_TRANSIT"
+  - name: "Allow any on WAN_ISP (lab)"
+    interface: "WAN_ISP"

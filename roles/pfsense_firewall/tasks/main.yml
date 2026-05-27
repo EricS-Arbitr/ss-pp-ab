@@ -1,11 +1,16 @@
 ---
-# pfsense_ot_firewall — configure pp-ot-firewall (running pfSense) using the
-# pfsensible.core collection. Driven entirely by host_vars on pp-ot-firewall:
+# pfsense_firewall — generic role for any pfSense firewall in the topology.
+# Driven entirely by host_vars:
 #   pfsense_hostname, pfsense_domain
-#   pfsense_interfaces[]   — descr + physical NIC + ipv4
-#   pfsense_gateways[]     — named gateways; one marked default_gw: true
-#   pfsense_routes[]       — static routes referencing a gateway name
-#   pfsense_rules[]        — firewall rules (lab-mode permit-any by default)
+#   pfsense_interfaces[]      — descr + physical NIC + ipv4
+#   pfsense_gateways[]        — named gateways referenced by routes/default
+#   pfsense_default_gw_name   — which gateway to pin as IPv4 default
+#   pfsense_stale_gateways[]  — gateway names from the SimSpace image to remove
+#                               (defaults to ['GW_WAN'] which the OT-pfSense
+#                               image bakes in pointing at 192.168.90.1)
+#   pfsense_disable_outbound_nat (bool, default true) — transit firewall mode
+#   pfsense_routes[]          — static routes referencing a gateway name
+#   pfsense_rules[]           — firewall rules (lab-mode permit-any by default)
 #
 # The pfsensible.core collection must be installed on the Ansible controller
 # (see ss-pp-ab/requirements.yml).
@@ -43,46 +48,55 @@
 # selection (defaultgw4). The SimSpace OT-pfSense image ships with a stale
 # auto-created "GW_WAN" gateway pointing at 192.168.90.1 (left over from
 # the image's pre-baked config) which becomes the system default. The bad
-# default causes pfSense's antispoof on WAN_INTERNAL to silently drop all
-# corp→OT traffic (uRPF reply path mismatch). Remove the rogue gateway and
-# pin GW_INTERNAL as the IPv4 default.
-- name: Remove stale GW_WAN and pin GW_INTERNAL as default IPv4 gateway
+# default causes pfSense's antispoof on the renamed WAN interface to
+# silently drop traffic (uRPF reply path mismatch). Remove rogue gateways
+# (`pfsense_stale_gateways`, default ['GW_WAN']) and pin the host's chosen
+# upstream (`pfsense_default_gw_name`) as the IPv4 default. Skipped on hosts
+# that don't define `pfsense_default_gw_name`.
+- name: Remove stale gateways and pin default IPv4 gateway
   ansible.builtin.shell: |
     php -r 'require_once("/etc/inc/config.inc");
             require_once("/etc/inc/system.inc");
             require_once("/etc/inc/filter.inc");
+            $stale = json_decode(getenv("PFS_STALE_GWS"), true);
+            $target = getenv("PFS_DEFAULT_GW");
             $gws = config_get_path("gateways/gateway_item", []);
             $cleaned = [];
             $removed = [];
             foreach ($gws as $gw) {
-              if (isset($gw["name"]) && $gw["name"] === "GW_WAN") {
+              if (isset($gw["name"]) && in_array($gw["name"], $stale, true)) {
                 $removed[] = $gw["name"];
               } else {
                 $cleaned[] = $gw;
               }
             }
             $current = config_get_path("gateways/defaultgw4", "");
-            $needs_change = (count($removed) > 0) || ($current !== "GW_INTERNAL");
+            $needs_change = (count($removed) > 0) || ($current !== $target);
             if ($needs_change) {
               config_set_path("gateways/gateway_item", $cleaned);
-              config_set_path("gateways/defaultgw4", "GW_INTERNAL");
-              write_config("Pin GW_INTERNAL as IPv4 default; remove GW_WAN");
+              config_set_path("gateways/defaultgw4", $target);
+              write_config("Pin " . $target . " as IPv4 default; remove stale gateways");
               system_routing_configure();
               filter_configure();
               echo "CHANGED: removed=" . implode(",", $removed) .
                    " defaultgw4=" . config_get_path("gateways/defaultgw4") . "\n";
             } else {
-              echo "OK: defaultgw4 already GW_INTERNAL and no GW_WAN present\n";
+              echo "OK: defaultgw4 already " . $target . " and no stale gateways present\n";
             }'
+  environment:
+    PFS_DEFAULT_GW: "{{ pfsense_default_gw_name }}"
+    PFS_STALE_GWS: "{{ pfsense_stale_gateways | default(['GW_WAN']) | to_json }}"
   register: pfsense_gw_fix
   changed_when: "'CHANGED' in pfsense_gw_fix.stdout"
+  when: pfsense_default_gw_name is defined
 
 # Transit firewall: disable outbound NAT entirely. By default pfSense runs
 # "Automatic Outbound NAT" which rewrites the source of any local-subnet
-# traffic exiting the WAN interface to the WAN IP (172.16.0.50 here). That
-# hides real OT source IPs from corp — bad for monitoring, source-IP-based
-# policy, and any training scenario where defenders need to see actual
-# device IPs. Switch to "disabled" so this firewall just routes packets.
+# traffic exiting the WAN interface to the WAN IP. That hides real source
+# IPs from upstream — bad for monitoring, source-IP-based policy, and any
+# training scenario where defenders need to see actual device IPs. Switch
+# to "disabled" so this firewall just routes packets. Toggle with
+# `pfsense_disable_outbound_nat` (default true) per host.
 - name: Disable outbound NAT (transit firewall mode)
   ansible.builtin.shell: |
     php -r 'require_once("/etc/inc/config.inc");
@@ -98,6 +112,7 @@
             }'
   register: pfsense_nat_disable
   changed_when: "'CHANGED' in pfsense_nat_disable.stdout"
+  when: pfsense_disable_outbound_nat | default(true)
 
 - name: Configure pfSense static routes
   pfsensible.core.pfsense_route:
