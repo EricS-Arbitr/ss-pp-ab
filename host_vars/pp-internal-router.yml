@@ -29,7 +29,7 @@ network_interfaces:
 
 static_route:
   route: "0.0.0.0/0"
-  next_hop: "172.16.0.26"             # pp-internal-firewall (default chain toward pp-isp-router/is-inet)
+  next_hop: "172.16.0.25"             # pp-internal-firewall (vmx1 INTERNAL on 172.16.0.24/30)
 
 # Re-introduce the OT prefix range into the iBGP after pp-ot-firewall was
 # migrated to pfSense (static routing only — no BGP advertisement out of OT).
@@ -46,7 +46,9 @@ extra_static_routes:
 # See UPSTREAM_FIXES.md (2026-05-27 entry).
 extra_static_routes_remove:
   - network: "0.0.0.0/0"
-    next_hop: "172.16.9.1"            # own eth0 IP (self-loop)
+    next_hop: "172.16.9.1"            # own eth0 IP (image-baked self-loop)
+  - network: "0.0.0.0/0"
+    next_hop: "172.16.0.26"            # own eth2 IP (host_vars typo, now fixed to .25)
 
 bgp:
   - as: 65001
