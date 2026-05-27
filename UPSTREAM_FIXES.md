@@ -441,6 +441,39 @@ PowerPlant overlay adds a one-task play after the `dns` play in `arbitr_pp_playb
 
 ---
 
+## 2026-05-27 · bug · roles/common/tasks/windows.yml
+
+Same "Disable control net DNS registration" task (lines 51–57) has a **second** bug beyond the `Ehternet0` typo already logged on 2026-04-17: the cmdlet parameter is misspelled. The task uses `set-DnsClient -RegisterThisConnectionAddress $false` (singular *Connection*); the real PowerShell parameter is `-RegisterThisConnectionsAddress` (plural *Connections*). So even if the typo were fixed and the loop matched real adapters, `Set-DnsClient` would error with "A parameter cannot be found that matches parameter name 'RegisterThisConnectionAddress'". Net effect: every Windows host DDNS-registers its mgmt adapter (Ethernet0 → 10.255.240.0/20) into the AD zone, so `ping pp-dc01` from a corp workstation round-robins onto the orchestration IP that's supposed to be out-of-play.
+
+**Fix (upstream):** correct both the adapter loop AND the parameter:
+```yaml
+- name: Disable DDNS on mgmt adapter
+  ansible.windows.win_powershell:
+    script: |
+      Set-DnsClient -InterfaceAlias "{{ item }}" -RegisterThisConnectionsAddress $false
+      ipconfig /registerdns | Out-Null
+  loop: "{{ network_interfaces | map(attribute='name') | list | first | list }}"
+```
+(Or hardcode `Ethernet0` if mgmt is always the first adapter in the SimSpace pattern.)
+
+**Workaround in PowerPlant overlay:** added two plays to `arbitr_pp_playbook.yaml` after the `dc_status` play (tag `strip_mgmt_dns`). First disables DDNS on Ethernet0 across all Windows hosts and re-registers; second runs against the PDC to delete any A record in voltgrid.com whose IPv4 falls in 10.255.240.0/20, and any PTR record in the matching reverse zones. Idempotent.
+
+---
+
+## 2026-05-27 · bug · SimSpace VyOS image template (`RC-VyOS-Router`)
+
+The SimSpace VyOS 1.5-rolling image bakes one stale `set protocols static route 0.0.0.0/0 next-hop <X>` entry for **every /24 "departmental" interface** on the router after first boot. The next-hop is always the router's own connected IP on that /24 — i.e., a self-loop. /30 transit interfaces are unaffected. Observed across `pp-internal-router` (1 stale), `pp-isp-router` (2 stale), `pp-corp-router` (5 stale). `site-edge-router` is clean because it only has /30 interfaces.
+
+**Symptom**: FRR refuses to install a default route whose next-hop resolves to a local interface IP, and with multiple equal-cost competing statics it drops the *entire* `0.0.0.0/0` out of the FIB. `show ip route` has no `S>* 0.0.0.0/0` line at all; the router returns ICMP "Destination net unreachable" for everything outside connected / OSPF / BGP routes. On PowerPlant this broke corp→DMZ reachability after the firewall pfSense migration (the BGP-learned defaults that used to mask the broken statics were gone).
+
+**Detection**: on each VyOS host, `show configuration commands | match "0.0.0.0/0"` — anything more than one default-route line is the bug.
+
+**Fix (upstream)**: SimSpace should strip the post-provision script (or template config) that injects per-interface default routes. Routers should ship with no static defaults; the Ansible role's `static_route` is authoritative.
+
+**Workaround in PowerPlant overlay**: added a new play to `arbitr_pp_playbook.yaml` ("Remove stale VyOS static routes", tag `extra_static_routes_remove`) that iterates a per-host `extra_static_routes_remove: [{network, next_hop}]` list and issues `delete protocols static route <n> next-hop <nh>` via `vyos_config`. Each affected host_vars file declares the IPs to strip; the play runs idempotently after the `Additional VyOS static routes` play, so the only surviving default is whatever the customer `vyos` role set from `static_route`.
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.

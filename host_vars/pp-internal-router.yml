@@ -40,6 +40,14 @@ extra_static_routes:
     next_hop: "172.16.0.50"           # pp-ot-firewall (pfSense)
     descr: "OT subnets via pp-ot-firewall"
 
+# SimSpace's VyOS image bakes `0.0.0.0/0 next-hop 172.16.9.1` (this router's
+# own pp-security gateway IP). Two competing equal-cost defaults caused FRR
+# to drop the entire 0.0.0.0/0 out of the FIB, breaking corp→DMZ reachability.
+# See UPSTREAM_FIXES.md (2026-05-27 entry).
+extra_static_routes_remove:
+  - network: "0.0.0.0/0"
+    next_hop: "172.16.9.1"            # own eth0 IP (self-loop)
+
 bgp:
   - as: 65001
     neighbor:

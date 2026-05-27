@@ -154,6 +154,36 @@
     - vyos
     - extra_static_routes
 
+# The SimSpace VyOS image template bakes a stale `0.0.0.0/0 next-hop <X>`
+# entry for every /24 "departmental" interface on the box. On routers with
+# more than one such interface (pp-internal-router, pp-isp-router,
+# pp-corp-router) this creates multiple equal-cost competing default routes
+# where the next-hops are the router's OWN connected IPs. FRR refuses to
+# install a default whose next-hop resolves to a local interface and ECMPs
+# the whole route out of the FIB — leaving the router with no default at
+# all. Symptom: `show ip route` has no `S>* 0.0.0.0/0` line; downstream
+# subnets get ICMP "Destination net unreachable".
+#
+# Each affected host declares `extra_static_routes_remove: [{network,
+# next_hop}]` in host_vars. This play issues the matching `delete` so the
+# only default left is the one the customer `vyos` role just set from
+# `static_route`. Logged in UPSTREAM_FIXES.md.
+- name: Remove stale VyOS static routes (image-baked self-loop defaults)
+  hosts: vyos:vyos_routes_only
+  gather_facts: false
+  tasks:
+    - name: Delete stale static routes via vyos_config
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "delete protocols static route {{ item.network }} next-hop {{ item.next_hop }}"
+        save: true
+      loop: "{{ extra_static_routes_remove | default([]) }}"
+      when: extra_static_routes_remove is defined and (extra_static_routes_remove | length) > 0
+  tags:
+    - vyos
+    - extra_static_routes_remove
+
 - name: pfSense firewalls
   hosts: pfsense
   gather_facts: false
@@ -310,6 +340,88 @@
     - dc_status
   tags:
     - dc_status
+
+# The customer's common/tasks/windows.yml "Disable control net DNS
+# registration" task is a double-no-op: the loop hardcodes "Ehternet0"
+# (typo — never matches the real Ethernet0 mgmt adapter) AND the cmdlet
+# parameter is misspelled (`-RegisterThisConnectionAddress` instead of
+# `-RegisterThisConnectionsAddress`). The result is every Windows host
+# DDNS-registers BOTH Ethernet0 (mgmt 10.255.240.0/20) AND the data-plane
+# adapter into voltgrid.com, so `ping pp-dc01` round-robins onto the
+# mgmt IP — which corp workstations can reach over the orchestration
+# VLAN but which is supposed to be out of play in-scenario.
+#
+# Disable DDNS on Ethernet0 on every Windows host, force a re-register
+# so the data-plane record stays, then purge the already-registered
+# 10.255.240.0/20 A records on the PDC. Logged in UPSTREAM_FIXES.md.
+- name: Strip mgmt interface from AD DNS registration
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Disable DDNS on Ethernet0 (mgmt adapter)
+      ansible.windows.win_powershell:
+        script: |
+          $iface = 'Ethernet0'
+          $c = Get-DnsClient -InterfaceAlias $iface -ErrorAction SilentlyContinue
+          if ($null -eq $c) {
+            $Ansible.Changed = $false
+            Write-Output "No $iface adapter present; nothing to do."
+            return
+          }
+          if ($c.RegisterThisConnectionsAddress) {
+            Set-DnsClient -InterfaceAlias $iface -RegisterThisConnectionsAddress $false
+            ipconfig /registerdns | Out-Null
+            $Ansible.Changed = $true
+            Write-Output "Disabled DDNS on $iface; re-registered."
+          } else {
+            $Ansible.Changed = $false
+            Write-Output "DDNS already disabled on $iface."
+          }
+  tags:
+    - strip_mgmt_dns
+
+- name: Purge mgmt-subnet A and PTR records from AD DNS
+  hosts: pdc
+  gather_facts: false
+  tasks:
+    - name: Remove A records in voltgrid.com whose IPv4 falls in 10.255.240.0/20
+      ansible.windows.win_powershell:
+        script: |
+          $zone = 'voltgrid.com'
+          # 10.255.240.0/20 = 10.255.240.0 .. 10.255.255.255 (240, 241, ..., 255)
+          $stale = Get-DnsServerResourceRecord -ZoneName $zone -RRType A -ErrorAction SilentlyContinue |
+            Where-Object {
+              $ip = $_.RecordData.IPv4Address.ToString()
+              if ($ip -notlike '10.255.*') { return $false }
+              $third = [int]($ip.Split('.')[2])
+              ($third -ge 240) -and ($third -le 255)
+            }
+          foreach ($r in $stale) {
+            Remove-DnsServerResourceRecord -ZoneName $zone -InputObject $r -Force -ErrorAction Stop
+            Write-Output ("Removed A: {0} -> {1}" -f $r.HostName, $r.RecordData.IPv4Address)
+          }
+          $Ansible.Changed = ($stale.Count -gt 0)
+
+    - name: Remove PTR records in any 10.255.240.0/20 reverse zone
+      ansible.windows.win_powershell:
+        script: |
+          $changed = $false
+          # SimSpace's mgmt is 10.255.240.0/20; only the .240-.255 third octets
+          # are in-range. AD typically creates per-/24 reverse zones if any
+          # PTR was ever registered.
+          for ($t = 240; $t -le 255; $t++) {
+            $rev = "$t.255.10.in-addr.arpa"
+            if (-not (Get-DnsServerZone -Name $rev -ErrorAction SilentlyContinue)) { continue }
+            $ptrs = Get-DnsServerResourceRecord -ZoneName $rev -RRType Ptr -ErrorAction SilentlyContinue
+            foreach ($r in $ptrs) {
+              Remove-DnsServerResourceRecord -ZoneName $rev -InputObject $r -Force -ErrorAction Stop
+              $changed = $true
+              Write-Output ("Removed PTR: {0}.{1} -> {2}" -f $r.HostName, $rev, $r.RecordData.PtrDomainName)
+            }
+          }
+          $Ansible.Changed = $changed
+  tags:
+    - strip_mgmt_dns
 
 - name: Install root certs
   hosts: windows

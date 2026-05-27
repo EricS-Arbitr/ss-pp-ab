@@ -37,6 +37,17 @@ extra_static_routes:
     next_hop: "75.21.1.1"             # pp-external-firewall (pfSense)
     descr: "OT 192.168.0.0/16 via pp-external-firewall"
 
+# SimSpace's VyOS image bakes a stale `0.0.0.0/0` for each of this host's
+# /24 interface IPs (eth1=210.210.210.1 red-net, eth2=200.200.200.1
+# ext-placeholder). Same self-loop pattern as pp-internal-router — strip so
+# only the real default (0.0.0.0/0 → 200.200.200.2 is-inet) remains.
+# See UPSTREAM_FIXES.md (2026-05-27 entry).
+extra_static_routes_remove:
+  - network: "0.0.0.0/0"
+    next_hop: "200.200.200.1"         # own eth2 IP (self-loop)
+  - network: "0.0.0.0/0"
+    next_hop: "210.210.210.1"         # own eth1 IP (self-loop)
+
 # BGP peer is stale (pp-external-firewall is now pfSense, no BGP). Left in
 # place — session just fails to form; reachability comes from the statics
 # above. Remove once we're sure nothing else relies on it being declared.
