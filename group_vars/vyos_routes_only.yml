@@ -1,0 +1,9 @@
+# Connection settings for hosts that speak VyOS-CLI for routing config but
+# aren't full VyOS-managed boxes (e.g., the RC_NG_OT_Router appliance which
+# rejects interface commands). The vyos.vyos.vyos_config module requires
+# ansible.netcommon.network_cli — mirrors group_vars/vyos.yml from the
+# customer repo.
+ansible_connection: ansible.netcommon.network_cli
+ansible_network_os: vyos.vyos.vyos
+ansible_user: vyos
+ansible_ssh_pass: Simspace1!
