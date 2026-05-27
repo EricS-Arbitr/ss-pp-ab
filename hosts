@@ -241,6 +241,15 @@ pp-corp-router
 pp-ot-firewall
 
 # ------------------------------------------------------------
+# VyOS-CLI-compatible boxes that the customer's full `vyos` role
+# can't manage (e.g., interface commands fail on the appliance) but
+# that still accept raw `vyos_config` calls for routing. Targeted by
+# the "Additional VyOS static routes" play, NOT the full vyos role.
+# ------------------------------------------------------------
+[vyos_routes_only]
+pp-ot-router
+
+# ------------------------------------------------------------
 # Infrastructure / special systems (not domain-managed)
 # ------------------------------------------------------------
 [infrastructure]

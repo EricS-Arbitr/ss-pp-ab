@@ -33,8 +33,15 @@ network_interfaces:
 # pp-ot-firewall was migrated from VyOS to pfSense (static routing only),
 # so the BGP peering through it is gone. Replaced with a static default
 # route inward through the new firewall.
-static_route:
-  route: "0.0.0.0/0"
-  next_hop: "192.168.200.201"         # pp-ot-firewall (pfSense)
+#
+# IMPORTANT: pp-ot-router is in [vyos_routes_only] (not [vyos]) because the
+# customer's full vyos role's interface tasks fail on the RC_NG_OT_Router
+# appliance. So we use extra_static_routes (handled by the "Additional VyOS
+# static routes" play) rather than the role's single `static_route` field
+# (which only runs for hosts the full role targets).
+extra_static_routes:
+  - network: "0.0.0.0/0"
+    next_hop: "192.168.200.201"       # pp-ot-firewall (pfSense)
+    descr: "Default inward via pp-ot-firewall"
 
 bgp: []

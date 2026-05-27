@@ -139,7 +139,7 @@
 # host_vars as `extra_static_routes: [{network, next_hop, descr}]`. The
 # role's auto `redistribute static` picks these up into iBGP.
 - name: Additional VyOS static routes
-  hosts: vyos
+  hosts: vyos:vyos_routes_only
   gather_facts: false
   tasks:
     - name: Push extra static routes via vyos_config
