@@ -77,6 +77,28 @@
   register: pfsense_gw_fix
   changed_when: "'CHANGED' in pfsense_gw_fix.stdout"
 
+# Transit firewall: disable outbound NAT entirely. By default pfSense runs
+# "Automatic Outbound NAT" which rewrites the source of any local-subnet
+# traffic exiting the WAN interface to the WAN IP (172.16.0.50 here). That
+# hides real OT source IPs from corp — bad for monitoring, source-IP-based
+# policy, and any training scenario where defenders need to see actual
+# device IPs. Switch to "disabled" so this firewall just routes packets.
+- name: Disable outbound NAT (transit firewall mode)
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/filter.inc");
+            $current = config_get_path("nat/outbound/mode", "automatic");
+            if ($current !== "disabled") {
+              config_set_path("nat/outbound/mode", "disabled");
+              write_config("Disable outbound NAT (transit firewall mode)");
+              filter_configure();
+              echo "CHANGED: outbound NAT mode disabled (was " . $current . ")\n";
+            } else {
+              echo "OK: outbound NAT already disabled\n";
+            }'
+  register: pfsense_nat_disable
+  changed_when: "'CHANGED' in pfsense_nat_disable.stdout"
+
 - name: Configure pfSense static routes
   pfsensible.core.pfsense_route:
     state: present
