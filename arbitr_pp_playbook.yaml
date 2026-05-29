@@ -125,6 +125,61 @@
   tags:
     - common
 
+# The Ubuntu Desktop images ship with gnome-initial-setup enabled, which
+# pops the "Connect Your Online Accounts" / Welcome wizard the first time
+# anyone logs into the GUI. Drop the documented "wizard already seen" flag
+# file under each existing user's ~/.config and in /etc/skel so future
+# users inherit it. gnome-initial-setup checks for this file and exits
+# silently when it contains "yes".
+- name: Suppress GNOME initial-setup wizard on Linux desktops
+  hosts: linux
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Find user home directories under /home
+      ansible.builtin.find:
+        paths: /home
+        file_type: directory
+        depth: 1
+      register: gnome_user_homes
+
+    - name: Ensure ~/.config exists for each user
+      ansible.builtin.file:
+        path: "{{ item.path }}/.config"
+        state: directory
+        owner: "{{ item.path | basename }}"
+        group: "{{ item.path | basename }}"
+        mode: '0755'
+      loop: "{{ gnome_user_homes.files }}"
+
+    - name: Mark GNOME initial-setup done for each existing user
+      ansible.builtin.copy:
+        dest: "{{ item.path }}/.config/gnome-initial-setup-done"
+        content: "yes\n"
+        owner: "{{ item.path | basename }}"
+        group: "{{ item.path | basename }}"
+        mode: '0644'
+      loop: "{{ gnome_user_homes.files }}"
+
+    - name: Ensure /etc/skel/.config exists for future users
+      ansible.builtin.file:
+        path: /etc/skel/.config
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Mark GNOME initial-setup done in /etc/skel
+      ansible.builtin.copy:
+        dest: /etc/skel/.config/gnome-initial-setup-done
+        content: "yes\n"
+        owner: root
+        group: root
+        mode: '0644'
+  tags:
+    - common
+    - gnome_initial_setup
+
 - name: Vyos Role
   hosts: vyos
   gather_facts: false

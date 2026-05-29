@@ -1,9 +1,17 @@
 # Connection settings for the [pfsense] inventory group.
 # pfsensible.core modules drive pfSense via SSH + PHP, so we use plain SSH
-# (not winrm). pfSense 2.7+ ships Python at /usr/local/bin/python3.11.
+# (not winrm). pfSense 2.8.1 ships Python at /usr/local/bin/python3.11.
+#
+# Custom SimSpace pfSense image (2.8.1) provisions two interactive users:
+#   admin:simspace1
+#   simspace:simspace1
+# `simspace` is used to match the rest of the range's Linux convention; the
+# pfsensible.core collection runs everything via php -r so we don't actually
+# need to be `admin` — we just need a shell-enabled login. `simspace` has
+# shell access per the image baseline.
 ansible_connection: ssh
-ansible_user: admin
-ansible_ssh_pass: pfsense
+ansible_user: simspace
+ansible_ssh_pass: simspace1
 ansible_become: false
 ansible_python_interpreter: /usr/local/bin/python3.11
 

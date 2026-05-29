@@ -1,0 +1,32 @@
+!
+! FRR config for {{ pfsense_hostname }} ({{ inventory_hostname }})
+! Rendered by pfsense_firewall role from host_vars `pfsense_bgp`.
+! Loaded via vtysh -f and persisted with `write memory`.
+!
+frr defaults traditional
+hostname {{ pfsense_hostname }}
+log syslog informational
+service integrated-vtysh-config
+!
+ip forwarding
+!
+router bgp {{ pfsense_bgp.asn }}
+ bgp router-id {{ pfsense_bgp.router_id }}
+ no bgp default ipv4-unicast
+{% for nbr in pfsense_bgp.neighbors %}
+ neighbor {{ nbr.peer_ip }} remote-as {{ nbr.remote_as }}
+{% if nbr.description is defined %}
+ neighbor {{ nbr.peer_ip }} description {{ nbr.description }}
+{% endif %}
+{% endfor %}
+ !
+ address-family ipv4 unicast
+{% for nbr in pfsense_bgp.neighbors %}
+  neighbor {{ nbr.peer_ip }} activate
+{% endfor %}
+  redistribute connected
+  redistribute static
+ exit-address-family
+!
+line vty
+!

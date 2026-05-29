@@ -31,18 +31,15 @@ static_route:
   route: "0.0.0.0/0"
   next_hop: "172.16.0.25"             # pp-internal-firewall (vmx1 INTERNAL on 172.16.0.24/30)
 
-# Re-introduce the OT prefix range into the iBGP after pp-ot-firewall was
-# migrated to pfSense (static routing only — no BGP advertisement out of OT).
-# The vyos role's auto `redistribute static` propagates this throughout the
-# AS so pp-corp-router et al. still know how to reach OT.
-extra_static_routes:
-  - network: "192.168.0.0/16"
-    next_hop: "172.16.0.50"           # pp-ot-firewall (pfSense)
-    descr: "OT subnets via pp-ot-firewall"
+# pp-ot-firewall (pfSense 2.8.1) now runs FRR/BGP and redistributes its
+# OT static routes into iBGP, so the 192.168.0.0/16 back-stop static is
+# no longer needed — iBGP delivers the OT prefixes here directly.
 
 # SimSpace's VyOS image bakes `0.0.0.0/0 next-hop 172.16.9.1` (this router's
 # own pp-security gateway IP). Two competing equal-cost defaults caused FRR
 # to drop the entire 0.0.0.0/0 out of the FIB, breaking corp→DMZ reachability.
+# Also strip the historic typo at .26 (own eth2 IP) so only the correct
+# default (next-hop 172.16.0.25 = pp-internal-firewall) is configured.
 # See UPSTREAM_FIXES.md (2026-05-27 entry).
 extra_static_routes_remove:
   - network: "0.0.0.0/0"

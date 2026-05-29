@@ -474,6 +474,100 @@ The SimSpace VyOS 1.5-rolling image bakes one stale `set protocols static route 
 
 ---
 
+## 2026-05-26 · gap · range-development-ansible has no pfSense role
+
+The shared repo ships `vyos` and `panos` roles for network gear but no role for pfSense. PowerPlant migrated all three firewalls (`pp-ot-firewall`, `pp-internal-firewall`, `pp-external-firewall`) from VyOS to pfSense and had to build a `pfsense_firewall` role from scratch using the `pfsensible.core` Ansible collection (v0.7.x — installed via `requirements.yml`).
+
+What the overlay role covers (could be lifted into the shared repo largely as-is):
+- `pfsense_setup` for hostname/domain
+- `pfsense_interface` loop driven by `pfsense_interfaces[]` (descr + physical NIC + IPv4) — supports per-interface `blockpriv` / `blockbogons` override needed when the role's "WAN-tagged" interface is actually carrying RFC1918 traffic
+- `pfsense_gateway` loop for named gateways, plus a `php -r` task that pins `<defaultgw4>` and strips stale image-baked gateways (collection 0.7.x doesn't expose `<defaultgw4>`)
+- `php -r` task to set `<nat><outbound><mode>` to `disabled` for transit-firewall mode (also unsupported by the collection)
+- `pfsense_route` loop for static routes
+- `pfsense_rule` loop for lab-mode permit-any rules
+
+**Fix (upstream)**: add a `pfsense_firewall` (or `pfsense`) role to the shared repo following the `vyos` role's variable-driven convention, including the `php -r` shims for things the collection still can't drive. The PowerPlant overlay at `ss-pp-ab/roles/pfsense_firewall/` is a working reference.
+
+---
+
+## 2026-05-29 · gap · range-development-ansible has no central syslog collector role
+
+There's no role for standing up a host as a centralized syslog receiver. Ranges that want one have to author their own. PowerPlant has pp-syslog as the collector and uses Splunk UF on the same host to ship into the `netfw` index; the overlay carries `ss-pp-ab/roles/syslog_server/`, which installs rsyslog, opens UDP **and** TCP 514, and writes per-host files at `/var/log/remote/<hostname>/syslog.log` (path layout chosen so Splunk UF's `host_segment=4` correctly attributes events to the sending device, not pp-syslog).
+
+**Fix (upstream)**: add a `syslog_server` (or `rsyslog_collector`) role with the same shape — variable-driven listener config, per-host file layout, defensive `omfile`+`stop` so received events don't double-log into the collector's own `/var/log/syslog`. The overlay role is small enough (~25 lines tasks + a 35-line rsyslog template + 5-line handler) to land verbatim.
+
+---
+
+## 2026-05-29 · gap · roles/common, roles/vyos — no syslog client config
+
+Once a range has a collector, every device needs a small bit of config to forward to it. None of the shared roles do this today:
+
+- **`roles/common/tasks/linux.yml`** has no task that drops an `/etc/rsyslog.d/*-forward.conf` snippet.
+- **`roles/vyos/tasks/main.yml`** has no task that pushes `set system syslog host <ip> facility all level info`.
+
+PowerPlant handles all of this in three inline plays in `arbitr_pp_playbook.yaml` (tag `syslog_client`) gated by a single new variable `syslog_server_ip` in `group_vars/all.yml`. Linux clients get a one-line UDP forwarder, VyOS clients get the `set system syslog host` line via `vyos_config`, and pfSense clients get a `php -r` task that writes the `<syslog>` block in `config.xml`. Hosts that shouldn't forward (e.g., `pp-isp-router`, which represents the ISP rather than corp gear) are excluded via host pattern (`vyos:vyos_routes_only:!pp-isp-router`).
+
+**Fix (upstream)**:
+1. In `roles/common/tasks/linux.yml`, drop an rsyslog forwarder snippet whenever `syslog_server_ip` is defined, with a notified handler to restart rsyslog. ~10 lines.
+2. In `roles/vyos/tasks/main.yml`, add a `vyos_config` task with the same gate. ~6 lines.
+3. Add a sibling pfSense role (see 2026-05-26 gap above) and include the `<syslog>` block there.
+
+---
+
+## 2026-05-29 · gap · roles/splunk-forwarder/templates/lin_inputs.conf.j2 — no support for tailing a central syslog tree
+
+`lin_inputs.conf.j2` covers `/var/log/syslog`, `/var/log/auth.log`, Squid (when host is in `[proxy]`), and Docker container logs (when host is in `[wordpress-pv]`) — but there's no stanza for tailing a central collector's per-host directory tree (`/var/log/remote/<sender>/...`). Ranges that put a syslog collector on a Splunk-forwarder host have no way to surface the collected events without overriding the template.
+
+PowerPlant adds the missing stanza in the overlay copy of the file:
+
+```jinja
+{% if 'syslog' in group_names %}
+[monitor:///var/log/remote/.../syslog.log]
+disabled = false
+index = netfw
+sourcetype = syslog
+host_segment = 4
+{% endif %}
+```
+
+`host_segment = 4` is the key — without it Splunk attributes everything to the collector host rather than the sender. The `netfw` index is already declared (but unused) in `group_vars/all.yml`'s `indices` list, with a comment "reserved for pfsense/vyatta syslog when wired up" — this finally uses it.
+
+**Fix (upstream)**: add the conditional stanza in the shared template, gated on a `[syslog]` group name (or a `syslog_collector_path` variable). Keeps every range's UF inputs.conf consistent and removes the need to fork the template.
+
+---
+
+## 2026-05-29 · gap · roles/common/tasks/linux.yml — Ubuntu Desktop first-login wizard
+
+The Ubuntu Desktop images SimSpace uses ship with `gnome-initial-setup` enabled, so the first interactive login on every Linux host pops the "Connect Your Online Accounts" / Welcome wizard. Not a routing or service failure — it just clutters the desktop for anyone driving the range manually, and a scripted operator that types into the wizard's password field has typed into nothing real.
+
+PowerPlant suppresses it with a small play after `Common Role` (tag `gnome_initial_setup`) that drops the documented `~/.config/gnome-initial-setup-done` flag with content `yes` into each `/home/*` directory and into `/etc/skel` (so future users inherit it). `gnome-initial-setup` checks this file at startup and exits silently when present.
+
+**Fix (upstream)**: add the same flag-file drop to `roles/common/tasks/linux.yml`, gated on the host having a Desktop session (e.g., `ansible.builtin.stat: path=/usr/bin/gnome-shell` or `package_facts` for `gnome-initial-setup`). Alternative: `apt purge gnome-initial-setup` is more invasive but removes the package entirely. Flag-file approach is reversible.
+
+---
+
+## 2026-05-29 · platform · SimSpace pfSense 2.8.1 image — closes most OT-pfSense:1.0.0 gaps, new things to know
+
+The replacement SimSpace pfSense image (pfSense 2.8.1) supersedes `OT-pfSense:1.0.0` for all PowerPlant firewalls (`pp-ot-firewall`, `pp-internal-firewall`, `pp-external-firewall`). Net effect: most of the 2026-05-26 OT-pfSense entry is now historical. Specifically:
+
+- **Mgmt NIC is now first (`vmx0`) and takes DHCP.** SimSpace platform DHCP hands it the mgmt IP from the layout YAML's `managementInterface` block on first boot. Ansible can SSH straight in — **no interactive interface-assignment wizard needed**. The per-host wizard interface table (kept in chat-history as a fallback) is no longer the default path.
+- **WAN NIC is second (`vmx1`), also DHCP by default.** Our `pfsense_interface` task reconfigures it to the host's static IP. The brief DHCP-no-lease state during initial provisioning is harmless because Ansible talks over mgmt.
+- **Two pre-provisioned users**: `admin:simspace1` and `simspace:simspace1`. The overlay's `group_vars/pfsense.yml` switched `ansible_user` to `simspace` to match the rest of the range's Linux convention.
+- **FRR is pre-installed.** The previous "static-routing only because pfsensible.core has no FRR module" workaround is no longer needed. The overlay's `pfsense_firewall` role now enables the FRR package via `php -r` and pushes BGP config via `vtysh -f` from `templates/frr.conf.j2`, driven by a new per-host `pfsense_bgp` variable. iBGP AS 65001 + eBGP AS 65002 to `pp-isp-router` is restored, and all the per-`/24` `extra_static_routes` workarounds on `pp-isp-router`, `site-edge-router`, and `pp-internal-router` have been stripped. The VyOS routers' `bgp:` blocks (which were inert because their pfSense neighbors didn't speak BGP) are live again.
+- **Other pre-installed packages**: `ntopng`, `Open-VM-Tools`, `softflowd`, `WireGuard`. Not yet driven by the role — relevant for future NetFlow ingestion (`softflowd` → pp-splunk) and out-of-band management VPN (`WireGuard`).
+
+**Remaining gaps (still worth raising upstream)**:
+
+1. **pfsensible.core 0.7.x still has no FRR module.** Our role enables FRR via `installedpackages/frr/config/0/enable` and pushes the actual routing config via `vtysh -f` + `write memory`. That works but it's outside the collection's schema. Worth filing against the collection to expose FRR/BGP/OSPF as proper modules so the role doesn't need the `vtysh` shim.
+
+2. **pfSense FRR package may regenerate `frr.conf` at boot from its own config tree.** If that happens, `write memory` is overridden on reboot. Mitigation if observed: push our entire FRR config into the package's `rawconfig` (or equivalent) field — schema varies by package version, so the overlay defers this until the boot behavior is confirmed.
+
+3. **The 2026-05-26 entry's manual-wizard procedure is still a useful fallback** if a future image regresses or someone needs to re-do interface assignment manually. Left in place rather than deleted.
+
+4. **NIC ordering inversion (mgmt = first instead of LAST)** is a layout/host_vars contract change, not a customer-repo gap. The PowerPlant overlay's three firewall host_vars files were rewritten in this turn to match the new contract; SimSpace YAML's `managementInterface.position` needs to be `FIRST` to match.
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.

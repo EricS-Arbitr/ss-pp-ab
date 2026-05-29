@@ -1,89 +1,66 @@
 ansible_host: "10.255.240.197"
 
-# pfSense — replacing VyOS on pp-internal-firewall. Same OT-pfSense image as
-# pp-ot-firewall (the SimSpace layout YAML is being switched to the OT-pfSense
-# image globally for all three firewalls). 2 data-plane NICs + mgmt:
-#   vmx0 (eth0 in old VyOS) → WAN_EDGE  172.16.0.18/30 (to site-edge-router)
-#   vmx1 (eth1 in old VyOS) → INTERNAL  172.16.0.25/30 (to pp-internal-router)
-#   vmx2                    → LAN (mgmt 10.255.240.197/20, role does not touch)
+# pfSense 2.8.1 on the new SimSpace pfSense image. NIC ordering (image
+# default):
+#   vmx0 → mgmt (DHCP from SimSpace platform, becomes 10.255.240.197/20)
+#   vmx1 → WAN  (DHCP default, reconfigured static by pfsense_interface)
+#   vmx2 → INTERNAL transit toward pp-internal-router
 #
-# managementInterface.position: LAST → mgmt is the highest-index NIC.
-# Wizard one-time: assign WAN=vmx0, LAN=vmx2, OPT1=vmx1, then set LAN to
-# the mgmt /20, enable SSH, set admin shell access. From there Ansible
-# takes over.
+# Sits between site-edge-router (toward pp-external-firewall + the ISP)
+# and pp-internal-router (the corp/OT downstream hub).
 #
-# Static routing only (no BGP). Default path is outward via site-edge-router
-# (GW_EDGE → 172.16.0.17). Return paths to corp /24s and OT go inward via
-# pp-internal-router (GW_INT_ROUTER → 172.16.0.26).
+# Routing runs on FRR. iBGP peers with site-edge-router (.17) and
+# pp-internal-router (.26); redistribute connected propagates the two
+# /30 transits.
 
 pfsense_hostname: "pp-internal-firewall"
 pfsense_domain: "voltgrid.com"
 
 pfsense_interfaces:
-  - descr: "WAN_EDGE"            # vmx0 — switch-2 transit to site-edge-router
-    interface: vmx0
+  - descr: "WAN_EDGE"            # vmx1 — switch-2 transit to site-edge-router
+    interface: vmx1
     enable: true
     ipv4_type: static
     ipv4_address: "172.16.0.18"
     ipv4_prefixlen: 30
-    # WAN role default-on "Block private networks" + "Block bogons" would
-    # drop everything (all our subnets are RFC1918). Turn off, same as
-    # pp-ot-firewall.
     blockpriv: false
     blockbogons: false
 
-  - descr: "INTERNAL"            # vmx1 — switch-3 transit to pp-internal-router
-    interface: vmx1
+  - descr: "INTERNAL"            # vmx2 — switch-3 transit to pp-internal-router
+    interface: vmx2
     enable: true
     ipv4_type: static
     ipv4_address: "172.16.0.25"
     ipv4_prefixlen: 30
 
-# Default IPv4 gateway: outward to site-edge-router → pp-external-firewall →
-# pp-isp-router → is-inet.
 pfsense_default_gw_name: "GW_EDGE"
 
 pfsense_gateways:
   - name: "GW_EDGE"
     interface: "WAN_EDGE"
-    gateway: "172.16.0.17"       # site-edge-router (default 0.0.0.0/0 path)
-
+    gateway: "172.16.0.17"       # site-edge-router
   - name: "GW_INT_ROUTER"
     interface: "INTERNAL"
-    gateway: "172.16.0.26"       # pp-internal-router (corp + OT inward)
+    gateway: "172.16.0.26"       # pp-internal-router
 
-# Static routes — inward to corp /24s (behind pp-corp-router via
-# pp-internal-router) and to OT (192.168.0.0/16 hits pp-internal-router's
-# own static for 192.168.0.0/16 → pp-ot-firewall).
-#
-# Cannot use a broad 172.16.0.0/16 → GW_INT_ROUTER because that pulls
-# 172.16.8.0/24 (DMZ — actually behind pp-external-firewall via site-edge)
-# the wrong direction. Per-/24 statics avoid the conflict.
-pfsense_routes:
-  - network: "172.16.2.0/24"     # PP-Services
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp PP-Services via pp-internal-router"
-  - network: "172.16.3.0/24"     # PP-Business-Processing
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp BP via pp-internal-router"
-  - network: "172.16.4.0/24"     # PP-Eng
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp Eng via pp-internal-router"
-  - network: "172.16.5.0/24"     # PP-LS
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp LS via pp-internal-router"
-  - network: "172.16.6.0/24"     # PP-IS
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp IS via pp-internal-router"
-  - network: "172.16.9.0/24"     # pp-security (pp-internal-router eth0)
-    gateway: "GW_INT_ROUTER"
-    descr: "Security subnet via pp-internal-router"
-  - network: "192.168.0.0/16"    # OT umbrella — pp-internal-router has the
-    gateway: "GW_INT_ROUTER"     # 192.168.0.0/16 → pp-ot-firewall static
-    descr: "OT subnets via pp-internal-router"
+# Static routes removed — FRR/iBGP now learns corp /24s from pp-internal-router
+# and DMZ + ISP-side prefixes from site-edge-router. Only declare statics
+# here when a destination is unreachable via BGP (currently none).
+pfsense_routes: []
 
 pfsense_rules:
   - name: "Allow any on WAN_EDGE (lab)"
     interface: "WAN_EDGE"
   - name: "Allow any on INTERNAL (lab)"
     interface: "INTERNAL"
+
+pfsense_bgp:
+  asn: 65001
+  router_id: "172.16.0.18"
+  neighbors:
+    - peer_ip: "172.16.0.17"
+      remote_as: 65001
+      description: "site-edge-router"
+    - peer_ip: "172.16.0.26"
+      remote_as: 65001
+      description: "pp-internal-router"

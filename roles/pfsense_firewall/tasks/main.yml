@@ -6,11 +6,15 @@
 #   pfsense_gateways[]        — named gateways referenced by routes/default
 #   pfsense_default_gw_name   — which gateway to pin as IPv4 default
 #   pfsense_stale_gateways[]  — gateway names from the SimSpace image to remove
-#                               (defaults to ['GW_WAN'] which the OT-pfSense
-#                               image bakes in pointing at 192.168.90.1)
+#                               (defaults to ['GW_WAN'] which the previous
+#                               OT-pfSense image baked in pointing at
+#                               192.168.90.1; the new 2.8.1 image may not
+#                               have this, in which case the cleanup is a no-op)
 #   pfsense_disable_outbound_nat (bool, default true) — transit firewall mode
 #   pfsense_routes[]          — static routes referencing a gateway name
 #   pfsense_rules[]           — firewall rules (lab-mode permit-any by default)
+#   pfsense_bgp               — optional FRR BGP config (asn, router_id,
+#                               neighbors[]). Enables FRR on the host.
 #
 # The pfsensible.core collection must be installed on the Ansible controller
 # (see ss-pp-ab/requirements.yml).
@@ -134,3 +138,59 @@
     source: "{{ item.source | default('any') }}"
     destination: "{{ item.destination | default('any') }}"
   loop: "{{ pfsense_rules | default([]) }}"
+
+# FRR routing (pfSense 2.8.1 image ships pfSense-pkg-frr pre-installed).
+# Two-step:
+#   1. Enable the FRR package in config.xml so its rc script starts FRR
+#      and survives reboots. pfsensible.core 0.7.x has no FRR module, so
+#      this is driven via php -r against the package's config tree.
+#   2. Render `frr.conf` from host_vars (`pfsense_bgp`), copy it to the
+#      box, and load it via `vtysh -f` + `write memory`.
+#
+# vtysh's `write memory` persists FRR's running config to its own state
+# file, so the routing config survives reboot independently of pfSense's
+# FRR package config. If a future pfSense FRR package version regenerates
+# frr.conf from its own template at boot and overwrites ours, we'll add
+# a `rawconfig` push to the package config — that schema varies by
+# package version and we want to verify before coding to a guess.
+- name: Enable FRR package in pfSense config.xml
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            $current = config_get_path("installedpackages/frr/config/0/enable", "");
+            if ($current !== "on") {
+              config_set_path("installedpackages/frr/config/0/enable", "on");
+              write_config("Enable FRR package");
+              echo "CHANGED: FRR package enabled\n";
+            } else {
+              echo "OK: FRR package already enabled\n";
+            }'
+  register: pfsense_frr_enable
+  changed_when: "'CHANGED' in pfsense_frr_enable.stdout"
+  when: pfsense_bgp is defined
+
+- name: Start FRR service (idempotent — onestart skips if already running)
+  ansible.builtin.shell: |
+    service frr onestatus >/dev/null 2>&1 || service frr onestart
+  changed_when: false
+  when: pfsense_bgp is defined
+
+- name: Render FRR config from host_vars
+  ansible.builtin.template:
+    src: frr.conf.j2
+    dest: /tmp/frr.conf.rendered
+    owner: root
+    group: wheel
+    mode: '0644'
+  register: pfsense_frr_template
+  when: pfsense_bgp is defined
+
+- name: Load FRR config via vtysh and persist
+  ansible.builtin.shell: |
+    set -e
+    vtysh -f /tmp/frr.conf.rendered
+    vtysh -c "write memory"
+  register: pfsense_frr_apply
+  changed_when: pfsense_frr_template.changed
+  when:
+    - pfsense_bgp is defined
+    - pfsense_frr_template.changed
