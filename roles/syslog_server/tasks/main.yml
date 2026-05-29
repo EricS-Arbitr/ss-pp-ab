@@ -1,0 +1,39 @@
+---
+# syslog_server — configure rsyslog on pp-syslog as the central collector.
+#
+# Listens on UDP/514 + TCP/514, writes incoming events to per-host files at
+# /var/log/remote/<hostname>/syslog.log so the Splunk Universal Forwarder
+# (installed by the customer's splunk-forwarder role on this same host) can
+# tail them with correct host attribution.
+#
+# Driven by group_vars/all.yml: syslog_server_ip is informational here; the
+# server binds to all interfaces.
+
+- name: Ensure rsyslog is installed
+  ansible.builtin.apt:
+    name: rsyslog
+    state: present
+    update_cache: false
+
+- name: Create /var/log/remote
+  ansible.builtin.file:
+    path: /var/log/remote
+    state: directory
+    owner: syslog
+    group: adm
+    mode: '0755'
+
+- name: Drop rsyslog collector config
+  ansible.builtin.template:
+    src: 30-remote.conf.j2
+    dest: /etc/rsyslog.d/30-remote.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart rsyslog
+
+- name: Ensure rsyslog is enabled + running
+  ansible.builtin.systemd:
+    name: rsyslog
+    state: started
+    enabled: true

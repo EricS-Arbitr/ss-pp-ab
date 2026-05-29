@@ -1,0 +1,42 @@
+################################################################
+# /etc/rsyslog.d/30-remote.conf — central syslog collector
+# Managed by Ansible (syslog_server role). Do not edit by hand.
+################################################################
+
+# Receive on UDP 514
+module(load="imudp")
+input(type="imudp" port="514")
+
+# Receive on TCP 514
+module(load="imtcp")
+input(type="imtcp" port="514")
+
+# Per-host file template:
+#   /var/log/remote/<hostname>/syslog.log
+# pfSense sends its hostname unqualified (pp-ot-firewall), VyOS sends short
+# hostnames too, Linux uses %HOSTNAME% from /etc/hostname. The Splunk UF on
+# this same host uses the directory name as the host= field.
+template(
+  name="RemoteHostFile"
+  type="list"
+) {
+  constant(value="/var/log/remote/")
+  property(name="hostname" securepath="replace")
+  constant(value="/syslog.log")
+}
+
+# Route only remote messages (anything not from localhost) into the per-host
+# files and then stop processing so they don't also land in /var/log/syslog.
+# Local rsyslog/journald messages keep their normal path.
+if $fromhost-ip != '127.0.0.1' then {
+    action(
+      type="omfile"
+      dynaFile="RemoteHostFile"
+      createDirs="on"
+      fileCreateMode="0640"
+      dirCreateMode="0755"
+      fileOwner="syslog"
+      fileGroup="adm"
+    )
+    stop
+}

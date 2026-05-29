@@ -205,6 +205,11 @@ win-hunt-1
 [splunk]
 pp-splunk
 
+# Central syslog collector — receives from all Linux/VyOS/pfSense hosts,
+# then Splunk UF on this box ships /var/log/remote/* to pp-splunk.
+[syslog]
+pp-syslog
+
 
 [splunk-forwarder]
 pp-proxy

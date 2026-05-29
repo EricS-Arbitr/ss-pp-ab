@@ -509,6 +509,120 @@
   tags:
     - global_dns
 
+# Central syslog collector. pp-syslog runs rsyslog listening on UDP+TCP
+# 514 and writes per-host files at /var/log/remote/<hostname>/syslog.log.
+# Splunk UF on the same host (deployed by the splunk-forwarder play below)
+# tails those files into Splunk via the custom lin_inputs.conf.j2 overlay.
+- name: Syslog collector — pp-syslog
+  hosts: syslog
+  gather_facts: true
+  become: true
+  roles:
+    - syslog_server
+  tags:
+    - syslog
+    - syslog_server
+
+# Linux client config: drop a snippet that forwards everything to pp-syslog
+# over UDP/514. Local /var/log/syslog still gets the messages too; the
+# remote copy is what Splunk UF (on pp-syslog) ships to Splunk.
+- name: Syslog client — Linux
+  hosts: linux:!syslog
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Drop rsyslog forwarder snippet
+      ansible.builtin.copy:
+        dest: /etc/rsyslog.d/00-forward.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Forward all logs to central syslog collector (pp-syslog).
+          # Managed by Ansible (arbitr_pp_playbook.yaml). UDP — accepted on
+          # both UDP and TCP by the server; UDP avoids the queue-up failure
+          # mode if pp-syslog is briefly unreachable.
+          *.* @{{ syslog_server_ip }}:514
+      register: rsyslog_forward
+    - name: Restart rsyslog if forwarder snippet changed
+      ansible.builtin.systemd:
+        name: rsyslog
+        state: restarted
+      when: rsyslog_forward.changed
+  tags:
+    - syslog
+    - syslog_client
+
+# VyOS + vyos_routes_only client config: push the syslog remote-host line.
+# `set system syslog host` is idempotent under vyos_config; level "info"
+# matches what the GUI default sets.
+#
+# pp-isp-router is excluded: it represents the upstream ISP, not corporate
+# gear, and shipping its logs into the internal syslog collector would be
+# unrealistic for the cyber-range scenario (defenders see external-network
+# events in their internal SIEM).
+- name: Syslog client — VyOS
+  hosts: vyos:vyos_routes_only:!pp-isp-router
+  gather_facts: false
+  tasks:
+    - name: Configure remote syslog host
+      vyos.vyos.vyos_config:
+        match: line
+        lines:
+          - "set system syslog host {{ syslog_server_ip }} facility all level info"
+        save: true
+  tags:
+    - syslog
+    - syslog_client
+
+# pfSense client config: write the remote-logging block in config.xml and
+# restart syslogd. pfsensible.core 0.7.x has no syslog module, so we drive
+# config.xml directly via php -r (same pattern as the GW_WAN cleanup task
+# in the pfsense_firewall role). Idempotent — only writes + restarts when
+# config differs.
+- name: Syslog client — pfSense
+  hosts: pfsense
+  gather_facts: false
+  tasks:
+    - name: Configure remote syslog server in pfSense config.xml
+      ansible.builtin.shell: |
+        php -r 'require_once("/etc/inc/config.inc");
+                require_once("/etc/inc/system.inc");
+                $target = getenv("PFS_SYSLOG_SRV");
+                $cur = config_get_path("syslog", []);
+                $changed = false;
+                $desired = [
+                  "remoteserver" => $target,
+                  "ipproto"      => "ipv4",
+                  "logall"       => true,
+                  "enable"       => true,
+                ];
+                foreach ($desired as $k => $v) {
+                  $existing = $cur[$k] ?? null;
+                  if ($v === true) {
+                    if ($existing !== true && $existing !== "yes" && $existing !== "on") {
+                      $cur[$k] = true; $changed = true;
+                    }
+                  } else if (($existing ?? "") !== $v) {
+                    $cur[$k] = $v; $changed = true;
+                  }
+                }
+                if ($changed) {
+                  config_set_path("syslog", $cur);
+                  write_config("Enable remote syslog to " . $target);
+                  system_syslogd_start();
+                  echo "CHANGED: remote syslog enabled, server=" . $target . "\n";
+                } else {
+                  echo "OK: remote syslog already configured for " . $target . "\n";
+                }'
+      environment:
+        PFS_SYSLOG_SRV: "{{ syslog_server_ip }}"
+      register: pfsense_syslog_cfg
+      changed_when: "'CHANGED' in pfsense_syslog_cfg.stdout"
+  tags:
+    - syslog
+    - syslog_client
+
 - name: splunk forwarder
   hosts: splunk-forwarder
   gather_facts: true

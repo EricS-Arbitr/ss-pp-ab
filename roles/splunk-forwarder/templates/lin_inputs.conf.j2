@@ -22,3 +22,19 @@ index = main
 sourcetype = docker:container
 crcSalt = <SOURCE>
 {% endif %}
+
+{% if 'syslog' in group_names %}
+# Central syslog collector: tail per-host files dropped by rsyslog
+# (syslog_server role). The directory name segment becomes the host= field
+# so events show up in Splunk under the device that sent them, not pp-syslog.
+#
+# Linux clients (pp-www, pp-proxy, pp-splunk) and the syslog server itself
+# all live in [linux] / [splunk-forwarder] and already ship their own
+# /var/log/syslog directly via the monitor stanzas above. This stanza is
+# the ONLY source for vyos + pfsense events.
+[monitor:///var/log/remote/.../syslog.log]
+disabled = false
+index = netfw
+sourcetype = syslog
+host_segment = 4
+{% endif %}

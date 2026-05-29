@@ -21,6 +21,12 @@ splunk_password: "simspace1"
 splunk_server_ip: "172.16.9.20"          # pp-splunk's PP-Security IP
 splunk_forwarder_port: "9997"
 
+# Central syslog collector. All Linux/VyOS/pfSense hosts forward to this IP.
+# pp-syslog runs rsyslog listening on UDP+TCP 514, writes per-host files at
+# /var/log/remote/<hostname>/syslog.log, and the Splunk UF on pp-syslog
+# tails them into Splunk (netfw index for vyos/pfsense, linux for Linux).
+syslog_server_ip: "172.16.2.9"           # pp-syslog's PP-Services IP
+
 # Splunk indices created by the splunk role on pp-splunk.
 # Grouped by CIM data model / log volume: Sysmon is split out from
 # the rest of the Windows event logs because of volume + security value.
