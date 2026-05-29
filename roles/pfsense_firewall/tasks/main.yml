@@ -168,6 +168,24 @@
   changed_when: "'CHANGED' in pfsense_frr_enable.stdout"
   when: pfsense_bgp is defined
 
+# pfSense's FRR rc.d script (unlike a Linux systemd unit with
+# RuntimeDirectory=) doesn't create /var/run/frr/ before launching
+# watchfrr. Without the dir, watchfrr exits immediately with
+# "Can't create pid lock file /var/run/frr/watchfrr.pid (No such file or
+# directory)". Pre-create it with frr:frr ownership best-effort; fall
+# back to root-owned if the frr user doesn't exist yet (some package
+# versions don't create the account during install).
+- name: Ensure FRR runtime directories exist
+  ansible.builtin.shell: |
+    set -e
+    for d in /var/run/frr /var/log/frr; do
+      mkdir -p "$d"
+      chown frr:frr "$d" 2>/dev/null || true
+      chmod 0755 "$d"
+    done
+  changed_when: false
+  when: pfsense_bgp is defined
+
 - name: Start FRR service (idempotent — onestart skips if already running)
   ansible.builtin.shell: |
     service frr onestatus >/dev/null 2>&1 || service frr onestart
