@@ -140,19 +140,25 @@
   loop: "{{ pfsense_rules | default([]) }}"
 
 # FRR routing (pfSense 2.8.1 image ships pfSense-pkg-frr pre-installed).
-# Two-step:
-#   1. Enable the FRR package in config.xml so its rc script starts FRR
-#      and survives reboots. pfsensible.core 0.7.x has no FRR module, so
-#      this is driven via php -r against the package's config tree.
-#   2. Render `frr.conf` from host_vars (`pfsense_bgp`), copy it to the
-#      box, and load it via `vtysh -f` + `write memory`.
 #
-# vtysh's `write memory` persists FRR's running config to its own state
-# file, so the routing config survives reboot independently of pfSense's
-# FRR package config. If a future pfSense FRR package version regenerates
-# frr.conf from its own template at boot and overwrites ours, we'll add
-# a `rawconfig` push to the package config — that schema varies by
-# package version and we want to verify before coding to a guess.
+# Important discovery on this image: setting `<installedpackages><frr>
+# <config><enable>on</enable></config></frr>` in config.xml is necessary
+# but NOT sufficient — the pfSense FRR package's config-render only fires
+# when per-feature schema blocks are also present (<frrbgp>, <frrglobalraw>,
+# etc.). Those schema blocks vary by package version (currently
+# pfSense-pkg-frr-2.0.2_6 / frr9-9.1.2_1) and aren't worth coding to.
+#
+# Instead, we bypass the package's renderer and write the FRR config files
+# directly into /var/etc/frr/ — which is where the rc.d/frr script reads
+# from (verified: grep "/var/etc/frr" /usr/local/etc/rc.d/frr). Three
+# files: daemons (enables zebra+bgpd), vtysh.conf (integrated config), and
+# frr.conf (the actual BGP config from `pfsense_bgp` host_vars). The rc
+# script loads these on start and reloads via frr-reload.py on restart.
+#
+# We also still flip the package's enable flag so the FRR rc script gets
+# autoloaded at boot and a future GUI user isn't surprised by FRR being
+# "disabled" while clearly running.
+
 - name: Enable FRR package in pfSense config.xml
   ansible.builtin.shell: |
     php -r 'require_once("/etc/inc/config.inc");
@@ -168,17 +174,15 @@
   changed_when: "'CHANGED' in pfsense_frr_enable.stdout"
   when: pfsense_bgp is defined
 
-# pfSense's FRR rc.d script (unlike a Linux systemd unit with
-# RuntimeDirectory=) doesn't create /var/run/frr/ before launching
-# watchfrr. Without the dir, watchfrr exits immediately with
-# "Can't create pid lock file /var/run/frr/watchfrr.pid (No such file or
-# directory)". Pre-create it with frr:frr ownership best-effort; fall
-# back to root-owned if the frr user doesn't exist yet (some package
-# versions don't create the account during install).
-- name: Ensure FRR runtime directories exist
+# /var/run/frr is required by watchfrr for its pid file; /var/log/frr for
+# daemon logs. Both must be writable by the frr user. We also ensure the
+# config dir /var/etc/frr exists with frr:frr ownership (the rc.d script
+# auto-creates it on first start, but writing the config files needs the
+# dir present already).
+- name: Ensure FRR runtime + config directories exist
   ansible.builtin.shell: |
     set -e
-    for d in /var/run/frr /var/log/frr; do
+    for d in /var/run/frr /var/log/frr /var/etc/frr; do
       mkdir -p "$d"
       chown frr:frr "$d" 2>/dev/null || true
       chmod 0755 "$d"
@@ -186,29 +190,53 @@
   changed_when: false
   when: pfsense_bgp is defined
 
-- name: Start FRR service (idempotent — onestart skips if already running)
-  ansible.builtin.shell: |
-    service frr onestatus >/dev/null 2>&1 || service frr onestart
-  changed_when: false
+- name: Drop FRR daemons file
+  ansible.builtin.template:
+    src: frr.daemons.j2
+    dest: /var/etc/frr/daemons
+    owner: frr
+    group: frr
+    mode: '0640'
   when: pfsense_bgp is defined
+  notify: restart frr
 
-- name: Render FRR config from host_vars
+- name: Drop FRR vtysh.conf
+  ansible.builtin.template:
+    src: frr.vtysh.conf.j2
+    dest: /var/etc/frr/vtysh.conf
+    owner: frr
+    group: frr
+    mode: '0640'
+  when: pfsense_bgp is defined
+  notify: restart frr
+
+- name: Drop FRR frr.conf (BGP from host_vars `pfsense_bgp`)
   ansible.builtin.template:
     src: frr.conf.j2
-    dest: /tmp/frr.conf.rendered
-    owner: root
-    group: wheel
-    mode: '0644'
-  register: pfsense_frr_template
+    dest: /var/etc/frr/frr.conf
+    owner: frr
+    group: frr
+    mode: '0640'
   when: pfsense_bgp is defined
+  notify: restart frr
 
-- name: Load FRR config via vtysh and persist
+# Force handler flush so FRR is up by the end of the play rather than
+# waiting until after every subsequent task. Some plays in the playbook
+# (notably the syslog client) depend on routing being live.
+- name: Flush FRR restart handler if pending
+  ansible.builtin.meta: flush_handlers
+
+# Catch the case where nothing changed (handler didn't fire) but FRR
+# isn't actually running — happens on first deploy after a reboot if
+# the rc script wasn't enabled to autostart. Idempotent — silently
+# no-ops if FRR is already up.
+- name: Ensure FRR is running
   ansible.builtin.shell: |
     set -e
-    vtysh -f /tmp/frr.conf.rendered
-    vtysh -c "write memory"
-  register: pfsense_frr_apply
-  changed_when: pfsense_frr_template.changed
-  when:
-    - pfsense_bgp is defined
-    - pfsense_frr_template.changed
+    if ! pgrep -q watchfrr; then
+      if ! service frr onestart >/tmp/frr_start.log 2>&1; then
+        /usr/local/sbin/watchfrr -d -F traditional zebra bgpd
+      fi
+    fi
+  changed_when: false
+  when: pfsense_bgp is defined

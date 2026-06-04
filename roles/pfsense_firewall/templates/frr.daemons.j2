@@ -1,0 +1,29 @@
+!
+! /var/etc/frr/daemons
+! Managed by pfsense_firewall role. Do not edit by hand.
+!
+zebra=yes
+bgpd=yes
+ospfd=no
+ospf6d=no
+ripd=no
+ripngd=no
+isisd=no
+pimd=no
+ldpd=no
+nhrpd=no
+eigrpd=no
+babeld=no
+sharpd=no
+pbrd=no
+bfdd=no
+fabricd=no
+vrrpd=no
+pathd=no
+
+vtysh_enable=yes
+zebra_options="-A 127.0.0.1 -s 90000000"
+bgpd_options="-A 127.0.0.1"
+
+watchfrr_enable=yes
+watchfrr_options=""

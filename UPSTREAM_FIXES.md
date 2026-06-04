@@ -568,6 +568,46 @@ The replacement SimSpace pfSense image (pfSense 2.8.1) supersedes `OT-pfSense:1.
 
 ---
 
+## 2026-06-04 · platform · SimSpace pfSense 2.8.1 image — `system_syslogd_start()` writes config but fails to leave a daemon running
+
+On the new pfSense 2.8.1 image (`pfSense-pkg-frr-2.0.2_6`, `frr9-9.1.2_1`), calling `system_syslogd_start()` after the `<syslog>` block is set:
+
+1. Successfully writes `/etc/syslog.conf` (`include /var/etc/syslog.d`) and `/var/etc/syslog.d/pfSense.conf` with the correct `*.*  @<remoteserver>` forwarder line.
+2. Attempts to start syslogd via FreeBSD's `service syslogd start`.
+3. The rc script wraps syslogd in `protect -p <pid>` for OOM resistance.
+4. The `-p` argument expansion is empty (a pfSense-side variable that should hold the pid is uninitialized), so `protect` exits with `option requires an argument -- p`.
+5. The PHP wrapper swallows the error (uses `mwexec()` which discards stderr), so the function returns 0 with no daemon running.
+
+Net effect: the `<syslog>` block looks correct in `config.xml`, `/etc/syslog.conf` and `/var/etc/syslog.d/pfSense.conf` look correct, but **no syslog events ever leave the box** (including no local writes to `/var/log/system.log` / `/var/log/filter.log` etc., since those go via syslogd too). Symptom is identical to "remote syslog server is unreachable."
+
+Compounded by a secondary fault: even when syslogd does start, if the remote-server `<remoteserver>` is not currently reachable (e.g., BGP hasn't converged yet on a fresh deploy), syslogd's startup `connect()` to the remote address returns `ENETUNREACH` and the daemon exits cleanly. Catch-22: the routing protocol (FRR/BGP) needs syslog up to send its own logs, and syslog needs routing up to reach the collector.
+
+**Detection**: `ps -axwww | grep '[s]yslogd'` returns nothing after a deploy; `tail /var/log/system.log` shows the last entry is from boot time; `/usr/sbin/syslogd -dd -ss -f /etc/syslog.conf` in the foreground reveals `connect: Network is unreachable` or (if routing IS up) starts cleanly.
+
+**Fix (upstream)**: 
+1. pfSense should initialize the variable that's passed to `protect -p` before invoking it (or drop the `protect` wrapper for syslogd since OOM-killing syslogd is not the threat model that wrapper was meant for).
+2. `syslogd` should be started in a mode that tolerates initial DNS / connect failures and retries — most syslog implementations do this; FreeBSD's syslogd does not.
+
+**Workaround in PowerPlant overlay**: ensure FRR/BGP is up before the syslog client task runs (already true: pfsense_firewall role runs FRR setup before the syslog client play in the playbook). Beyond that, the syslog client play's `system_syslogd_start()` call is best-effort — if it fails silently, the next play (or a manual `/usr/sbin/syslogd -ss -f /etc/syslog.conf -P /var/run/syslog.pid` from a console) will recover it.
+
+---
+
+## 2026-06-04 · platform · SimSpace pfSense 2.8.1 image — FRR package's `<enable>on</enable>` does not actually render config files
+
+The pfSense FRR package (`pfSense-pkg-frr-2.0.2_6`) is pre-installed on the new image, with `frr9-9.1.2_1` binaries at `/usr/local/sbin/{watchfrr,zebra,bgpd}` + `/usr/local/bin/vtysh`. Setting `<installedpackages><frr><config><enable>on</enable></config></frr>` in config.xml *enables* the package per its own metadata but does NOT cause the package's render function to populate `/var/etc/frr/{daemons,vtysh.conf,frr.conf}`. The package's renderer requires additional per-feature schema blocks (`<frrbgp>`, `<frrglobalraw>`, etc.) whose layout varies by package version and is not worth coding against.
+
+Net effect on a fresh deploy where the overlay only set `<enable>on</enable>`: `/var/etc/frr/` exists but is empty, `vtysh` errors with `Can't open configuration file /var/etc/frr/vtysh.conf`, `service frr onestart` either silently does nothing or trips the same `protect` arg bug that affects syslogd. No FRR daemons run. No BGP. No routes. The whole network sits with default routes only (where configured) and `Destination net unreachable` everywhere else.
+
+**Detection**: `pkg info | grep -i frr` shows FRR installed; `ls /var/etc/frr/` is empty or contains only stub files written by the rc script's auto-creation guard; `vtysh -c "show ip bgp summary"` reports "failed to connect to any daemons".
+
+**Fix (upstream)**:
+1. The pfSense FRR package's PHP layer should render at least default `daemons` and `vtysh.conf` files when `<enable>on</enable>` is set, even if no per-feature config is provided. The current "enable does nothing without features" pattern is a UX cliff.
+2. The package should also provide a stable, documented "raw config" field (`<frrglobalraw><rawconfig>...</rawconfig></frrglobalraw>` in some versions) so ranges can push a full FRR config without learning the per-feature schema.
+
+**Workaround in PowerPlant overlay**: `roles/pfsense_firewall/` bypasses the package's renderer entirely. Three templates (`frr.daemons.j2`, `frr.vtysh.conf.j2`, `frr.conf.j2`) are dropped directly into `/var/etc/frr/` (the path the rc script reads from — verified via `grep "/var/etc/frr" /usr/local/etc/rc.d/frr`). The role still toggles `<installedpackages><frr><config><enable>on</enable></config></frr>` so the rc script gets autoloaded at boot and the GUI doesn't show FRR as "disabled." A handler (`restart frr`) reloads daemons via `service frr` with a fallback to launching `watchfrr -d -F traditional zebra bgpd` directly if the rc wrapper trips. The `frr.conf` template generates the per-host BGP config from the `pfsense_bgp` host_vars block (asn, router_id, neighbors[]).
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.

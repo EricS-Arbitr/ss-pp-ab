@@ -1,7 +1,8 @@
 !
-! FRR config for {{ pfsense_hostname }} ({{ inventory_hostname }})
-! Rendered by pfsense_firewall role from host_vars `pfsense_bgp`.
-! Loaded via vtysh -f and persisted with `write memory`.
+! /var/etc/frr/frr.conf for {{ pfsense_hostname }} ({{ inventory_hostname }})
+! Managed by pfsense_firewall role. Do not edit by hand.
+! Generated from host_vars `pfsense_bgp` and dropped into the pfSense FRR
+! package's expected config dir; loaded by the rc.d/frr script on start.
 !
 frr defaults traditional
 hostname {{ pfsense_hostname }}
