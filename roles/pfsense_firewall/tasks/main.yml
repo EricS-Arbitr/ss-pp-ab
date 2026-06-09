@@ -226,17 +226,19 @@
 - name: Flush FRR restart handler if pending
   ansible.builtin.meta: flush_handlers
 
-# Catch the case where nothing changed (handler didn't fire) but FRR
-# isn't actually running — happens on first deploy after a reboot if
-# the rc script wasn't enabled to autostart. Idempotent — silently
-# no-ops if FRR is already up.
-- name: Ensure FRR is running
+# Start zebra and bgpd DIRECTLY rather than via `watchfrr` / `service frr`.
+# Confirmed on pfSense 2.8.1 (pkg pfSense-pkg-frr-2.0.2_6 / frr9-9.1.2_1):
+# both watchfrr and the rc.d/frr script claim "Starting watchfrr." and
+# silently exit with no daemons running. Invoking the daemons directly
+# works reliably. Documented in UPSTREAM_FIXES.md 2026-06-04 entries.
+- name: Ensure zebra is running
   ansible.builtin.shell: |
-    set -e
-    if ! pgrep -q watchfrr; then
-      if ! service frr onestart >/tmp/frr_start.log 2>&1; then
-        /usr/local/sbin/watchfrr -d -F traditional zebra bgpd
-      fi
-    fi
+    pgrep -q zebra || /usr/local/sbin/zebra -d -A 127.0.0.1 -s 90000000 -f /var/etc/frr/frr.conf
+  changed_when: false
+  when: pfsense_bgp is defined
+
+- name: Ensure bgpd is running
+  ansible.builtin.shell: |
+    pgrep -q bgpd || /usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
   changed_when: false
   when: pfsense_bgp is defined

@@ -1,15 +1,14 @@
 ---
-# Restart FRR cleanly. Uses pfSense's rc.d/frr wrapper if it works on this
-# image; falls back to launching watchfrr directly if the wrapper still has
-# the pfSense-side bugs we hit earlier (silent failure / protect arg bug).
+# Restart FRR cleanly. Bypasses pfSense's rc.d/frr wrapper and watchfrr
+# entirely — both are broken on pfSense 2.8.1 (see UPSTREAM_FIXES.md
+# 2026-06-04 entries). Launches zebra and bgpd directly.
 - name: restart frr
   ansible.builtin.shell: |
-    set -e
-    if service frr onestop 2>&1 | grep -qE 'not running|Stopped'; then :; fi
     pkill -f watchfrr 2>/dev/null || true
     pkill -f bgpd 2>/dev/null || true
     pkill -f zebra 2>/dev/null || true
+    rm -f /var/run/frr/*.pid
     sleep 1
-    if ! service frr onestart >/tmp/frr_start.log 2>&1; then
-      /usr/local/sbin/watchfrr -d -F traditional zebra bgpd
-    fi
+    /usr/local/sbin/zebra -d -A 127.0.0.1 -s 90000000 -f /var/etc/frr/frr.conf
+    sleep 1
+    /usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
