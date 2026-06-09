@@ -38,6 +38,55 @@
     blockbogons: "{{ item.blockbogons | default(omit) }}"
   loop: "{{ pfsense_interfaces | default([]) }}"
 
+# pfsensible.core 0.7.x's pfsense_interface module writes the change to
+# /cf/conf/config.xml but does NOT call pfSense's `interface_configure()`
+# apply step — confirmed on pfSense 2.8.1 (image ships pkg pfSense-pkg-frr).
+# Symptom: SSH banner / GUI shows the IP correctly because both read from
+# config.xml, but `ifconfig <iface>` shows ONLY the IPv6 link-local address.
+# `netstat -rn` has no connected route for the subnet. Everything routed
+# off that interface (BGP, ping, syslog) fails with "No route to host."
+#
+# This task walks the data-plane interfaces we just configured (matched by
+# descr) and calls `interface_configure()` per interface, which flushes
+# config.xml to the kernel via `ifconfig`. Idempotent — checks if the
+# wanted IP is already bound before invoking.
+#
+# NOTE: deliberately filters to OUR interfaces (matched by descr in
+# `pfsense_interfaces`). Calling interface_configure() on `lan` (mgmt
+# interface in the new image NIC ordering) would briefly tear down the
+# SSH path Ansible is using.
+- name: Apply pfSense interface config to the kernel
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/interfaces.inc");
+            $want_descrs = json_decode(getenv("PFS_DESCRS"), true);
+            $ifs = config_get_path("interfaces", []);
+            $applied = [];
+            foreach ($ifs as $key => $cfg) {
+              $descr = $cfg["descr"] ?? "";
+              $want_ip = $cfg["ipaddr"] ?? "";
+              $phys = $cfg["if"] ?? "";
+              if (!in_array($descr, $want_descrs, true)) continue;
+              if (!$want_ip || $want_ip === "dhcp" || !$phys) continue;
+              $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
+                " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
+              if ($cur !== $want_ip) {
+                interface_configure($key);
+                $applied[] = $key . "(" . $descr . ":" . $phys . ")";
+              }
+            }
+            if (count($applied) > 0) {
+              echo "CHANGED: applied=" . implode(",", $applied) . "\n";
+            } else {
+              echo "OK: all interfaces already have their configured IPs\n";
+            }'
+  environment:
+    PFS_DESCRS: "{{ pfsense_interfaces | map(attribute='descr') | list | to_json }}"
+  register: pfsense_iface_apply
+  changed_when: "'CHANGED' in pfsense_iface_apply.stdout"
+  notify: restart frr
+  when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
+
 - name: Configure pfSense gateways
   pfsensible.core.pfsense_gateway:
     state: present

@@ -608,6 +608,29 @@ Net effect on a fresh deploy where the overlay only set `<enable>on</enable>`: `
 
 ---
 
+## 2026-06-09 · bug · pfsensible.core 0.7.x — `pfsense_interface` writes config.xml but never applies to kernel
+
+On pfSense 2.8.1 (`pfSense-pkg-frr-2.0.2_6`, fresh image, `pfsensible.core 0.7.1`), calling `pfsense_interface` with `ipv4_type=static / ipv4_address / ipv4_prefixlen` correctly updates the `<interfaces><wan>...</wan></interfaces>` block in `/cf/conf/config.xml`. The SSH banner and webConfigurator both reflect the new IP because both read from config.xml. **But the kernel interface never gets the IP bound.**
+
+```
+vmx1: flags=1008843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST,LOWER_UP> metric 0 mtu 1500
+   description: WAN_EDGE
+   ether 00:50:56:a8:66:90
+   inet6 fe80::250:56ff:fea8:6690%vmx1 prefixlen 64 scopeid 0x2     ← only IPv6 LL
+```
+
+No `inet 172.16.0.18` line. `netstat -rn` has no connected route for the subnet. Everything downstream of the affected interface fails with "No route to host" or silently times out — BGP neighbors stick in Active state forever, syslog can't reach its collector, etc.
+
+Root cause: the pfSense GUI's interface-save flow calls `interface_configure($key)` (from `/etc/inc/interfaces.inc`) which runs the `ifconfig` invocations that bind the IP. The Ansible module skips this step on this image — possibly because pfsensible.core's commit-changes path calls `system_routing_configure()` and `filter_configure()` but not `interface_configure()` per interface.
+
+**Detection**: after running `pfsense_interface`, check `ifconfig <iface>` — if there's no `inet x.x.x.x` line matching config.xml, you've hit this.
+
+**Fix (upstream)**: pfsensible.core's `pfsense_interface` module should invoke `interface_configure($if)` for each modified interface as part of its commit path. Same fix probably belongs in any other module that touches the `<interfaces>` block.
+
+**Workaround in PowerPlant overlay**: a new task in `roles/pfsense_firewall/tasks/main.yml` runs immediately after the `pfsense_interface` loop. It walks the `pfsense_interfaces` list (matched by descr), checks whether each interface's wanted IP is already bound to the underlying physical NIC via `ifconfig`, and only invokes `interface_configure($key)` if not. Filtered to only OUR data-plane descrs — explicitly NOT `lan` (which is the mgmt interface in the new image's NIC ordering; reconfiguring it would tear down the Ansible SSH session). Notifies the `restart frr` handler so FRR/zebra re-scans the now-populated interface state and BGP can converge. See main.yml task "Apply pfSense interface config to the kernel".
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.
