@@ -49,10 +49,36 @@ pfsense_gateways:
     interface: "EDGE_TRANSIT"
     gateway: "172.16.0.10"       # site-edge-router
 
-# Static routes removed — FRR/BGP carries everything. iBGP from site-edge
-# learns corp + OT prefixes; eBGP to pp-isp-router advertises them upstream
-# and learns the default back.
-pfsense_routes: []
+# Per-/24 statics inward via site-edge-router.
+#
+# Same iBGP-no-readvertise issue as pp-internal-firewall (see comment there
+# and UPSTREAM_FIXES.md). pp-external-firewall's default route exits via
+# pp-isp-router (eBGP), so corp-bound traffic doesn't naturally take the
+# inward path through site-edge → pp-internal-firewall → pp-internal-router.
+# These statics force the corp/OT prefixes inward via GW_EDGE_TRANSIT
+# (site-edge-router, which has its own statics pointing further inward).
+pfsense_routes:
+  - network: "172.16.2.0/24"
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "Corp PP-Services via site-edge-router (iBGP no-readvertise)"
+  - network: "172.16.3.0/24"
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "Corp BP via site-edge-router"
+  - network: "172.16.4.0/24"
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "Corp Eng via site-edge-router"
+  - network: "172.16.5.0/24"
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "Corp LS via site-edge-router"
+  - network: "172.16.6.0/24"
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "Corp IS via site-edge-router"
+  - network: "172.16.9.0/24"
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "Security via site-edge-router"
+  - network: "192.168.0.0/16"
+    gateway: "GW_EDGE_TRANSIT"
+    descr: "OT umbrella via site-edge-router"
 
 pfsense_rules:
   - name: "Allow any on WAN_ISP (lab)"

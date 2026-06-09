@@ -43,10 +43,44 @@ pfsense_gateways:
     interface: "INTERNAL"
     gateway: "172.16.0.26"       # pp-internal-router
 
-# Static routes removed — FRR/iBGP now learns corp /24s from pp-internal-router
-# and DMZ + ISP-side prefixes from site-edge-router. Only declare statics
-# here when a destination is unreachable via BGP (currently none).
-pfsense_routes: []
+# Per-/24 corp + OT statics inward toward pp-internal-router.
+#
+# We tried to rely on iBGP carrying these (since pp-internal-router peers
+# with pp-corp-router and learns 172.16.2-6.0/24 + 172.16.9.0/24 via
+# iBGP + redistribute-connected). But pp-internal-router does NOT
+# re-advertise iBGP-learned routes to its other iBGP neighbors (standard
+# iBGP no-readvertise rule, see RFC 4271 §9.2). Without a BGP route
+# reflector configured on pp-internal-router, this firewall never sees
+# the corp /24s in its BGP table — corp-bound traffic falls through to
+# the default route and exits toward the ISP. pp-syslog (172.16.2.9) is
+# unreachable.
+#
+# Belt-and-suspenders fix: per-/24 statics here. The "correct" fix is
+# `set protocols bgp neighbor X.X.X.X route-reflector-client` on
+# pp-internal-router's peers in the customer vyos role — logged in
+# UPSTREAM_FIXES.md.
+pfsense_routes:
+  - network: "172.16.2.0/24"
+    gateway: "GW_INT_ROUTER"
+    descr: "Corp PP-Services via pp-internal-router (iBGP no-readvertise)"
+  - network: "172.16.3.0/24"
+    gateway: "GW_INT_ROUTER"
+    descr: "Corp BP via pp-internal-router"
+  - network: "172.16.4.0/24"
+    gateway: "GW_INT_ROUTER"
+    descr: "Corp Eng via pp-internal-router"
+  - network: "172.16.5.0/24"
+    gateway: "GW_INT_ROUTER"
+    descr: "Corp LS via pp-internal-router"
+  - network: "172.16.6.0/24"
+    gateway: "GW_INT_ROUTER"
+    descr: "Corp IS via pp-internal-router"
+  - network: "172.16.9.0/24"
+    gateway: "GW_INT_ROUTER"
+    descr: "Security via pp-internal-router"
+  - network: "192.168.0.0/16"
+    gateway: "GW_INT_ROUTER"
+    descr: "OT umbrella via pp-internal-router"
 
 pfsense_rules:
   - name: "Allow any on WAN_EDGE (lab)"

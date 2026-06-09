@@ -25,9 +25,25 @@ static_route:
   route: "0.0.0.0/0"
   next_hop: "200.200.200.2"           # is-inet — owns all simulated public IP /32s on lo
 
-# pp-external-firewall (pfSense 2.8.1) now runs FRR/BGP, so the eBGP
-# session to it is live and advertises corp + OT prefixes upstream. The
-# explicit static returns that used to back-stop reachability are gone.
+# pp-external-firewall (pfSense 2.8.1) runs FRR/BGP, so the eBGP session
+# is live. pp-external-firewall redistributes connected (75.21.1.0/30 and
+# 172.16.8.0/24 DMZ), so those are learned. But the deeper corp /24s
+# (172.16.2-6.0/24, 172.16.9.0/24) and OT (192.168.0.0/16) are NOT in
+# pp-external-firewall's BGP table because of iBGP no-readvertise on
+# pp-internal-router (see pp-internal-firewall.yml comment and
+# UPSTREAM_FIXES.md). They never propagate out to the eBGP edge.
+#
+# Back-stop with explicit umbrella statics here so return traffic from
+# is-inet (or from anything riding through pp-isp-router) makes it back
+# to corp. Will become unnecessary if/when route-reflector-client is
+# configured on pp-internal-router.
+extra_static_routes:
+  - network: "172.16.0.0/16"
+    next_hop: "75.21.1.1"             # pp-external-firewall (pfSense)
+    descr: "Corp umbrella via pp-external-firewall (iBGP no-readvertise back-stop)"
+  - network: "192.168.0.0/16"
+    next_hop: "75.21.1.1"             # pp-external-firewall (pfSense)
+    descr: "OT umbrella via pp-external-firewall"
 
 # SimSpace's VyOS image bakes a stale `0.0.0.0/0` for each of this host's
 # /24 interface IPs (eth1=210.210.210.1 red-net, eth2=200.200.200.1

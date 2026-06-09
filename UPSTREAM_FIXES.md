@@ -631,6 +631,43 @@ Root cause: the pfSense GUI's interface-save flow calls `interface_configure($ke
 
 ---
 
+## 2026-06-09 · gap · roles/vyos — iBGP no-readvertise (RFC 4271 §9.2) needs route reflectors
+
+PowerPlant's BGP design has pp-internal-router as the central hub of a hub-and-spoke iBGP topology in AS 65001. Its three iBGP peers:
+
+- pp-corp-router (172.16.0.42) — origin of corp /24s (172.16.2-6.0/24, 172.16.9.0/24)
+- pp-internal-firewall (172.16.0.25) — pfSense, transit to site-edge / pp-external-firewall
+- pp-ot-firewall (172.16.0.50) — pfSense, transit + redistribute static for OT prefixes
+
+Without `route-reflector-client` configured, pp-internal-router **does not re-advertise iBGP-learned routes to its other iBGP neighbors** (per RFC 4271 §9.2 — standard split-horizon behavior). Effects:
+
+- pp-internal-firewall never sees the corp /24s in its BGP table (pp-corp-router → pp-internal-router → ...full stop). All corp-bound traffic falls through to default → site-edge → pp-external-firewall → pp-isp-router → black hole.
+- pp-external-firewall has the same problem.
+- pp-ot-firewall works for the inbound case (its default already points at pp-internal-router which IS the route origin).
+- site-edge-router, pp-isp-router similarly miss the deeper corp prefixes.
+
+**Symptom that surfaced this**: pp-syslog (172.16.2.9) was reachable from pp-ot-firewall but not from pp-internal-firewall / pp-external-firewall. Syslog flowed from one box but not the other two.
+
+**Detection**: on each pfSense / VyOS, `show ip bgp 172.16.2.0/24`. If the spokes don't have a BGP entry for the corp /24s and pp-internal-router does, you've hit this.
+
+**Fix (upstream)**: the customer `roles/vyos/tasks/main.yml` BGP block should support a `route_reflector: true` flag in the host_vars `bgp:` neighbor block. When set, the role would emit:
+```
+set protocols bgp neighbor X.X.X.X address-family ipv4-unicast route-reflector-client
+```
+…and pp-internal-router's host_vars would declare all three iBGP neighbors as RR clients. That's the standard pattern for a hub-and-spoke iBGP design — every utility's central router runs this way.
+
+Alternative — full mesh — doesn't scale and is irrelevant for a 4-node AS but conceptually possible.
+
+**Workaround in PowerPlant overlay**: per-/24 statics on the affected hosts:
+- `host_vars/pp-internal-firewall.yml`: `pfsense_routes` for 172.16.2-6.0/24, .9.0/24, and 192.168.0.0/16 via `GW_INT_ROUTER` (= 172.16.0.26 = pp-internal-router).
+- `host_vars/pp-external-firewall.yml`: same /24s via `GW_EDGE_TRANSIT` (= 172.16.0.10 = site-edge-router).
+- `host_vars/site-edge-router.yml`: `extra_static_routes` for the same /24s via 172.16.0.18 (pp-internal-firewall).
+- `host_vars/pp-isp-router.yml`: umbrella `extra_static_routes` 172.16.0.0/16 + 192.168.0.0/16 via 75.21.1.1 (pp-external-firewall) so return traffic from is-inet has a back-stop.
+
+Each block is commented inline pointing at this entry. When the upstream `vyos` role gains RR support, all of those overlay statics can come back out.
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.
