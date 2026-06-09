@@ -66,12 +66,26 @@
               $descr = $cfg["descr"] ?? "";
               $want_ip = $cfg["ipaddr"] ?? "";
               $phys = $cfg["if"] ?? "";
+              $subnet = $cfg["subnet"] ?? "";
               if (!in_array($descr, $want_descrs, true)) continue;
               if (!$want_ip || $want_ip === "dhcp" || !$phys) continue;
               $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
                 " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
               if ($cur !== $want_ip) {
+                // First try the pfSense apply (sets up pf, gateway monitor,
+                // dhcpleases, etc.). On a fresh provision, the WAN slot is
+                // mid-DHCP-discovery; interface_configure() reports false
+                // and may not bind the IP cleanly. Whether it returns
+                // true or false, we follow with a direct `ifconfig` kernel
+                // apply as belt-and-suspenders. dhclient on the interface
+                // (if any) is killed first so it does not fight us.
                 interface_configure($key);
+                if ($subnet) {
+                  shell_exec("pkill -f \"dhclient.*" . escapeshellarg($phys) .
+                    "\" 2>/dev/null");
+                  shell_exec("ifconfig " . escapeshellarg($phys) . " inet " .
+                    escapeshellarg($want_ip) . "/" . intval($subnet) . " up 2>&1");
+                }
                 $applied[] = $key . "(" . $descr . ":" . $phys . ")";
               }
             }
