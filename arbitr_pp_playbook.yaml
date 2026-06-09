@@ -147,8 +147,8 @@
       ansible.builtin.file:
         path: "{{ item.path }}/.config"
         state: directory
-        owner: "{{ item.path | basename }}"
-        group: "{{ item.path | basename }}"
+        owner: "{{ item.pw_name }}"
+        group: "{{ item.gr_name }}"
         mode: '0755'
       loop: "{{ gnome_user_homes.files }}"
 
@@ -156,8 +156,8 @@
       ansible.builtin.copy:
         dest: "{{ item.path }}/.config/gnome-initial-setup-done"
         content: "yes\n"
-        owner: "{{ item.path | basename }}"
-        group: "{{ item.path | basename }}"
+        owner: "{{ item.pw_name }}"
+        group: "{{ item.gr_name }}"
         mode: '0644'
       loop: "{{ gnome_user_homes.files }}"
 
