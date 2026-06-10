@@ -55,7 +55,16 @@ pfsense_gateways:
 # OT prefixes behind pp-ot-router. These are pfSense kernel statics; the
 # corp side (pp-internal-router) has a matching `extra_static_routes`
 # entry for 192.168.0.0/16 → 172.16.0.50 so reverse traffic finds its way.
+#
+# We also declare an explicit 0.0.0.0/0 static here. pfSense's gateway-pin
+# (via defaultgw4 + system_routing_configure()) is unreliable for installing
+# the default route into the kernel on this image — repeatedly observed
+# missing after deploys. Belt-and-suspenders: the static below is an
+# unconditional kernel route via pfsense_route.
 pfsense_routes:
+  - network: "0.0.0.0/0"
+    gateway: "GW_INTERNAL"
+    descr: "Default toward corp via pp-internal-router (explicit, defaultgw4 unreliable)"
   - network: "192.168.95.0/24"
     gateway: "GW_OT_ROUTER"
     descr: "OT Gas-Turbine via pp-ot-router"
