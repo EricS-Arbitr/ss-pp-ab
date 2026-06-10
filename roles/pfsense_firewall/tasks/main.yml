@@ -283,6 +283,53 @@
   when: pfsense_bgp is defined
   notify: restart frr
 
+# POST-FLIGHT: re-verify the data-plane interfaces still have their
+# configured IPv4 addresses in the kernel. pfSense's WAN-role interface
+# is particularly flaky on this image — subsequent tasks in this role
+# (gateway pin's system_routing_configure(), NAT disable's
+# filter_configure(), pfsense_route's apply step) can transiently
+# re-trigger the WAN's DHCP machinery and leave vmx1 without an IPv4
+# address by the end of the role. This catches that. Same belt-and-
+# suspenders pattern as the upfront apply task: try interface_configure
+# first, then directly bind via ifconfig. Mgmt (`lan`) is explicitly
+# excluded — reconfiguring it would tear down the SSH path.
+- name: Post-flight — re-verify data-plane interface IPs are bound
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/interfaces.inc");
+            $want_descrs = json_decode(getenv("PFS_DESCRS"), true);
+            $ifs = config_get_path("interfaces", []);
+            $fixed = [];
+            foreach ($ifs as $key => $cfg) {
+              if ($key === "lan") continue;
+              $descr = $cfg["descr"] ?? "";
+              $want_ip = $cfg["ipaddr"] ?? "";
+              $phys = $cfg["if"] ?? "";
+              $subnet = $cfg["subnet"] ?? "";
+              if (!in_array($descr, $want_descrs, true)) continue;
+              if (!$want_ip || $want_ip === "dhcp" || !$phys || !$subnet) continue;
+              $cur = trim(shell_exec("ifconfig " . escapeshellarg($phys) .
+                " 2>/dev/null | awk \"/inet /{print \\$2; exit}\""));
+              if ($cur !== $want_ip) {
+                shell_exec("pkill -f \"dhclient.*" . escapeshellarg($phys) . "\" 2>/dev/null");
+                interface_configure($key);
+                shell_exec("ifconfig " . escapeshellarg($phys) . " inet " .
+                  escapeshellarg($want_ip) . "/" . intval($subnet) . " up 2>&1");
+                $fixed[] = $key . "(" . $descr . ":" . $phys . ")";
+              }
+            }
+            if (count($fixed) > 0) {
+              echo "CHANGED: re-bound=" . implode(",", $fixed) . "\n";
+            } else {
+              echo "OK: all data-plane interfaces still bound\n";
+            }'
+  environment:
+    PFS_DESCRS: "{{ pfsense_interfaces | map(attribute='descr') | list | to_json }}"
+  register: pfsense_iface_postflight
+  changed_when: "'CHANGED' in pfsense_iface_postflight.stdout"
+  notify: restart frr
+  when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
+
 # Force handler flush so FRR is up by the end of the play rather than
 # waiting until after every subsequent task. Some plays in the playbook
 # (notably the syslog client) depend on routing being live.
@@ -305,3 +352,46 @@
     pgrep -q bgpd || /usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
   changed_when: false
   when: pfsense_bgp is defined
+
+# Disable IPv6 system-wide. We don't carry IPv6 in this range — every
+# interface just floats a kernel-auto link-local that's noise in the
+# routing table, ARP-noise on the wire, and a complication for any
+# tcpdump triage. Disable via:
+#   1. pfSense config.xml: remove <system><ipv6allow> (pfSense GUI's
+#      "Allow IPv6" checkbox; absent = disabled).
+#   2. Kernel sysctl: net.inet6.ip6.auto_linklocal=0 (immediate effect
+#      and persisted via /etc/sysctl.conf so it survives reboot).
+#   3. Drop existing IPv6 link-locals from each data-plane interface.
+- name: Disable IPv6 in pfSense config.xml
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            $current = config_get_path("system/ipv6allow", null);
+            if ($current !== null) {
+              config_del_path("system/ipv6allow");
+              write_config("Disable IPv6 globally");
+              echo "CHANGED: IPv6 disabled in config\n";
+            } else {
+              echo "OK: IPv6 already disabled in config\n";
+            }'
+  register: pfsense_ipv6_cfg
+  changed_when: "'CHANGED' in pfsense_ipv6_cfg.stdout"
+
+- name: Persist IPv6 disable via sysctl + apply immediately
+  ansible.builtin.shell: |
+    set -e
+    if ! grep -q "net.inet6.ip6.auto_linklocal=0" /etc/sysctl.conf 2>/dev/null; then
+      echo "net.inet6.ip6.auto_linklocal=0" >> /etc/sysctl.conf
+    fi
+    sysctl net.inet6.ip6.auto_linklocal=0 >/dev/null 2>&1 || true
+    for iface in $(ifconfig -l); do
+      case "$iface" in
+        lo*|enc*|usbus*|pflog*|pfsync*) continue ;;
+      esac
+      ifconfig "$iface" inet6 -auto_linklocal 2>/dev/null || true
+      ifconfig "$iface" inet6 2>/dev/null | awk '/inet6 fe80/{print $2}' | \
+        while IFS= read -r addr; do
+          # strip the %iface scope suffix before delete
+          ifconfig "$iface" inet6 "${addr%%\%*}" delete 2>/dev/null || true
+        done
+    done
+  changed_when: false
