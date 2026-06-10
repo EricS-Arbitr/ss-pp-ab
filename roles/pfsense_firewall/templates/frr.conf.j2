@@ -54,8 +54,12 @@ router bgp {{ pfsense_bgp.asn }}
 {% for nbr in pfsense_bgp.neighbors %}
   neighbor {{ nbr.peer_ip }} activate
 {% endfor %}
+{% if pfsense_bgp.redistribute_connected | default(false) %}
   redistribute connected
+{% endif %}
+{% if pfsense_bgp.redistribute_static | default(false) %}
   redistribute static
+{% endif %}
 {% if pfsense_bgp.redistribute_ospf | default(false) %}
   redistribute ospf
 {% endif %}

@@ -70,9 +70,17 @@ pfsense_rules:
   - name: "Allow any on EDGE_TRANSIT (lab)"
     interface: "EDGE_TRANSIT"
 
-# OSPF area 0 on the two corp-facing interfaces. The WAN_ISP interface is
-# explicitly passive so we don't emit Hellos toward the ISP (eBGP only).
-# DMZ network is advertised into OSPF so corp learns the route to pp-www.
+# OSPF area 0 on the two corp-facing interfaces. WAN_ISP is NOT in the
+# network list so OSPF doesn't form there (eBGP-only edge). DMZ network
+# is advertised into OSPF so corp learns the route to pp-www.
+#
+# Deliberately NO `redistribute_connected` and NO `redistribute_bgp`:
+#   - redistribute_connected would leak 10.255.240.0/20 (SimSpace mgmt
+#     orchestration network on vmx0) into corp OSPF.
+#   - redistribute_bgp would bridge BGP's-redistribute-connected back into
+#     OSPF, with the same leak.
+# We DO redistribute static (for the OT umbrella back-stop) and originate
+# a default route (corp learns the WAN exit via OSPF).
 pfsense_ospf:
   router_id: "172.16.0.9"
   networks:
@@ -81,16 +89,19 @@ pfsense_ospf:
     - network: "172.16.0.8/30"    # EDGE_TRANSIT transit to site-edge
       area: "0.0.0.0"
   redistribute_static: true        # advertise OT umbrella + any other statics into OSPF
-  redistribute_bgp: true           # bring eBGP-learned routes (if any) into corp OSPF
   default_originate: true          # advertise 0.0.0.0/0 into OSPF (corp learns the WAN exit)
 
 # eBGP-only: single peer to pp-isp-router. No iBGP — corp IGP is OSPF.
 # `redistribute_ospf: true` pushes corp OSPF prefixes upstream to the ISP
-# so return traffic from is-inet finds its way back.
+# so return traffic from is-inet finds its way back. Connected/static
+# redistribute is explicitly OFF — corp's OSPF table is already in BGP
+# via `redistribute ospf`, and we MUST NOT advertise 10.255.240.0/20 mgmt.
 pfsense_bgp:
   asn: 65001
   router_id: "172.16.0.9"
   redistribute_ospf: true
+  redistribute_connected: false    # explicit — no mgmt leak to ISP
+  redistribute_static: false
   neighbors:
     - peer_ip: "75.21.1.2"
       remote_as: 65002
