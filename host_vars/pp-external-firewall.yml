@@ -1,22 +1,27 @@
 ansible_host: "10.255.240.191"
 
-# pfSense 2.8.1 on the new SimSpace pfSense image. NIC ordering (image
-# default):
-#   vmx0 → mgmt (DHCP from SimSpace platform, becomes 10.255.240.191/20)
-#   vmx1 → WAN_ISP (DHCP default; reconfigured static toward pp-isp-router)
-#   vmx2 → DMZ (172.16.8.0/24 gateway)
-#   vmx3 → EDGE_TRANSIT (transit /30 toward site-edge-router)
+# pfSense 2.8.1 on the new SimSpace pfSense image. NIC ordering:
+#   vmx0 → mgmt (DHCP, 10.255.240.191/20)
+#   vmx1 → WAN_ISP (75.21.1.1/30 toward pp-isp-router)
+#   vmx2 → DMZ (172.16.8.1/24 PP-DMZ gateway)
+#   vmx3 → EDGE_TRANSIT (172.16.0.9/30 toward site-edge-router)
 #
-# Sits at the corp edge: eBGP peer (AS 65001 ↔ AS 65002) with pp-isp-router
-# over 75.21.1.0/30, iBGP peer with site-edge-router. Outbound NAT is
-# disabled (transit mode) — pp-isp-router-side simulated public IPs already
-# look like internet to is-inet.
+# Corp edge router (post-2026-06-10 architectural shift):
+#   - **eBGP** AS 65001 ↔ AS 65002 to pp-isp-router on vmx1 (WAN). This is
+#     the ONLY BGP session in the network now.
+#   - **OSPF area 0** on vmx2 (DMZ) and vmx3 (EDGE_TRANSIT) — the IGP for
+#     the corp domain. WAN_ISP stays out of OSPF (it's the eBGP edge).
+#   - **Mutual redistribution** at the edge:
+#       - OSPF → BGP: corp prefixes flow to the ISP.
+#       - BGP → OSPF: the default learned from the ISP can be re-originated
+#         into OSPF via `default-information originate`.
+#   - Outbound NAT disabled (transit firewall behavior).
 
 pfsense_hostname: "pp-external-firewall"
 pfsense_domain: "voltgrid.com"
 
 pfsense_interfaces:
-  - descr: "WAN_ISP"             # vmx1 — switch-0 transit to pp-isp-router
+  - descr: "WAN_ISP"             # vmx1 — switch-0 transit to pp-isp-router (eBGP)
     interface: vmx1
     enable: true
     ipv4_type: static
@@ -25,14 +30,14 @@ pfsense_interfaces:
     blockpriv: false
     blockbogons: false
 
-  - descr: "DMZ"                 # vmx2 — PP-DMZ subnet gateway
+  - descr: "DMZ"                 # vmx2 — PP-DMZ subnet gateway (OSPF)
     interface: vmx2
     enable: true
     ipv4_type: static
     ipv4_address: "172.16.8.1"
     ipv4_prefixlen: 24
 
-  - descr: "EDGE_TRANSIT"        # vmx3 — switch-1 transit to site-edge-router
+  - descr: "EDGE_TRANSIT"        # vmx3 — switch-1 transit to site-edge-router (OSPF)
     interface: vmx3
     enable: true
     ipv4_type: static
@@ -49,36 +54,13 @@ pfsense_gateways:
     interface: "EDGE_TRANSIT"
     gateway: "172.16.0.10"       # site-edge-router
 
-# Per-/24 statics inward via site-edge-router.
-#
-# Same iBGP-no-readvertise issue as pp-internal-firewall (see comment there
-# and UPSTREAM_FIXES.md). pp-external-firewall's default route exits via
-# pp-isp-router (eBGP), so corp-bound traffic doesn't naturally take the
-# inward path through site-edge → pp-internal-firewall → pp-internal-router.
-# These statics force the corp/OT prefixes inward via GW_EDGE_TRANSIT
-# (site-edge-router, which has its own statics pointing further inward).
+# OSPF (via area 0) now carries corp /24s into pp-external-firewall, so
+# the only static needed is the OT umbrella back-stop — pp-ot-firewall
+# is the ESP boundary and doesn't speak OSPF.
 pfsense_routes:
-  - network: "172.16.2.0/24"
-    gateway: "GW_EDGE_TRANSIT"
-    descr: "Corp PP-Services via site-edge-router (iBGP no-readvertise)"
-  - network: "172.16.3.0/24"
-    gateway: "GW_EDGE_TRANSIT"
-    descr: "Corp BP via site-edge-router"
-  - network: "172.16.4.0/24"
-    gateway: "GW_EDGE_TRANSIT"
-    descr: "Corp Eng via site-edge-router"
-  - network: "172.16.5.0/24"
-    gateway: "GW_EDGE_TRANSIT"
-    descr: "Corp LS via site-edge-router"
-  - network: "172.16.6.0/24"
-    gateway: "GW_EDGE_TRANSIT"
-    descr: "Corp IS via site-edge-router"
-  - network: "172.16.9.0/24"
-    gateway: "GW_EDGE_TRANSIT"
-    descr: "Security via site-edge-router"
   - network: "192.168.0.0/16"
     gateway: "GW_EDGE_TRANSIT"
-    descr: "OT umbrella via site-edge-router"
+    descr: "OT umbrella via site-edge-router (ESP boundary)"
 
 pfsense_rules:
   - name: "Allow any on WAN_ISP (lab)"
@@ -88,16 +70,28 @@ pfsense_rules:
   - name: "Allow any on EDGE_TRANSIT (lab)"
     interface: "EDGE_TRANSIT"
 
-# AS 65001 (internal) iBGP to site-edge-router, AS 65002 eBGP to
-# pp-isp-router. Redistribute connected announces the local /24 (DMZ) and
-# /30 transits into the mesh.
+# OSPF area 0 on the two corp-facing interfaces. The WAN_ISP interface is
+# explicitly passive so we don't emit Hellos toward the ISP (eBGP only).
+# DMZ network is advertised into OSPF so corp learns the route to pp-www.
+pfsense_ospf:
+  router_id: "172.16.0.9"
+  networks:
+    - network: "172.16.8.0/24"    # DMZ
+      area: "0.0.0.0"
+    - network: "172.16.0.8/30"    # EDGE_TRANSIT transit to site-edge
+      area: "0.0.0.0"
+  redistribute_static: true        # advertise OT umbrella + any other statics into OSPF
+  redistribute_bgp: true           # bring eBGP-learned routes (if any) into corp OSPF
+  default_originate: true          # advertise 0.0.0.0/0 into OSPF (corp learns the WAN exit)
+
+# eBGP-only: single peer to pp-isp-router. No iBGP — corp IGP is OSPF.
+# `redistribute_ospf: true` pushes corp OSPF prefixes upstream to the ISP
+# so return traffic from is-inet finds its way back.
 pfsense_bgp:
   asn: 65001
   router_id: "172.16.0.9"
+  redistribute_ospf: true
   neighbors:
-    - peer_ip: "172.16.0.10"
-      remote_as: 65001
-      description: "site-edge-router (iBGP)"
     - peer_ip: "75.21.1.2"
       remote_as: 65002
-      description: "pp-isp-router (eBGP)"
+      description: "pp-isp-router (eBGP edge — only BGP session in the fabric)"

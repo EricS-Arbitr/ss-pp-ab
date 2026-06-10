@@ -239,6 +239,26 @@
     - vyos
     - extra_static_routes_remove
 
+# Architectural shift 2026-06-10: corp IGP moved from iBGP to OSPF area 0.
+# The customer vyos role's `Configure BGP` task pushed iBGP config on
+# earlier deploys; setting `bgp: []` in host_vars stops new pushes but
+# doesn't remove what's already there. This play deletes the entire
+# `protocols bgp` subtree on hosts that opt in via `remove_vyos_bgp: true`.
+# pp-isp-router intentionally keeps its eBGP block (it's the WAN edge).
+- name: Remove stale VyOS iBGP (architectural shift to OSPF-IGP)
+  hosts: vyos:vyos_routes_only
+  gather_facts: false
+  tasks:
+    - name: Delete protocols bgp via vyos_config
+      vyos.vyos.vyos_config:
+        lines:
+          - "delete protocols bgp"
+        save: true
+      when: remove_vyos_bgp | default(false)
+  tags:
+    - vyos
+    - remove_vyos_bgp
+
 - name: pfSense firewalls
   hosts: pfsense
   gather_facts: false

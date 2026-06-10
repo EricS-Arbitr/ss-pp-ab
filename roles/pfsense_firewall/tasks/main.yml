@@ -235,7 +235,7 @@
             }'
   register: pfsense_frr_enable
   changed_when: "'CHANGED' in pfsense_frr_enable.stdout"
-  when: pfsense_bgp is defined
+  when: pfsense_bgp is defined or pfsense_ospf is defined
 
 # /var/run/frr is required by watchfrr for its pid file; /var/log/frr for
 # daemon logs. Both must be writable by the frr user. We also ensure the
@@ -251,7 +251,7 @@
       chmod 0755 "$d"
     done
   changed_when: false
-  when: pfsense_bgp is defined
+  when: pfsense_bgp is defined or pfsense_ospf is defined
 
 - name: Drop FRR daemons file
   ansible.builtin.template:
@@ -260,7 +260,7 @@
     owner: frr
     group: frr
     mode: '0640'
-  when: pfsense_bgp is defined
+  when: pfsense_bgp is defined or pfsense_ospf is defined
   notify: restart frr
 
 - name: Drop FRR vtysh.conf
@@ -270,7 +270,7 @@
     owner: frr
     group: frr
     mode: '0640'
-  when: pfsense_bgp is defined
+  when: pfsense_bgp is defined or pfsense_ospf is defined
   notify: restart frr
 
 - name: Drop FRR frr.conf (BGP from host_vars `pfsense_bgp`)
@@ -280,7 +280,7 @@
     owner: frr
     group: frr
     mode: '0640'
-  when: pfsense_bgp is defined
+  when: pfsense_bgp is defined or pfsense_ospf is defined
   notify: restart frr
 
 # POST-FLIGHT: re-verify the data-plane interfaces still have their
@@ -345,13 +345,37 @@
   ansible.builtin.shell: |
     pgrep -q zebra || /usr/local/sbin/zebra -d -A 127.0.0.1 -s 90000000 -f /var/etc/frr/frr.conf
   changed_when: false
-  when: pfsense_bgp is defined
+  when: pfsense_bgp is defined or pfsense_ospf is defined
 
 - name: Ensure bgpd is running
   ansible.builtin.shell: |
     pgrep -q bgpd || /usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
   changed_when: false
   when: pfsense_bgp is defined
+
+- name: Ensure ospfd is running
+  ansible.builtin.shell: |
+    pgrep -q ospfd || /usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
+  changed_when: false
+  when: pfsense_ospf is defined
+
+# Stop FRR and drop its config when neither protocol is declared.
+# Applies to hosts that previously ran BGP/OSPF and have since had it
+# removed from host_vars (e.g. pp-ot-firewall after moving to static-only
+# at the ESP boundary). Without this, stale zebra+bgpd would keep running
+# from a prior deploy.
+- name: Stop FRR if no routing protocol declared
+  ansible.builtin.shell: |
+    pkill -f watchfrr 2>/dev/null || true
+    pkill -f bgpd 2>/dev/null || true
+    pkill -f ospfd 2>/dev/null || true
+    pkill -f zebra 2>/dev/null || true
+    rm -f /var/run/frr/*.pid
+    rm -f /var/etc/frr/frr.conf /var/etc/frr/daemons /var/etc/frr/vtysh.conf
+  changed_when: false
+  when:
+    - pfsense_bgp is not defined
+    - pfsense_ospf is not defined
 
 # Disable IPv6 system-wide. We don't carry IPv6 in this range — every
 # interface just floats a kernel-auto link-local that's noise in the

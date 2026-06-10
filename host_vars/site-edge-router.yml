@@ -19,45 +19,18 @@ static_route:
   route: "0.0.0.0/0"
   next_hop: "172.16.0.9"              # pp-external-firewall (default chain toward pp-isp-router/is-inet)
 
-# Both pfSense neighbors (pp-internal-firewall .18 and pp-external-firewall
-# .9) run FRR/BGP on pfSense 2.8.1; iBGP is up. BUT pp-internal-router
-# doesn't re-advertise iBGP-learned routes (standard iBGP no-readvertise
-# rule, RFC 4271 §9.2) to its other iBGP peers, so corp /24s never make
-# it into site-edge-router's BGP table. Without explicit statics here,
-# corp-bound traffic transiting site-edge falls into the default route
-# (toward pp-external-firewall → pp-isp-router) — a black hole.
-#
-# Real fix is `route-reflector-client` on pp-internal-router's neighbors,
-# logged in UPSTREAM_FIXES.md.
+# Routing role (post-2026-06-10 architectural shift):
+#   - OSPF area 0 (the IGP) on eth0 + eth1 — already enabled via the
+#     `ospf: true` flag on each interface above.
+#   - No iBGP. iBGP was removed because OSPF is the corp IGP.
+# The OT umbrella stays as a static back-stop because pp-ot-firewall is
+# the ESP boundary and doesn't speak OSPF.
 extra_static_routes:
-  - network: "172.16.2.0/24"
-    next_hop: "172.16.0.18"           # pp-internal-firewall
-    descr: "Corp PP-Services via pp-internal-firewall"
-  - network: "172.16.3.0/24"
-    next_hop: "172.16.0.18"
-    descr: "Corp BP via pp-internal-firewall"
-  - network: "172.16.4.0/24"
-    next_hop: "172.16.0.18"
-    descr: "Corp Eng via pp-internal-firewall"
-  - network: "172.16.5.0/24"
-    next_hop: "172.16.0.18"
-    descr: "Corp LS via pp-internal-firewall"
-  - network: "172.16.6.0/24"
-    next_hop: "172.16.0.18"
-    descr: "Corp IS via pp-internal-firewall"
-  - network: "172.16.9.0/24"
-    next_hop: "172.16.0.18"
-    descr: "Security via pp-internal-firewall"
   - network: "192.168.0.0/16"
-    next_hop: "172.16.0.18"
-    descr: "OT via pp-internal-firewall"
+    next_hop: "172.16.0.18"           # pp-internal-firewall
+    descr: "OT umbrella via pp-internal-firewall (ESP boundary back-stop)"
 
-bgp:
-  - as: 65001
-    neighbor:
-      ip: "172.16.0.18"               # pp-internal-firewall
-      as: 65001
-  - as: 65001
-    neighbor:
-      ip: "172.16.0.9"                # pp-external-firewall
-      as: 65001
+# Tell the overlay's "Remove stale VyOS iBGP" play to wipe the legacy
+# `set protocols bgp ...` config that the customer vyos role pushed on
+# earlier deploys.
+remove_vyos_bgp: true

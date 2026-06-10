@@ -1,8 +1,11 @@
 !
 ! /var/etc/frr/frr.conf for {{ pfsense_hostname }} ({{ inventory_hostname }})
 ! Managed by pfsense_firewall role. Do not edit by hand.
-! Generated from host_vars `pfsense_bgp` and dropped into the pfSense FRR
-! package's expected config dir; loaded by the rc.d/frr script on start.
+!
+! Architecture (2026-06-10):
+!   OSPF area 0 = IGP across the corp domain
+!   eBGP        = edge only (pp-external-firewall ↔ pp-isp-router)
+!   Static      = ESP boundary (pp-internal-router ↔ pp-ot-firewall)
 !
 frr defaults traditional
 hostname {{ pfsense_hostname }}
@@ -11,6 +14,32 @@ service integrated-vtysh-config
 !
 ip forwarding
 !
+{% if pfsense_ospf is defined %}
+router ospf
+ ospf router-id {{ pfsense_ospf.router_id }}
+{% for net in pfsense_ospf.networks %}
+ network {{ net.network }} area {{ net.area | default('0.0.0.0') }}
+{% endfor %}
+{% if pfsense_ospf.passive_interfaces is defined %}
+{% for pif in pfsense_ospf.passive_interfaces %}
+ passive-interface {{ pif }}
+{% endfor %}
+{% endif %}
+{% if pfsense_ospf.redistribute_connected | default(false) %}
+ redistribute connected
+{% endif %}
+{% if pfsense_ospf.redistribute_static | default(false) %}
+ redistribute static
+{% endif %}
+{% if pfsense_ospf.redistribute_bgp | default(false) %}
+ redistribute bgp
+{% endif %}
+{% if pfsense_ospf.default_originate | default(false) %}
+ default-information originate always
+{% endif %}
+!
+{% endif %}
+{% if pfsense_bgp is defined %}
 router bgp {{ pfsense_bgp.asn }}
  bgp router-id {{ pfsense_bgp.router_id }}
  no bgp default ipv4-unicast
@@ -27,7 +56,11 @@ router bgp {{ pfsense_bgp.asn }}
 {% endfor %}
   redistribute connected
   redistribute static
+{% if pfsense_bgp.redistribute_ospf | default(false) %}
+  redistribute ospf
+{% endif %}
  exit-address-family
 !
+{% endif %}
 line vty
 !

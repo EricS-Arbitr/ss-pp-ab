@@ -31,21 +31,16 @@ static_route:
   route: "0.0.0.0/0"
   next_hop: "172.16.0.25"             # pp-internal-firewall (vmx1 INTERNAL on 172.16.0.24/30)
 
-# pp-ot-firewall (pfSense 2.8.1) runs FRR/BGP. iBGP delivers its connected
-# subnets (172.16.0.48/30, 192.168.200.200/30, 192.168.90.128/27 OT_DMZ)
-# but NOT the OT /24-/27s behind pp-ot-router (192.168.95.0/24,
-# 192.168.90.0/27, 192.168.90.96/27). Those exist as pfSense-side static
-# routes — kernel routes added by pfSense's routing system, never picked
-# up by FRR's `redistribute static` (which only catches FRR's own
-# `ip route` entries from frr.conf).
-#
-# Without this back-stop, OT-bound traffic loops between pp-internal-router
-# (default → pp-internal-firewall) and pp-internal-firewall (192.168.0.0/16
-# → pp-internal-router) until TTL exhaustion.
+# OT umbrella static — pp-ot-firewall is the ESP boundary and runs no
+# routing protocol, so OT prefixes never enter OSPF and must be reached
+# statically from here. The customer vyos role's OSPF `redistribute static`
+# would push this into the OSPF domain if turned on, but we leave it
+# off — each speaker that needs OT reach declares its own back-stop, and
+# avoiding redistribute static keeps the default route's authority clean.
 extra_static_routes:
   - network: "192.168.0.0/16"
-    next_hop: "172.16.0.50"           # pp-ot-firewall (pfSense)
-    descr: "OT umbrella via pp-ot-firewall (FRR redistribute-static gap)"
+    next_hop: "172.16.0.50"           # pp-ot-firewall (pfSense, ESP boundary)
+    descr: "OT umbrella via pp-ot-firewall (ESP boundary, static only)"
 
 # SimSpace's VyOS image bakes `0.0.0.0/0 next-hop 172.16.9.1` (this router's
 # own pp-security gateway IP). Two competing equal-cost defaults caused FRR
@@ -59,16 +54,8 @@ extra_static_routes_remove:
   - network: "0.0.0.0/0"
     next_hop: "172.16.0.26"            # own eth2 IP (host_vars typo, now fixed to .25)
 
-bgp:
-  - as: 65001
-    neighbor:
-      ip: "172.16.0.42"               # pp-corp-router
-      as: 65001
-  - as: 65001
-    neighbor:
-      ip: "172.16.0.25"               # pp-internal-firewall
-      as: 65001
-  - as: 65001
-    neighbor:
-      ip: "172.16.0.50"               # pp-ot-firewall
-      as: 65001
+# Architectural shift 2026-06-10: iBGP removed. Corp IGP is OSPF area 0
+# (enabled via `ospf: true` on eth0/eth1/eth2/eth3 above). eBGP is at the
+# WAN edge only (pp-external-firewall ↔ pp-isp-router). The overlay's
+# "Remove stale VyOS iBGP" play strips legacy `set protocols bgp` config.
+remove_vyos_bgp: true

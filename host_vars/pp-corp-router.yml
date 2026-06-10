@@ -60,8 +60,8 @@ extra_static_routes_remove:
   - network: "0.0.0.0/0"
     next_hop: "172.16.6.1"            # own eth4 IP (self-loop)
 
-bgp:
-  - as: 65001
-    neighbor:
-      ip: "172.16.0.41"               # pp-internal-router
-      as: 65001
+# Architectural shift 2026-06-10: iBGP removed. Corp IGP is OSPF area 0
+# (enabled via `ospf: true` on every interface above — corp /24s + transit
+# /30). The overlay's "Remove stale VyOS iBGP" play strips legacy
+# `set protocols bgp` config from this router.
+remove_vyos_bgp: true

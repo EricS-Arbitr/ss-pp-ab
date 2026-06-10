@@ -9,9 +9,11 @@ ansible_host: "10.255.240.197"
 # Sits between site-edge-router (toward pp-external-firewall + the ISP)
 # and pp-internal-router (the corp/OT downstream hub).
 #
-# Routing runs on FRR. iBGP peers with site-edge-router (.17) and
-# pp-internal-router (.26); redistribute connected propagates the two
-# /30 transits.
+# Routing role (post-2026-06-10 architectural shift):
+#   - **OSPF area 0** on both data-plane interfaces (the IGP).
+#   - No iBGP. Corp /24s, DMZ /24, transit /30s all flow through OSPF.
+#   - Static back-stop for the OT umbrella (192.168.0.0/16) since OSPF
+#     doesn't carry across the ESP boundary at pp-ot-firewall.
 
 pfsense_hostname: "pp-internal-firewall"
 pfsense_domain: "voltgrid.com"
@@ -43,44 +45,13 @@ pfsense_gateways:
     interface: "INTERNAL"
     gateway: "172.16.0.26"       # pp-internal-router
 
-# Per-/24 corp + OT statics inward toward pp-internal-router.
-#
-# We tried to rely on iBGP carrying these (since pp-internal-router peers
-# with pp-corp-router and learns 172.16.2-6.0/24 + 172.16.9.0/24 via
-# iBGP + redistribute-connected). But pp-internal-router does NOT
-# re-advertise iBGP-learned routes to its other iBGP neighbors (standard
-# iBGP no-readvertise rule, see RFC 4271 §9.2). Without a BGP route
-# reflector configured on pp-internal-router, this firewall never sees
-# the corp /24s in its BGP table — corp-bound traffic falls through to
-# the default route and exits toward the ISP. pp-syslog (172.16.2.9) is
-# unreachable.
-#
-# Belt-and-suspenders fix: per-/24 statics here. The "correct" fix is
-# `set protocols bgp neighbor X.X.X.X route-reflector-client` on
-# pp-internal-router's peers in the customer vyos role — logged in
-# UPSTREAM_FIXES.md.
+# OSPF carries all corp + transit prefixes — no per-/24 statics needed.
+# OT umbrella is the only static — pp-ot-firewall doesn't speak OSPF
+# (ESP boundary), so the OT prefixes never enter the OSPF domain.
 pfsense_routes:
-  - network: "172.16.2.0/24"
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp PP-Services via pp-internal-router (iBGP no-readvertise)"
-  - network: "172.16.3.0/24"
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp BP via pp-internal-router"
-  - network: "172.16.4.0/24"
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp Eng via pp-internal-router"
-  - network: "172.16.5.0/24"
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp LS via pp-internal-router"
-  - network: "172.16.6.0/24"
-    gateway: "GW_INT_ROUTER"
-    descr: "Corp IS via pp-internal-router"
-  - network: "172.16.9.0/24"
-    gateway: "GW_INT_ROUTER"
-    descr: "Security via pp-internal-router"
   - network: "192.168.0.0/16"
     gateway: "GW_INT_ROUTER"
-    descr: "OT umbrella via pp-internal-router"
+    descr: "OT umbrella via pp-internal-router (ESP boundary)"
 
 pfsense_rules:
   - name: "Allow any on WAN_EDGE (lab)"
@@ -88,13 +59,13 @@ pfsense_rules:
   - name: "Allow any on INTERNAL (lab)"
     interface: "INTERNAL"
 
-pfsense_bgp:
-  asn: 65001
+# OSPF area 0 on both transit /30s. Both adjacencies will form: WAN_EDGE
+# with site-edge-router (.17), INTERNAL with pp-internal-router (.26).
+pfsense_ospf:
   router_id: "172.16.0.18"
-  neighbors:
-    - peer_ip: "172.16.0.17"
-      remote_as: 65001
-      description: "site-edge-router"
-    - peer_ip: "172.16.0.26"
-      remote_as: 65001
-      description: "pp-internal-router"
+  networks:
+    - network: "172.16.0.16/30"  # WAN_EDGE link to site-edge
+      area: "0.0.0.0"
+    - network: "172.16.0.24/30"  # INTERNAL link to pp-internal-router
+      area: "0.0.0.0"
+  redistribute_static: true       # advertise the OT umbrella into OSPF

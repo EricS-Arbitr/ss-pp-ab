@@ -6,14 +6,14 @@ ansible_host: "10.255.240.190"
 #   vmx1 → WAN  (DHCP default, reconfigured static by pfsense_interface)
 #   vmx2+ → additional interfaces, all static via pfsense_interface
 #
-# This box is the OT-side transit firewall between corp (172.16.0.48/30
-# toward pp-internal-router) and the OT enclave (pp-ot-router + the
-# 192.168.0.0/16 PLC/HMI subnets behind it).
-#
-# Routing runs on FRR (shipped pre-installed by the new image) via the
-# pfsense_firewall role's FRR raw-config task. AS 65001 iBGP peer with
-# pp-internal-router; FRR redistribute static + connected propagates the
-# OT prefixes (statics below) into the iBGP mesh.
+# This box is the OT-side transit firewall — the ESP (Electronic Security
+# Perimeter, NERC CIP-005) boundary between corp IT and the OT enclave.
+# Per the utility-realistic routing design:
+#   - NO dynamic routing protocol crosses this boundary (no BGP, no OSPF).
+#   - Static routes only: default toward corp via pp-internal-router, and
+#     the three OT downstream prefixes via pp-ot-router.
+#   - FRR is therefore NOT used on this host. The role detects "no protocol
+#     declared" and skips/cleans up FRR.
 
 pfsense_hostname: "pp-ot-firewall"
 pfsense_domain: "voltgrid.com"
@@ -52,9 +52,9 @@ pfsense_gateways:
     interface: "OT_TRANSIT"
     gateway: "192.168.200.202"   # pp-ot-router
 
-# OT prefixes behind pp-ot-router. FRR `redistribute static` re-announces
-# these into the iBGP mesh, so corp learns OT reachability via BGP without
-# any per-/24 statics on the upstream routers.
+# OT prefixes behind pp-ot-router. These are pfSense kernel statics; the
+# corp side (pp-internal-router) has a matching `extra_static_routes`
+# entry for 192.168.0.0/16 → 172.16.0.50 so reverse traffic finds its way.
 pfsense_routes:
   - network: "192.168.95.0/24"
     gateway: "GW_OT_ROUTER"
@@ -74,14 +74,5 @@ pfsense_rules:
   - name: "Allow any on OT_DMZ (lab)"
     interface: "OT_DMZ"
 
-# FRR / BGP config — driven by pfsense_firewall role's FRR task.
-# Single iBGP peer toward pp-internal-router (172.16.0.49). `redistribute
-# connected` advertises the transit /30s and the OT_DMZ /27; `redistribute
-# static` announces the three OT statics above.
-pfsense_bgp:
-  asn: 65001
-  router_id: "172.16.0.50"
-  neighbors:
-    - peer_ip: "172.16.0.49"
-      remote_as: 65001
-      description: "pp-internal-router"
+# No pfsense_bgp, no pfsense_ospf. Intentional: this is the ESP boundary.
+# A NERC CIP audit expects static routing only across this perimeter.

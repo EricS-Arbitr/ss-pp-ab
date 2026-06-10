@@ -668,6 +668,60 @@ Each block is commented inline pointing at this entry. When the upstream `vyos` 
 
 ---
 
+## 2026-06-10 · architecture · OSPF area 0 IGP + eBGP-only edge + static-at-ESP (utility-realistic redesign)
+
+Earlier deployments ran iBGP AS 65001 as the corp IGP, with workarounds (per-/24 statics on multiple hosts) to defeat iBGP's no-readvertise rule. That works but isn't how a real electric utility deploys its IT/OT network. **The 2026-06-10 redesign moves the corp domain to OSPF area 0 as the IGP, restricts BGP to a single eBGP session at the WAN edge, and uses static routing at the ESP boundary**. This matches NERC CIP-005 and NIST SP 800-82 guidance for utility IT/OT segmentation.
+
+### What changed by zone
+
+| Domain | Old | New |
+|---|---|---|
+| pp-corp-router ↔ pp-internal-router (172.16.0.40/30) | iBGP + OSPF (already there) | **OSPF area 0** only |
+| pp-internal-router ↔ pp-internal-firewall (172.16.0.24/30) | iBGP, pfSense FRR | **OSPF area 0** on both ends |
+| site-edge-router ↔ pp-internal-firewall (172.16.0.16/30) | iBGP | **OSPF area 0** |
+| site-edge-router ↔ pp-external-firewall (172.16.0.8/30) | iBGP | **OSPF area 0** |
+| Corp /24s on pp-corp-router (172.16.2-6.0/24) | iBGP redist connected | OSPF advertise via interface flag |
+| DMZ /24 on pp-external-firewall (172.16.8.0/24) | iBGP redist connected | OSPF advertise |
+| pp-internal-router ↔ pp-ot-firewall (172.16.0.48/30) | iBGP | **STATIC both sides — ESP boundary, no protocol crosses** |
+| pp-isp-router ↔ pp-external-firewall (75.21.1.0/30) | eBGP AS 65001↔65002 | **eBGP unchanged — only BGP session in the fabric** |
+
+### How redistribution flows
+
+- **pp-external-firewall** (corp edge):
+  - OSPF area 0 on `vmx2` (DMZ) and `vmx3` (EDGE_TRANSIT).
+  - eBGP to pp-isp-router on `vmx1`.
+  - `redistribute_ospf: true` in BGP — corp prefixes flow to the ISP.
+  - `default_originate: true` in OSPF — the BGP-learned default re-enters the corp OSPF domain so non-edge speakers learn the WAN exit.
+  - `redistribute_bgp: true` in OSPF — any eBGP-learned external prefixes propagate into corp.
+
+- **All other corp routers / firewalls** (VyOS + pp-internal-firewall):
+  - OSPF area 0 on every internal interface.
+  - No BGP at all.
+  - Existing static defaults (admin distance 1, lower than OSPF's 110) win over OSPF-learned default — kept as primary; OSPF-learned default is backup.
+
+### ESP boundary (NERC CIP-005)
+
+- **pp-ot-firewall** runs no routing protocol. Default static to pp-internal-router, static routes for the three OT /24-/27 subnets via pp-ot-router. FRR is stopped on this host (role detects "no protocol declared" and cleans up).
+- **pp-internal-router** has a static `192.168.0.0/16 → 172.16.0.50` (the ESP umbrella to pp-ot-firewall).
+- **pp-internal-firewall** and **pp-external-firewall** keep a corresponding `192.168.0.0/16` static as a return-path back-stop (pp-ot prefixes don't enter OSPF because the boundary is static-only).
+- **pp-isp-router** keeps `extra_static_routes: 172.16.0.0/16 + 192.168.0.0/16 → 75.21.1.1` so is-inet-side replies for any internal prefix reach the corp edge regardless of BGP advertisement timing.
+
+### Overlay implementation
+
+- **Role**: `roles/pfsense_firewall/templates/frr.conf.j2` now emits OSPF (`router ospf`) and/or BGP (`router bgp`) blocks conditionally based on `pfsense_ospf` / `pfsense_bgp` host_vars. `frr.daemons.j2` enables `bgpd` / `ospfd` only when the corresponding protocol is declared. Tasks added: `Ensure ospfd is running`, and `Stop FRR if no routing protocol declared` (idle pp-ot-firewall cleanly).
+- **Host_vars**:
+  - `pp-ot-firewall.yml`: removed `pfsense_bgp`, kept three OT statics.
+  - `pp-internal-firewall.yml`: replaced `pfsense_bgp` with `pfsense_ospf`. Reduced `pfsense_routes` to just the OT umbrella back-stop.
+  - `pp-external-firewall.yml`: kept `pfsense_bgp` with eBGP-only neighbor + `redistribute_ospf: true`. Added `pfsense_ospf` with `default_originate: true` + `redistribute_static: true` + `redistribute_bgp: true`. Reduced `pfsense_routes` to OT umbrella only.
+  - `site-edge-router.yml` / `pp-internal-router.yml` / `pp-corp-router.yml`: removed legacy `bgp:` block, set `remove_vyos_bgp: true`. Removed per-/24 corp `extra_static_routes` on site-edge (OSPF carries).
+- **Playbook**: new "Remove stale VyOS iBGP" play (tag `remove_vyos_bgp`) issues `delete protocols bgp` on hosts where `remove_vyos_bgp: true` so the previously-pushed iBGP config goes away.
+
+### Upstream-fix opportunity
+
+The customer `vyos` role already supports OSPF (per-interface `ospf: true` flag). It does NOT currently support a `delete protocols bgp` opt-out per host — adding that as a first-class capability (`remove_protocols: [bgp]` host_var?) would let other ranges do the same shift without an overlay play. See companion entry on the customer's `vyos` role's BGP-only redistribute pattern (2026-06-09 entry above).
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.

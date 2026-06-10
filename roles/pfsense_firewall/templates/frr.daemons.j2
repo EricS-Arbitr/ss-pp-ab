@@ -3,8 +3,10 @@
 ! Managed by pfsense_firewall role. Do not edit by hand.
 !
 zebra=yes
-bgpd=yes
-ospfd=no
+bgpd={% if pfsense_bgp is defined %}yes{% else %}no{% endif %}
+
+ospfd={% if pfsense_ospf is defined %}yes{% else %}no{% endif %}
+
 ospf6d=no
 ripd=no
 ripngd=no
@@ -24,6 +26,7 @@ pathd=no
 vtysh_enable=yes
 zebra_options="-A 127.0.0.1 -s 90000000"
 bgpd_options="-A 127.0.0.1"
+ospfd_options="-A 127.0.0.1"
 
 watchfrr_enable=yes
 watchfrr_options=""

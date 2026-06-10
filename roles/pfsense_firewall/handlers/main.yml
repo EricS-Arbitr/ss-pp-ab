@@ -1,14 +1,17 @@
 ---
 # Restart FRR cleanly. Bypasses pfSense's rc.d/frr wrapper and watchfrr
 # entirely — both are broken on pfSense 2.8.1 (see UPSTREAM_FIXES.md
-# 2026-06-04 entries). Launches zebra and bgpd directly.
+# 2026-06-04 entries). Launches zebra unconditionally, then bgpd / ospfd
+# only when host_vars declares the corresponding protocol.
 - name: restart frr
   ansible.builtin.shell: |
     pkill -f watchfrr 2>/dev/null || true
     pkill -f bgpd 2>/dev/null || true
+    pkill -f ospfd 2>/dev/null || true
     pkill -f zebra 2>/dev/null || true
     rm -f /var/run/frr/*.pid
     sleep 1
     /usr/local/sbin/zebra -d -A 127.0.0.1 -s 90000000 -f /var/etc/frr/frr.conf
     sleep 1
-    /usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
+    {% if pfsense_bgp is defined %}/usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf{% endif %}
+    {% if pfsense_ospf is defined %}/usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf{% endif %}
