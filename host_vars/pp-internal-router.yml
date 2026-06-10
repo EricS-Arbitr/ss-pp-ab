@@ -31,9 +31,21 @@ static_route:
   route: "0.0.0.0/0"
   next_hop: "172.16.0.25"             # pp-internal-firewall (vmx1 INTERNAL on 172.16.0.24/30)
 
-# pp-ot-firewall (pfSense 2.8.1) now runs FRR/BGP and redistributes its
-# OT static routes into iBGP, so the 192.168.0.0/16 back-stop static is
-# no longer needed — iBGP delivers the OT prefixes here directly.
+# pp-ot-firewall (pfSense 2.8.1) runs FRR/BGP. iBGP delivers its connected
+# subnets (172.16.0.48/30, 192.168.200.200/30, 192.168.90.128/27 OT_DMZ)
+# but NOT the OT /24-/27s behind pp-ot-router (192.168.95.0/24,
+# 192.168.90.0/27, 192.168.90.96/27). Those exist as pfSense-side static
+# routes — kernel routes added by pfSense's routing system, never picked
+# up by FRR's `redistribute static` (which only catches FRR's own
+# `ip route` entries from frr.conf).
+#
+# Without this back-stop, OT-bound traffic loops between pp-internal-router
+# (default → pp-internal-firewall) and pp-internal-firewall (192.168.0.0/16
+# → pp-internal-router) until TTL exhaustion.
+extra_static_routes:
+  - network: "192.168.0.0/16"
+    next_hop: "172.16.0.50"           # pp-ot-firewall (pfSense)
+    descr: "OT umbrella via pp-ot-firewall (FRR redistribute-static gap)"
 
 # SimSpace's VyOS image bakes `0.0.0.0/0 next-hop 172.16.9.1` (this router's
 # own pp-security gateway IP). Two competing equal-cost defaults caused FRR
