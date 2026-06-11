@@ -1,0 +1,20 @@
+ansible_host: 10.255.240.203
+# Third domain controller (additional DC, like pp-dc02). Lives in the OT
+# subnet 192.168.100.0/24 behind pp-ot-router, on the OT side of the ESP
+# boundary. AD replication crosses the ESP via the corp path:
+#   pp-dc03 → pp-ot-router → pp-ot-firewall → pp-internal-router → corp
+# pp-dc03 is the primary DNS for pp-dcs-ctrl and pp-ctl-wks-01..04 on
+# the same OT subnet, with pp-dc01 (172.16.2.7) as the cross-ESP fallback.
+network_interfaces:
+  - name: "Ethernet0"
+    ipv4:
+      address: "10.255.240.203"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "Ethernet1"
+    ipv4:
+      address: "192.168.100.5"
+      netmask: "255.255.255.0"
+      gateway: "192.168.100.1"
+    dns:
+      - "172.16.2.7"

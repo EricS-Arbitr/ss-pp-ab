@@ -39,11 +39,20 @@ pp-is-wkstn-2
 pp-is-wkstn-3
 pp-is-wkstn-4
 
+# OT control workstations — live on the new 192.168.100.0/24 OT subnet,
+# domain-joined, use pp-dc03 (192.168.100.5) as primary DNS.
+[ot_control]
+pp-ctl-wks-01
+pp-ctl-wks-02
+pp-ctl-wks-03
+pp-ctl-wks-04
+
 [workstations:children]
 business_processing
 engineering
 legal_staff
 infosec
+ot_control
 
 # ------------------------------------------------------------
 # Corporate Servers
@@ -51,18 +60,25 @@ infosec
 [domain_controllers]
 pp-dc01
 pp-dc02
+pp-dc03
 
 [pdc]
 pp-dc01
 
 [additional_dc]
 pp-dc02
+pp-dc03
 
 [corporate_servers]
 pp-file
 pp-mail
 pp-sql
 pp-syslog
+
+# OT-side servers — on the 192.168.100.0/24 OT subnet behind pp-ot-router.
+# Domain-joined; auth/DNS goes to pp-dc03 (local OT DC) with pp-dc01 fallback.
+[ot_servers]
+pp-dcs-ctrl
 
 [file]
 pp-file
@@ -98,11 +114,17 @@ pp-is-wkstn-4
 pp-file
 pp-mail
 pp-sql
+pp-dcs-ctrl
+pp-ctl-wks-01
+pp-ctl-wks-02
+pp-ctl-wks-03
+pp-ctl-wks-04
 
 [voltgrid:children]
 workstations
 domain_controllers
 corporate_servers
+ot_servers
 
 # ------------------------------------------------------------
 # OT — new gas-turbine simulation hosts (hard-coded, no mgmt interface)
@@ -131,6 +153,7 @@ pp-www
 [servers:children]
 domain_controllers
 corporate_servers
+ot_servers
 
 # ------------------------------------------------------------
 # Windows OS groups
@@ -151,6 +174,10 @@ pp-ls-wkstn-4
 pp-ls-wkstn-5
 pp-ls-wkstn-6
 pp-is-wkstn-1
+pp-ctl-wks-01
+pp-ctl-wks-02
+pp-ctl-wks-03
+pp-ctl-wks-04
 win-hunt-1
 
 [win11]
@@ -171,11 +198,13 @@ pp-dc01
 pp-dc02
 pp-file
 pp-sql
+pp-dcs-ctrl
 
 [winserver2019]
 pp-dmz-dns
 pp-mail
 pp-dmz-smtp
+pp-dc03
 
 [windows:children]
 win10
@@ -305,10 +334,16 @@ pp-is-wkstn-1
 pp-is-wkstn-2
 pp-is-wkstn-3
 pp-is-wkstn-4
+pp-ctl-wks-01
+pp-ctl-wks-02
+pp-ctl-wks-03
+pp-ctl-wks-04
 
 [ae]
 pp-dc01
 pp-dc02
+pp-dc03
 pp-file
 pp-sql
 pp-mail
+pp-dcs-ctrl

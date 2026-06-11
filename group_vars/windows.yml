@@ -19,7 +19,10 @@ splunk_forwarder_win_dir: "C:\\Program Files\\SplunkUniversalForwarder"
 range_agent_bootstrap: range-agent-bootstrap-x64.msi
 range_agent_bootstrap_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/range-agent-bootstrap/{{ range_agent_bootstrap }}"
 
-# AUE agent (used by aue_agent role on [aue]/[ae] hosts)
+# AUE agent (used by aue_agent role on [aue]/[ae] hosts).
+# Both `ng_raw/installers/...` and `ng_raw/ng_raw/installers/...` resolve
+# to 200 (verified 2026-06-11 via curl through corp proxy). We use the
+# single-segment form for clarity — the canonical Nexus URL pattern.
 aue_agent: aue-agent-latest-setup-x86_64.exe
 aue_agent_installer: "https://nexus.dev.ng.simspace.lan/repository/ng_raw/installers/aue-agent/{{ aue_agent }}"
 

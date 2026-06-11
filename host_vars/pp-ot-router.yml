@@ -29,6 +29,12 @@ network_interfaces:
       netmask: "255.255.255.224"
       type: "ethernet"
       ospf: true
+  - name: "eth4"                      # 192.168.100.0/24 OT subnet — pp-dc03,
+    ipv4:                             # pp-dcs-ctrl, pp-ctl-wks-01..04 live here.
+      address: "192.168.100.1"        # Documentation only — pp-ot-router is in
+      netmask: "255.255.255.0"        # [vyos_routes_only], the vyos role does
+      type: "ethernet"                # not run on it; SimSpace platform configures
+      ospf: true                      # the interface from the layout YAML directly.
 
 # pp-ot-firewall was migrated from VyOS to pfSense (static routing only),
 # so the BGP peering through it is gone. Replaced with a static default

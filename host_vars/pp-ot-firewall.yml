@@ -74,6 +74,9 @@ pfsense_routes:
   - network: "192.168.90.96/27"
     gateway: "GW_OT_ROUTER"
     descr: "OT PP-OT-Services via pp-ot-router"
+  - network: "192.168.100.0/24"
+    gateway: "GW_OT_ROUTER"
+    descr: "OT control subnet (pp-dc03 + pp-dcs-ctrl + pp-ctl-wks-01..04) via pp-ot-router"
 
 pfsense_rules:
   - name: "Allow any on WAN_INTERNAL (lab)"

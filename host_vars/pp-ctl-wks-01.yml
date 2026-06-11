@@ -1,0 +1,18 @@
+ansible_host: 10.255.240.205
+# OT control workstation 01 (RDP_Windows_10:1.1.2). Domain-joined member
+# of voltgrid.com; primary DNS = pp-dc03 (192.168.100.5, same OT subnet),
+# secondary = pp-dc01 (172.16.2.7, cross-ESP fallback).
+network_interfaces:
+  - name: "Ethernet0"
+    ipv4:
+      address: "10.255.240.205"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "Ethernet1"
+    ipv4:
+      address: "192.168.100.101"
+      netmask: "255.255.255.0"
+      gateway: "192.168.100.1"
+    dns:
+      - "192.168.100.5"
+      - "172.16.2.7"
