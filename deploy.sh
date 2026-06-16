@@ -9,6 +9,8 @@ MAX_ATTEMPTS=3
 # pfSense play. Pulled through the corp proxy because the Ansible VM doesn't
 # have direct internet. Failure here doesn't abort the deploy — ansible-playbook
 # will surface a clear "collection not found" error if anything's actually missing.
+sleep 120 && echo "=== Checking for Ansible Galaxy collections ===" && \
+
 if [ -f requirements.yml ]; then
 	echo "=== Installing/refreshing Ansible Galaxy collections ==="
 	HTTPS_PROXY="http://10.255.240.1:3128" \
