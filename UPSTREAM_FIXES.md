@@ -722,6 +722,45 @@ The customer `vyos` role already supports OSPF (per-interface `ospf: true` flag)
 
 ---
 
+## 2026-06-16 · platform · SimSpace pfSense image — management vNIC provisioned outside VMware MAC pool, lands on infrastructure network instead of range mgmt
+
+The SimSpace `RC_pfSense:1.0.0` image provisions the **management vNIC** (vmx0) through a different platform code path than the data-plane vNICs (vmx1+). The management vNIC ends up with:
+
+- A **locally-administered MAC** in the `02:00:00:00:00:XX` range (sequentially allocated per VM — observed `:21`, `:26`, `:34` across pp-external-firewall, pp-internal-firewall, pp-ot-firewall in a single range deploy) instead of a MAC from VMware's `00:50:56:` OUI pool.
+- Attached to what appears to be **SimSpace's internal infrastructure network** (DHCP lease from `10.41.241.0/24`, immediately withdrawn) instead of the range's documented mgmt vSwitch on `10.255.240.0/20`.
+- Lease withdrawal causes `dhclient` to exit, leaving vmx0 with only an IPv6 link-local.
+
+The three data-plane vNICs on each VM provision normally — proper `00:50:56:a8:XX:XX` VMware MACs, attached to the correct range vSwitches per the layout YAML's `networkInterfaces:` array. So the bug is narrowly scoped to the `managementInterface:` block handling.
+
+**Reproducibility**: 3-for-3 across a fresh range deploy of PowerPlant on `ARBITR_PP_1328.yml`. Other VM image families (VyOS, Windows, Linux) in the same range deploy normally — only `RC_pfSense:1.0.0` is affected.
+
+**Minimal reproducer (2026-06-16)**: a stripped-down test blueprint with 1 pfSense VM, 3 subnets, and 1 Ubuntu 22 workstation in each subnet — no Ansible, no post-deployment configuration, no `role:` hints on data-plane interfaces — reproduces the same `02:` MAC on the pfSense management vNIC. This removes the entire PowerPlant overlay (host_vars, playbook, role) as a variable. Bug is entirely platform-side in how SimSpace's provisioning handles the `managementInterface` block for VMs running the `RC_pfSense:1.0.0` image.
+
+**Symptom from the pfSense console**:
+```
+[2.8.1-RELEASE][root@pfSense.home.arpa]/root: sh -c 'ifconfig vmx0 | grep ether'
+        ether 02:00:00:00:00:21
+[2.8.1-RELEASE][root@pfSense.home.arpa]/root: sh -c 'dhclient -d vmx0'
+DHCPDISCOVER on vmx0 ...
+DHCPDISCOVER on vmx0 ... interval 17
+My address (10.41.241.169) was re-added
+My address (10.41.241.169) was deleted, dhclient exiting
+```
+
+Hostname stays at factory `pfSense.home.arpa` because the platform's hostname-via-DHCP-option-12 flow also depends on the mgmt vSwitch attachment.
+
+**Fix (upstream)**: SimSpace platform team needs to investigate the pfSense image's provisioning code path. The data-plane vNIC attach/MAC-allocate logic works fine; mimic it for the mgmt vNIC. Best repro evidence to file with the ticket: the 3-MAC sequential pattern (`02:00:00:00:00:21/26/34`) shows the allocation is deterministic, not random — which should be a clear pointer for the platform engineer.
+
+**Workaround in PowerPlant overlay**: none currently feasible. Without a working mgmt vSwitch attachment, the Ansible host (which sits on `10.255.240.152` mgmt subnet) cannot SSH to the pfSense VMs. Options if SimSpace fix is delayed:
+
+1. **Re-target Ansible through a data-plane SSH jump**: install a jump-host config so SSH to pfSense routes through `pp-www` (which has DMZ-side reach to pp-external-firewall via 172.16.8.x) and through `pp-internal-router` (which has INTERNAL transit reach to pp-internal-firewall via 172.16.0.26 ↔ 172.16.0.25). Brittle and hacky; only worth it for a long platform-fix wait.
+2. **Bypass SimSpace YAML's `managementInterface` block**: define mgmt as just another `networkInterfaces:` entry (so it's allocated through the working data-plane code path). The `managementInterface.position` semantics may break, but the vNIC would attach to the right vSwitch.
+3. **Wait for the platform fix** — preferred, since options 1 and 2 each introduce other maintenance burden.
+
+Affects every deploy of this range until SimSpace patches their image-handling code.
+
+---
+
 ## 2026-04-17 · enhancement · deploy.sh
 
 Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.
