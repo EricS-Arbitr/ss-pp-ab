@@ -290,7 +290,6 @@ pp-ot-router
 [infrastructure]
 ansible
 is-inet
-elgg
 Red-1
 Activity-Emulation
 
