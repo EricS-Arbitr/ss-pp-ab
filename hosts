@@ -122,6 +122,16 @@ pp-is-wkstn-3
 pp-is-wkstn-4
 pp-file
 pp-mail
+# OT-side domain members (blueprint 145). Per host_vars comments each of
+# these is a "Domain-joined member of voltgrid.com" whose primary DNS is
+# pp-dc03 (the OT-side additional DC at 192.168.100.5) with pp-dc01 as
+# the cross-ESP fallback. Missing from [members] was the reason
+# --tags domain_member_retry never fired against them post-blueprint-145.
+pp-dcs-ctrl
+pp-ctl-wks-01
+pp-ctl-wks-02
+pp-ctl-wks-03
+pp-ctl-wks-04
 pp-sql
 pp-dcs-ctrl
 pp-ctl-wks-01
