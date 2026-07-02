@@ -83,6 +83,15 @@ pp-dcs-ctrl
 [file]
 pp-file
 
+[global_dns]
+is-inet
+
+[trafficgen]
+is-inet
+
+[email]
+is-inet
+
 # Windows hosts that join the voltgrid.com domain
 [members]
 pp-bp-wkstn-1
@@ -223,6 +232,7 @@ pp-splunk
 
 [linux:children]
 ubuntu22
+email
 
 # ------------------------------------------------------------
 # Security / hunt network (pp-security subnet)

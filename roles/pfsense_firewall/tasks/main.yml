@@ -189,6 +189,63 @@
     gateway: "{{ item.gateway }}"
   loop: "{{ pfsense_routes | default([]) }}"
 
+# Inbound NAT port-forwards. pfsensible.core 0.7.x doesn't expose pfSense's
+# `<nat><rule>` config, so we drive it directly through the config.xml
+# schema via `php -r`, matching the escape-hatch pattern used for
+# defaultgw4 / outbound NAT / FRR / syslog elsewhere in this role.
+#
+# Host var: pfsense_nat_rules — list of dicts, each:
+#   descr             (required, used as idempotency key)
+#   interface_descr   (required, matches pfsense_interfaces[].descr)
+#   protocol          (default 'tcp')
+#   destination_port  (required)
+#   target            (required, DNAT redirect IP)
+#   local_port        (default = destination_port)
+#   associated_rule   (default 'pass' — auto-creates matching filter rule)
+- name: Configure pfSense NAT port forwards
+  ansible.builtin.shell: |
+    php -r 'require_once("/etc/inc/config.inc");
+            require_once("/etc/inc/filter.inc");
+            $rules = json_decode(getenv("PFS_NAT_RULES"), true);
+            if (empty($rules)) { echo "OK: no NAT port-forwards defined\n"; exit; }
+            $iface_keys = [];
+            foreach (config_get_path("interfaces", []) as $key => $cfg) {
+              $iface_keys[$cfg["descr"] ?? ""] = $key;
+            }
+            $existing = config_get_path("nat/rule", []);
+            $existing_descrs = array_column($existing, "descr");
+            $added = [];
+            foreach ($rules as $r) {
+              if (in_array($r["descr"], $existing_descrs, true)) continue;
+              $ikey = $iface_keys[$r["interface_descr"]] ?? "";
+              if (!$ikey) { echo "SKIP: no interface for descr=" . $r["interface_descr"] . "\n"; continue; }
+              $existing[] = [
+                "interface" => $ikey,
+                "protocol" => $r["protocol"] ?? "tcp",
+                "source" => ["any" => ""],
+                "destination" => ["network" => $ikey . "ip"],
+                "destination-port" => strval($r["destination_port"]),
+                "target" => $r["target"],
+                "local-port" => strval($r["local_port"] ?? $r["destination_port"]),
+                "descr" => $r["descr"],
+                "associated-rule-id" => $r["associated_rule"] ?? "pass",
+              ];
+              $added[] = $r["descr"];
+            }
+            if (count($added) > 0) {
+              config_set_path("nat/rule", $existing);
+              write_config("Add NAT port forwards: " . implode(", ", $added));
+              filter_configure();
+              echo "CHANGED: added=" . implode(",", $added) . "\n";
+            } else {
+              echo "OK: all declared NAT port-forwards already present\n";
+            }'
+  environment:
+    PFS_NAT_RULES: "{{ pfsense_nat_rules | default([]) | to_json }}"
+  register: pfsense_natfw
+  changed_when: "'CHANGED' in pfsense_natfw.stdout"
+  when: pfsense_nat_rules is defined and (pfsense_nat_rules | length) > 0
+
 # Lab-mode firewall: permit any-any on each named interface. Tighten by
 # overriding `pfsense_rules` in host_vars later if you want per-rule control.
 - name: Configure pfSense firewall rules (permit-any lab mode)

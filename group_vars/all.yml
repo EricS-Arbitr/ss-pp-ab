@@ -37,3 +37,59 @@ indices:
   - name: "netfw"         # Currently unused; reserved for pfsense/vyatta syslog when wired up
   - name: "proxy"         # Currently unused; Squid goes to "linux" via forwarder template
   - name: "mail"          # Currently unused; reserved for Exchange when wired up
+
+
+
+# --- Email service (is-inet Postfix/Dovecot/webmail via `email` role) ------
+# Multi-domain mail stack on is-inet. Each entry drives cert generation,
+# Postfix config, Dovecot SSL blocks, and a webmail config. Mailboxes are
+# provisioned from each domain's `DomainUsers` list (group_vars/voltgrid.yml
+# for mail.voltgrid.com; mail.outlook.com is served by is-inet's image
+# defaults, no mailboxes needed for scenario traffic).
+email_domains:
+  - name: "mail.voltgrid.com"
+  - name: "mail.outlook.com"
+
+# --- Simulated public DNS on is-inet (populated by `global_dns` role) -----
+# Every record's `value` must be an IP that traffic can actually reach:
+#   - www / billing.voltgrid.com  → pp-external-firewall WAN (75.21.1.1)
+#     NAT'd inbound to pp-www (172.16.8.5) — see pp-external-firewall
+#     host_vars pfsense_nat_rules
+#   - mail.voltgrid.com           → is-inet's primary interface (200.200.200.2)
+#     where Postfix/Dovecot listens
+#   - mail.outlook.com            → 52.96.223.2, a lo alias is-inet claims
+#     for the Microsoft-owned range (per range-dev convention)
+#
+# Anything pointing at 200.200.200.1 would land on pp-isp-router (a VyOS
+# BGP router with no web/mail services) and time out — that value used to
+# be here and is intentionally corrected.
+global_dns_records:
+  # --- voltgrid.com public web (NAT-reflected through pp-external-firewall) ---
+  - name: "www"
+    type: "A"
+    value: "75.21.1.1"
+    zone: "voltgrid.com"
+  - name: "billing"
+    type: "A"
+    value: "75.21.1.1"
+    zone: "voltgrid.com"
+
+  # --- voltgrid.com mail (served by is-inet's Postfix on 200.200.200.2) ---
+  - name: "mail"
+    type: "A"
+    value: "200.200.200.2"
+    zone: "voltgrid.com"
+  - type: "MX"
+    priority: 10
+    value: "mail.voltgrid.com"
+    zone: "voltgrid.com"
+
+  # --- Outlook.com (real MSFT IP that is-inet claims as a lo alias) ---
+  - name: "mail"
+    type: "A"
+    value: "52.96.223.2"
+    zone: "outlook.com"
+  - type: "MX"
+    priority: 10
+    value: "mail.outlook.com"
+    zone: "outlook.com"

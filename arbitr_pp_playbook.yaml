@@ -584,6 +584,26 @@
   tags:
     - global_dns
 
+# is-inet's Postfix + Dovecot + webmail stack. Deployed as a docker-compose
+# service under /opt/email/ by the customer `email` role from
+# range-development-ansible. Multi-domain: driven by `email_domains` in
+# group_vars/all.yml (mail.voltgrid.com + mail.outlook.com today). Mailboxes
+# are seeded per-domain from that domain's `DomainUsers` list. Certs are
+# signed by the range root CA bundled in the role's files/.
+#
+# Runs after global_dns so the domain names resolve before the mail stack
+# tries to bring itself up (Postfix's smtpd_helo checks fire against the
+# domain's own MX record on startup).
+- name: email — is-inet Postfix + Dovecot + webmail
+  hosts: is-inet
+  gather_facts: true
+  become: true
+  roles:
+    - email
+  tags:
+    - email
+    - is-inet
+
 # Central syslog collector. pp-syslog runs rsyslog listening on UDP+TCP
 # 514 and writes per-host files at /var/log/remote/<hostname>/syslog.log.
 # Splunk UF on the same host (deployed by the splunk-forwarder play below)

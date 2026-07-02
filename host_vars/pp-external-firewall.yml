@@ -106,3 +106,33 @@ pfsense_bgp:
     - peer_ip: "75.21.1.2"
       remote_as: 65002
       description: "pp-isp-router (eBGP edge — only BGP session in the fabric)"
+
+# --- Inbound NAT port-forwards ------------------------------------------
+# Public-facing HTTP/HTTPS for voltgrid.com properties land on this box's
+# WAN interface (75.21.1.1) and DNAT to pp-www (172.16.8.5) in the DMZ.
+# pp-www's host nginx (installed by the billing_site role) then vhost-routes:
+#   www.voltgrid.com     -> 127.0.0.1:8080 (WordPress container from wordpress-pv)
+#   billing.voltgrid.com -> 127.0.0.1:5000 (Flask + gunicorn from billing_site)
+# So both public names arrive at 75.21.1.1 → 172.16.8.5 and get sorted out
+# by the Host header at nginx.
+#
+# global_dns_records in group_vars/all.yml points www.voltgrid.com and
+# billing.voltgrid.com at 75.21.1.1 so external clients can resolve them.
+#
+# associated_rule: pass tells pfSense to auto-create the matching filter
+# rule on WAN_ISP so the DNATted traffic isn't blocked by default-deny.
+pfsense_nat_rules:
+  - descr: "HTTP  → pp-www (voltgrid.com public web + billing)"
+    interface_descr: "WAN_ISP"
+    protocol: "tcp"
+    destination_port: 80
+    target: "172.16.8.5"
+    local_port: 80
+    associated_rule: "pass"
+  - descr: "HTTPS → pp-www (voltgrid.com public web + billing)"
+    interface_descr: "WAN_ISP"
+    protocol: "tcp"
+    destination_port: 443
+    target: "172.16.8.5"
+    local_port: 443
+    associated_rule: "pass"
