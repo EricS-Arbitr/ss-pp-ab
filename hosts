@@ -129,6 +129,17 @@ pp-ctl-wks-02
 pp-ctl-wks-03
 pp-ctl-wks-04
 
+# is-inet is added as a direct member (NOT via :children) so it inherits
+# `DomainUsers` from group_vars/voltgrid.yml -- the `email` role loops
+# that list to provision mailboxes at mail.voltgrid.com. Matches how
+# range-development-ansible puts is-inet directly in [site] for the same
+# reason. is-inet still stays out of [windows]/[linux] baseline groups
+# (per CLAUDE.md), so common role doesn't run against it. The other
+# voltgrid.yml vars (domain_name, proxy_server, etc.) are harmless on
+# is-inet -- no play targeting is-inet consumes them.
+[voltgrid]
+is-inet
+
 [voltgrid:children]
 workstations
 domain_controllers
