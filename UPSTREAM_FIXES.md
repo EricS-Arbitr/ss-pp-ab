@@ -9,6 +9,29 @@ Severity key:
 
 ---
 
+## 2026-07-02 · bug · roles/pfsense_firewall/handlers/main.yml — FRR handler smushes bgpd/ospfd launches
+
+**Symptom.** On a fresh-range deploy the pfsense_firewall role's `restart frr` handler fails on any pfSense host that defines BOTH `pfsense_bgp` and `pfsense_ospf` in host_vars (currently `pp-external-firewall`). stderr from the handler shell:
+```
+-A option specified more than once!
+Invalid options.
+Usage: bgpd [OPTION...]
+```
+FRR never comes up → OSPF adjacencies never form → pp-external-firewall doesn't advertise the WAN default via OSPF → corp side loses upstream + DNS forwarders → domain joins fail on `pp-ctl-wks-*` and `pp-dcs-ctrl` + additional DC promotion fails on `pp-dc03` → the whole deploy cascades.
+
+**Root cause.** The handler had the two conditional launch lines inlined:
+```
+{% if pfsense_bgp is defined %}/usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf{% endif %}
+{% if pfsense_ospf is defined %}/usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf{% endif %}
+```
+Jinja's `trim_blocks` (default in Ansible) strips the newline after the `{% endif %}` on the first line. The bgpd and ospfd invocations end up concatenated on a single shell line: `/usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf/usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf`. bgpd sees two `-A 127.0.0.1` args (one from its own line, one from the smushed ospfd line) and rejects them as "specified more than once".
+
+**Fix (overlay).** Put each `{% if %}`, the launch command, and `{% endif %}` on their own line so `trim_blocks` only eats the newlines around the block tags and leaves the command's terminating newline intact. Same fix landed on 2026-06-25 in the mirror airfield-range repo — this repo missed it since they're separate git repos.
+
+**Fix (upstream).** File issue against range-development-ansible with the same patch. The handler template pattern is used in other roles too and should get a consistent trim_blocks-safe convention (each Jinja block tag on its own line).
+
+---
+
 ## 2026-04-17 · bug · roles/common/tasks/windows.yml
 
 Typo: line 56 has `Ehternet0` instead of `Ethernet0` in the "Disable control net DNS registration" loop.

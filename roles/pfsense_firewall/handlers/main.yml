@@ -13,5 +13,9 @@
     sleep 1
     /usr/local/sbin/zebra -d -A 127.0.0.1 -s 90000000 -f /var/etc/frr/frr.conf
     sleep 1
-    {% if pfsense_bgp is defined %}/usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf{% endif %}
-    {% if pfsense_ospf is defined %}/usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf{% endif %}
+    {% if pfsense_bgp is defined %}
+    /usr/local/sbin/bgpd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
+    {% endif %}
+    {% if pfsense_ospf is defined %}
+    /usr/local/sbin/ospfd -d -A 127.0.0.1 -f /var/etc/frr/frr.conf
+    {% endif %}
