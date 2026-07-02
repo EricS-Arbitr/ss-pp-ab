@@ -259,6 +259,85 @@
     - vyos
     - remove_vyos_bgp
 
+# =============================================================================
+# Range-wide IPv6 disable
+# =============================================================================
+# Windows is already covered by the customer `common` role (sets HKLM
+# Tcpip6\Parameters\DisabledComponents=0xFF via DSC). pfSense is covered
+# by the pfsense_firewall role (config.xml <ipv6allow> removed, sysctl
+# net.inet6.ip6.auto_linklocal=0, existing fe80:: addrs deleted). Linux
+# and VyOS have no baseline handling and are covered by these two plays.
+
+- name: Disable IPv6 — Linux
+  hosts: linux
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Drop /etc/sysctl.d/99-disable-ipv6.conf
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-disable-ipv6.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Managed by Ansible (arbitr_pp_playbook.yaml). Range-wide IPv6
+          # disable -- no IPv6 anywhere on any Linux host in this range.
+          net.ipv6.conf.all.disable_ipv6 = 1
+          net.ipv6.conf.default.disable_ipv6 = 1
+          net.ipv6.conf.lo.disable_ipv6 = 1
+      register: sysctl_v6
+
+    - name: Apply sysctl immediately (no reboot)
+      ansible.builtin.command: sysctl --system
+      when: sysctl_v6.changed
+      changed_when: false
+  tags:
+    - ipv6
+    - disable_ipv6
+
+# `set system ipv6 disable` toggles the kernel flag but existing IPv6
+# sessions/interfaces stay up until reboot. Reboot is required for a
+# fully-clean IPv4-only state. `wait_for` polls the mgmt SSH port from
+# the controller so the deploy resumes cleanly after the box comes back.
+- name: Disable IPv6 — VyOS
+  hosts: vyos:vyos_routes_only
+  gather_facts: false
+  tasks:
+    - name: Disable IPv6 stack + forwarding via vyos_config
+      vyos.vyos.vyos_config:
+        lines:
+          - "set system ipv6 disable"
+          - "set system ipv6 disable-forwarding"
+        save: true
+      register: vyos_v6
+
+    - name: Trigger reboot on VyOS
+      vyos.vyos.vyos_command:
+        commands:
+          - command: "reboot now"
+            prompt: "Are you sure you want to reboot"
+            answer: "y"
+      when: vyos_v6.changed
+      ignore_errors: true       # SSH drops mid-command; expected
+
+    - name: Wait for VyOS SSH to come back
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        delay: 30
+        timeout: 300
+      delegate_to: localhost
+      when: vyos_v6.changed
+
+    # meta: reset_connection ignores `when:` per Ansible docs -- always
+    # run it. Harmless if the box didn't reboot (just re-opens the
+    # network_cli session for the next play).
+    - name: Reset ansible connection so subsequent plays reconnect fresh
+      ansible.builtin.meta: reset_connection
+  tags:
+    - ipv6
+    - disable_ipv6
+
 - name: pfSense firewalls
   hosts: pfsense
   gather_facts: false
