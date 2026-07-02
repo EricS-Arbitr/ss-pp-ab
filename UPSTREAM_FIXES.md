@@ -32,6 +32,30 @@ Jinja's `trim_blocks` (default in Ansible) strips the newline after the `{% endi
 
 ---
 
+## 2026-07-02 · gap · roles/global_dns/templates/simspace_includes.conf.j2 — no zone-apex A record support
+
+**Symptom.** Cannot add a bare-domain A record to `global_dns_records` (e.g. `voltgrid.com A 200.200.200.2`) because the base template unconditionally concatenates `record.name + "." + record.zone`, producing invalid `.voltgrid.com. A ...` output when name is empty or `@`.
+
+**Root cause.** All record-type branches in `simspace_includes.conf.j2` treat `record.name` as a mandatory subdomain label. There's no handling for the zone-apex case.
+
+**Impact.** Any range that wants "user@voltgrid.com" style webmail login can't easily do it — the `email` role uses `email_domains[].name` as (a) cert CN/SAN, (b) webmail login domain, and (c) `imap_host` inside the container. Setting that to `voltgrid.com` means the container has to resolve `voltgrid.com` to an IP where Dovecot listens (is-inet primary address). Without a zone-apex A record, resolution fails and webmail login errors with "Can't connect to server."
+
+**Fix (upstream).** Add zone-apex handling in the A-record block, e.g.:
+```jinja
+{% set _apex = (record.name | default('') in ['', '@']) %}
+{% if _apex %}
+local-data: "{{ record.zone | default(domain_name) }}. A {{ record.value }}"
+local-data-ptr: "{{ record.value }} {{ record.zone | default(domain_name) }}."
+{% else %}
+local-data: "{{ record.name }}.{{ record.zone | default(domain_name) }}. A {{ record.value }}"
+local-data-ptr: "{{ record.value }} {{ record.name }}.{{ record.zone | default(domain_name) }}."
+{% endif %}
+```
+
+**Fix (overlay).** Forked into `ss-pp-ab/roles/global_dns/` with the zone-apex patch above. Range's `global_dns_records` gains two apex entries: `voltgrid.com → 200.200.200.2` and `outlook.com → 52.96.223.2`. Then `email_domains` in group_vars/all.yml switches from `mail.<domain>` to bare `<domain>`, so the email role's generated ini/certs use bare-domain names and RainLoop login accepts `bob.burke@voltgrid.com`.
+
+---
+
 ## 2026-07-02 · platform · pfSense data-plane dhclient poisons zebra route installation
 
 **Symptom.** On fresh-range deploys, Windows hosts behind pp-ot-firewall (specifically pp-dc03, pp-ctl-wks-01..04, pp-dcs-ctrl — all on the new 192.168.100.0/24 OT subnet from blueprint 145) intermittently fail domain join with "The specified domain either does not exist or could not be contacted." Retry gets partial success (some hosts join on attempt 3, others still fail with different WinRM errors). Signature is flaky routing, not hard config break. pp-dc03 additional-DC promotion fails with "AD domain controller for voltgrid.com could not be contacted."

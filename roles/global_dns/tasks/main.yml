@@ -1,0 +1,9 @@
+---
+# This role supports the following unbound record types: A, AAAA, CNAME, DHCID, NS, PTR, SRV, TXT
+#
+- name: Generate unbound include file
+  template:
+    src: simspace_includes.conf.j2
+    dest: "/opt/simspace_includes/simspace_includes.conf"
+    mode: '0644'
+  notify: reload unbound

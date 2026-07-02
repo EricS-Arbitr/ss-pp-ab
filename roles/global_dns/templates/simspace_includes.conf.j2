@@ -1,0 +1,35 @@
+# Ansible managed - DNS records for unbound
+# Generated: {{ ansible_date_time.iso8601 }}
+#
+# ss-pp-ab overlay of range-development-ansible/roles/global_dns.
+# Delta from upstream: A-record block handles zone-apex records
+# (name: "" or "@") so we can point voltgrid.com and outlook.com
+# directly at is-inet for user@voltgrid.com webmail login.
+# See ss-pp-ab/UPSTREAM_FIXES.md 2026-07-02 entry.
+
+{% for record in global_dns_records %}
+{% if record.type|upper == 'A' %}
+{% set _apex = (record.name | default('') in ['', '@']) %}
+{% if _apex %}
+# A record for (zone apex) {{ record.zone | default(domain_name) }}
+local-data: "{{ record.zone | default(domain_name) }}. A {{ record.value }}"
+local-data-ptr: "{{ record.value }} {{ record.zone | default(domain_name) }}."
+{% else %}
+# A record for {{ record.name }}
+local-data: "{{ record.name }}.{{ record.zone | default(domain_name) }}. A {{ record.value }}"
+local-data-ptr: "{{ record.value }} {{ record.name }}.{{ record.zone | default(domain_name) }}."
+{% endif %}
+{% elif record.type|upper == 'CNAME' %}
+# CNAME record for {{ record.name }}
+local-data: "{{ record.name }}.{{ record.zone | default(domain_name) }}. CNAME {{ record.value }}{% if not record.value.endswith('.') %}.{% endif %}"
+{% elif record.type|upper == 'MX' %}
+# MX record for {{ record.zone | default(domain_name) }}
+local-data: "{{ record.zone | default(domain_name) }}. MX {{ record.priority | default(10) }} {{ record.value }}{% if not record.value.endswith('.') %}.{% endif %}"
+{% elif record.type|upper == 'PTR' %}
+# PTR record
+local-data: "{{ record.name }} PTR {{ record.value }}{% if not record.value.endswith('.') %}.{% endif %}"
+{% elif record.type|upper == 'NS' %}
+# NS record for {{ record.zone | default(domain_name) }}
+local-data: "{{ record.zone | default(domain_name) }}. NS {{ record.value }}{% if not record.value.endswith('.') %}.{% endif %}"
+{% endif %}
+{% endfor %}

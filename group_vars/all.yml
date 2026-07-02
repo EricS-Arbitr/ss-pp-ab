@@ -43,12 +43,24 @@ indices:
 # --- Email service (is-inet Postfix/Dovecot/webmail via `email` role) ------
 # Multi-domain mail stack on is-inet. Each entry drives cert generation,
 # Postfix config, Dovecot SSL blocks, and a webmail config. Mailboxes are
-# provisioned from each domain's `DomainUsers` list (group_vars/voltgrid.yml
-# for mail.voltgrid.com; mail.outlook.com is served by is-inet's image
-# defaults, no mailboxes needed for scenario traffic).
+# provisioned from each domain's `DomainUsers` list (group_vars/voltgrid.yml).
+#
+# Bare-domain naming (voltgrid.com, outlook.com) — NOT mail.<domain> — so
+# webmail login accepts `bob.burke@voltgrid.com` (which is what users
+# expect). The email role uses this same string as (a) the CN/SAN on the
+# generated TLS cert Dovecot presents, (b) the imap_host/smtp_host in the
+# webmail's domain ini file, and (c) the login domain the webmail form
+# matches against. Requires bare-domain A records under `global_dns_records`
+# below so the container's IMAP client can resolve `voltgrid.com` and
+# `outlook.com` to is-inet.
+#
+# Webmail UI is still accessed via the browser URL http://mail.outlook.com/
+# — the prebuilt email container image only has an httpd vhost for that
+# name. Login form accepts any configured email_domain regardless of which
+# URL you reached it on.
 email_domains:
-  - name: "mail.voltgrid.com"
-  - name: "mail.outlook.com"
+  - name: "voltgrid.com"
+  - name: "outlook.com"
 
 # --- Simulated public DNS on is-inet (populated by `global_dns` role) -----
 # Every record's `value` must be an IP that traffic can actually reach:
@@ -74,7 +86,16 @@ global_dns_records:
     value: "75.21.1.1"
     zone: "voltgrid.com"
 
-  # --- voltgrid.com mail (served by is-inet's Postfix on 200.200.200.2) ---
+  # --- voltgrid.com mail (bare-domain apex + traditional mail.* + MX) ---
+  # The bare apex (`voltgrid.com A 200.200.200.2`) is what makes
+  # `bob.burke@voltgrid.com` webmail login work -- the container's IMAP
+  # client resolves voltgrid.com to is-inet where Dovecot listens.
+  # The `mail.voltgrid.com` alias is kept so any downstream tooling that
+  # expects the traditional MX-target form still resolves.
+  - name: ""                              # zone apex A record (bare-domain)
+    type: "A"
+    value: "200.200.200.2"
+    zone: "voltgrid.com"
   - name: "mail"
     type: "A"
     value: "200.200.200.2"
@@ -85,6 +106,10 @@ global_dns_records:
     zone: "voltgrid.com"
 
   # --- Outlook.com (real MSFT IP that is-inet claims as a lo alias) ---
+  - name: ""                              # zone apex A record (bare-domain)
+    type: "A"
+    value: "52.96.223.2"
+    zone: "outlook.com"
   - name: "mail"
     type: "A"
     value: "52.96.223.2"
