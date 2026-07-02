@@ -17,12 +17,37 @@ RETRY_FILE="retry/$PLAYBOOK.retry"
 MAX_ATTEMPTS=3
 FORKS=40
 
+# --- Speed knobs -------------------------------------------------------------
+# Trims 5-10 minutes off a full-fleet run vs Ansible defaults.
+#   ANSIBLE_PIPELINING=True     — one SSH exec per task on Linux instead of
+#                                 three (open/exec/close). Safe on SimSpace
+#                                 images (requiretty is off by default).
+#                                 No effect on Windows/WinRM.
+#   ANSIBLE_GATHERING=smart     — Gather facts once per host per run; skip
+#                                 subsequent plays that also gather. Ansible
+#                                 remembers what it already gathered.
+#   ANSIBLE_CACHE_PLUGIN=jsonfile + fact_cache dir + 24h TTL — persist facts
+#                                 across runs, so back-to-back deploys don't
+#                                 re-gather on unchanged hosts.
+export ANSIBLE_PIPELINING=True
+export ANSIBLE_GATHERING=smart
+export ANSIBLE_CACHE_PLUGIN=jsonfile
+export ANSIBLE_CACHE_PLUGIN_CONNECTION="$HOME/.ansible/fact_cache"
+export ANSIBLE_CACHE_PLUGIN_TIMEOUT=86400
+mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
+
 # --- Install Galaxy collections (idempotent — skips already-installed ones) ---
 # Required for the pfsensible.core collection that drives the pp-ot-firewall
 # pfSense play. Pulled through the corp proxy because the Ansible VM doesn't
 # have direct internet. Failure here doesn't abort the deploy — ansible-playbook
 # will surface a clear "collection not found" error if anything's actually missing.
-sleep 120 && echo "=== Checking for Ansible Galaxy collections ===" && \
+#
+# NOTE: The historical `sleep 120` before this section was removed 2026-07-02
+# as part of the speed pass. It was a defensive delay to let fresh-provisioned
+# VMs finish booting before the deploy started, but the retry loop already
+# handles any "host unreachable" from a VM that isn't ready. On iterative
+# deploys the sleep is pure wasted wall clock.
+echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then
 	echo "=== Installing/refreshing Ansible Galaxy collections ==="

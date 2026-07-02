@@ -466,6 +466,7 @@
 - name: Strip APIPA
   hosts: members
   gather_facts: false
+  strategy: free                # per-host reg + netsh, no cross-host sync
   roles:
     - strip_apipa
   tags:
@@ -474,6 +475,7 @@
 - name: Join Domain
   hosts: members
   gather_facts: false
+  strategy: free                # each host joins + reboots independently
   roles:
     - domain_member_retry
   tags:
@@ -580,6 +582,7 @@
 - name: Install root certs
   hosts: windows
   gather_facts: false
+  strategy: free                # per-host cert store install, no cross-host sync
   roles:
     - root_certs
   tags:
@@ -588,6 +591,7 @@
 - name: Enable network discovery and suppress the Public/Private popup
   hosts: windows
   gather_facts: false
+  strategy: free                # per-host firewall + registry, no cross-host sync
   roles:
     - network_discovery
   tags:
@@ -596,6 +600,8 @@
 - name: apply AUE settings
   hosts: aue
   gather_facts: false
+  strategy: free                # each workstation reboots for chrome+sysmon
+                                # independently -- biggest wall-clock win here
   roles:
     - disable_uac
     - disable_firewall
@@ -620,6 +626,7 @@
 - name: apply AE settings
   hosts: ae
   gather_facts: false
+  strategy: free                # per-host agent + policy config, no cross-host sync
   roles:
     - disable_uac
     - disable_firewall
