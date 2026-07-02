@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated agent-team research output — unverified financial estimates, do not commit
+research/pitches/
+research/reviews/
+research/risk-review.md
+research/scored-list.md
+research/shared-notes.md
+research/data/
+
+# Keep the prompt itself under version control
+!research/investment-team-prompt.md
