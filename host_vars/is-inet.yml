@@ -1,4 +1,4 @@
-ansible_host: 10.255.240.108
+ansible_host: 10.255.240.136
 network_interfaces:
   - name: "Ethernet0"
     ipv4:

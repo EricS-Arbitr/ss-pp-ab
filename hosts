@@ -232,7 +232,6 @@ pp-splunk
 
 [linux:children]
 ubuntu22
-email
 
 # ------------------------------------------------------------
 # Security / hunt network (pp-security subnet)
@@ -308,6 +307,8 @@ pp-proxy
 
 # ------------------------------------------------------------
 # Unmanaged systems — hard-coded, NOT targeted by any Ansible play.
+# Contains specialized pre-built appliances (OT PLCs/HMIs + the elgg
+# social-platform vuln host) that self-configure from their images.
 # ------------------------------------------------------------
 [unmanaged]
 pp-gas-sim
@@ -315,6 +316,7 @@ pp-gasplant-plc
 pp-gasvibsens
 pp-ot-hist
 pp-engws
+elgg
 
 [aue]
 pp-bp-wkstn-1
