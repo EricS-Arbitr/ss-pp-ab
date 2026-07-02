@@ -387,9 +387,36 @@
   notify: restart frr
   when: pfsense_interfaces is defined and (pfsense_interfaces | length) > 0
 
+# SimSpace's pfSense image spawns dhclient on every vmxN data-plane
+# interface at boot even when config.xml declares them static. dhclient
+# transiently acquires leases (10.41.240.x, 192.168.1.x observed on
+# airfield-range) and zebra records them as connected routes during
+# startup, then silently refuses to install OSPF/BGP-learned routes via
+# those interfaces. End result: FRR RIB shows O>* / B>*, kernel FIB
+# doesn't have them, hosts behind the firewall can't reach their gateway
+# targets. Same failure mode observed on pp-external-firewall and
+# pp-internal-firewall breaking OT-side domain joins.
+#
+# Kill dhclient on every data-plane vmx BEFORE the FRR restart handler
+# fires (meta: flush_handlers below). vmx0 = mgmt (SimSpace-managed DHCP),
+# leave that alone. See airfield UPSTREAM_FIXES.md 2026-06-30 entry for
+# the full root-cause writeup.
+- name: Kill dhclient on data-plane interfaces (prevents zebra route-install poisoning)
+  # `command` (not shell) — airfield 2026-07-01 saw the multi-line shell
+  # variant get SIGTERM'd (rc=-15) when pfSense's watchfrr/sysrc supervisor
+  # cascaded a kill to adjacent shell descendants. Single atomic pkill has
+  # no such race. pkill rc=0 = killed something, rc=1 = idempotent no-op,
+  # rc>1 = error — failed_when:false absorbs both non-error cases.
+  ansible.builtin.command:
+    cmd: pkill -f 'dhclient.*vmx[1-9]'
+  register: pfsense_dhclient_kill
+  failed_when: false
+  changed_when: pfsense_dhclient_kill.rc == 0
+
 # Force handler flush so FRR is up by the end of the play rather than
 # waiting until after every subsequent task. Some plays in the playbook
-# (notably the syslog client) depend on routing being live.
+# (notably the syslog client) depend on routing being live. dhclient kill
+# above must precede this so zebra restarts with a clean interface state.
 - name: Flush FRR restart handler if pending
   ansible.builtin.meta: flush_handlers
 

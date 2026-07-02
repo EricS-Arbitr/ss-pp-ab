@@ -32,6 +32,20 @@ Jinja's `trim_blocks` (default in Ansible) strips the newline after the `{% endi
 
 ---
 
+## 2026-07-02 · platform · pfSense data-plane dhclient poisons zebra route installation
+
+**Symptom.** On fresh-range deploys, Windows hosts behind pp-ot-firewall (specifically pp-dc03, pp-ctl-wks-01..04, pp-dcs-ctrl — all on the new 192.168.100.0/24 OT subnet from blueprint 145) intermittently fail domain join with "The specified domain either does not exist or could not be contacted." Retry gets partial success (some hosts join on attempt 3, others still fail with different WinRM errors). Signature is flaky routing, not hard config break. pp-dc03 additional-DC promotion fails with "AD domain controller for voltgrid.com could not be contacted."
+
+**Root cause.** SimSpace's pfSense 2.8.1 image (`RC_pfSense:1.0.0`) auto-spawns `dhclient` on every `vmxN` data-plane interface at boot, regardless of whether config.xml declares the interface as `ipv4_type=static`. dhclient transiently acquires DHCP leases from SimSpace backend platform networks (10.41.240.x, 192.168.1.x observed) before pfSense's `interface_configure()` sets the intended static. Zebra reads the connected-route table during its startup and records those transient subnets as `C>*`. Zebra then silently refuses to install OSPF/BGP-learned routes via that interface — FRR RIB shows `O>*` / `B>*` (selected + installed marker), but `netstat -rn` doesn't have them and `route get` returns "not found." Full root-cause writeup in airfield-range's UPSTREAM_FIXES.md 2026-06-30 entry.
+
+**Fix (upstream).** SimSpace's pfSense image should either (a) set data-plane interfaces to `ipv4_type=staticv4` at the `rc.conf` level so dhclient never spawns on them, or (b) have pfSense's `interface_configure()` explicitly `pkill -f "dhclient.*<phys>"` when transitioning an interface from DHCP → static.
+
+**Fix (overlay).** `roles/pfsense_firewall/tasks/main.yml` gains a standalone `pkill -f 'dhclient.*vmx[1-9]'` task placed AFTER the post-flight interface rebind and BEFORE `meta: flush_handlers` (which triggers the `restart frr` handler). Net effect: when zebra restarts, dhclient is dead on every vmx1+ interface, connected-route view is clean, and OSPF/BGP route installation works. Kill uses `ansible.builtin.command` (not `shell`) — the multi-line shell variant was seen to get SIGTERM'd on pfSense 2.8.1 when watchfrr/sysrc cascaded a kill to adjacent shell descendants (see airfield UPSTREAM_FIXES.md 2026-07-01). `failed_when: false` absorbs pkill's rc=1 idempotent no-op.
+
+Same fix landed in airfield-range's `pfsense_firewall` role 2026-06-30 and permanently unblocked Eng+SOC domain joins there. Porting to ss-pp-ab because the failure signature on 192.168.100.0/24 (partial success on retry) matches airfield's exactly.
+
+---
+
 ## 2026-04-17 · bug · roles/common/tasks/windows.yml
 
 Typo: line 56 has `Ehternet0` instead of `Ethernet0` in the "Disable control net DNS registration" loop.
