@@ -1,4 +1,19 @@
 ansible_host: 10.255.240.136
+
+# is-inet is intentionally NOT in [linux] (per CLAUDE.md — specialized
+# pre-built appliance, common role would clobber its image-baked config).
+# But that also means group_vars/linux.yml's SSH creds don't inherit --
+# Ansible was defaulting to root@ with no password and failing with
+# "Permission denied (publickey,password)". The image ships the same
+# simspace:simspace1 account as other Ubuntu images, so mirror those
+# creds here so the email + global_dns plays can reach the box.
+ansible_connection: ssh
+ansible_user: simspace
+ansible_ssh_pass: simspace1
+ansible_become_method: sudo
+ansible_become_pass: simspace1
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
 network_interfaces:
   - name: "Ethernet0"
     ipv4:
