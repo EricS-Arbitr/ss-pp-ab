@@ -9,6 +9,32 @@ Severity key:
 
 ---
 
+## 2026-07-03 · gap · roles/domain_member_retry/tasks/main.yml — `pause` incompatible with `strategy: free`
+
+**Symptom.** With the Join Domain play set to `strategy: free` (added on 2026-07-02 as a wall-clock optimization for per-host reboots), the deploy fails immediately after the first host's "Check if already domain joined" task:
+```
+ERROR! The 'pause' module bypasses the host loop, which is currently not supported in the free strategy and would instead execute for every host in the inventory list.
+The offending line appears to be:
+    - name: Wait for network reconfiguration to complete
+```
+All 3 deploy.sh attempts fail identically before any host actually joins.
+
+**Root cause.** `domain_member_retry/tasks/main.yml:22` uses `ansible.builtin.pause` to wait for the post-join NIC flap to settle. Ansible's `free` strategy explicitly rejects `pause` because pause is a per-play blocker, not per-host — under free, it would either block all hosts (defeating the point) or fire N times per host (nonsense). Ansible chose to hard-fail the play rather than pick either behavior.
+
+**Fix (overlay).** Reverted `strategy: free` on just the Join Domain play in `arbitr_pp_playbook.yaml`. The other 5 plays that got `strategy: free` (strip_apipa, root_certs, network_discovery, AUE bundle, AE bundle) keep the speedup — none of them use `pause`.
+
+**Fix (upstream).** In `domain_member_retry/tasks/main.yml`, replace `pause: seconds: N` with a delegated `wait_for` on the local Ansible controller, e.g.:
+```yaml
+- name: Wait for network reconfiguration to complete
+  ansible.builtin.wait_for:
+    timeout: 30
+  delegate_to: localhost
+  become: false
+```
+`wait_for` (unlike `pause`) works under `strategy: free`. This would let the Join Domain play — the single slowest play in the deploy — parallelize like the others.
+
+---
+
 ## 2026-07-02 · bug · roles/pfsense_firewall/handlers/main.yml — FRR handler smushes bgpd/ospfd launches
 
 **Symptom.** On a fresh-range deploy the pfsense_firewall role's `restart frr` handler fails on any pfSense host that defines BOTH `pfsense_bgp` and `pfsense_ospf` in host_vars (currently `pp-external-firewall`). stderr from the handler shell:

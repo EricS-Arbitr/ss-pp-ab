@@ -475,7 +475,10 @@
 - name: Join Domain
   hosts: members
   gather_facts: false
-  strategy: free                # each host joins + reboots independently
+  # NOTE: cannot use `strategy: free` here -- role uses the `pause` module
+  # which bypasses the host loop and is unsupported under the free strategy.
+  # Domain join is one of the slowest plays; if wall-clock matters, convert
+  # `pause` in domain_member_retry to `wait_for` (delegated) as an overlay fix.
   roles:
     - domain_member_retry
   tags:
