@@ -489,14 +489,16 @@ check_pf_shell pp-proxy \
   "pp-proxy: listening on :3128 (squid HTTP proxy)"
 
 # is-inet global_dns via unbound -- query is-inet directly (via 8.8.8.8
-# lo alias) rather than through corp AD DNS. AD DNS is authoritative for
-# voltgrid.com locally and answers with internal IPs; the unbound records
-# are the *external-facing* view meant for hosts outside the range.
-# 8.8.8.8 is a lo alias on is-inet so this hits unbound directly.
+# lo alias) rather than through corp AD DNS. Uses mail.outlook.com --
+# an external-simulation record defined in group_vars/all.yml
+# global_dns_records that isn't covered by any Section 9 check. voltgrid.com
+# records also live in the include file but they're already tested in
+# Section 9. www.faa.gov (from the airfield-range aviation records) is
+# NOT defined for PowerPlant.
 check_pf_shell pp-syslog \
-  'r=$(nslookup www.faa.gov 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \
-  'OK_70\.39\.65\.10' \
-  "is-inet: unbound resolves www.faa.gov -> 70.39.65.10 (global_dns loaded)"
+  'r=$(nslookup mail.outlook.com 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'OK_52\.96\.223\.2' \
+  "is-inet: unbound resolves mail.outlook.com -> 52.96.223.2 (global_dns loaded)"
 
 # =========================================================================
 # 9. Public web (WordPress + billing) + email
