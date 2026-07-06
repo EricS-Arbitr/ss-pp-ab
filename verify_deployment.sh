@@ -126,60 +126,62 @@ probe_group windows          ansible.windows.win_ping ""          "Windows hosts
 probe_group email            ansible.builtin.shell    "echo ok"   "is-inet (email + global_dns)"
 
 # =========================================================================
-# 2. Network — routing convergence (iBGP AS 65001 + eBGP AS 65002)
+# 2. Network — routing convergence
+#
+# Current design (per host_vars — NOT the old iBGP-everywhere layout from
+# PROJECT_LOG.md Phase 1):
+#   - eBGP: pp-isp-router (AS 65002) <-> pp-external-firewall (AS 65001).
+#     ONE session, at the internet edge.
+#   - OSPF: pp-external-firewall <-> pp-internal-firewall. Corp routes
+#     flow up via OSPF; pp-external-fw does `redistribute_ospf` into eBGP
+#     so ISP-side learns the corp subnets.
+#   - STATIC everywhere else: pp-corp-router / pp-internal-router /
+#     site-edge-router carry `remove_vyos_bgp: true` (corp core = static).
+#     pp-ot-firewall runs neither BGP nor OSPF ("ESP boundary; default-
+#     deny, static-only" -- host_vars comment). pp-ot-router (routes-only
+#     appliance) is static-only too.
 # =========================================================================
 section "2. Network — routing convergence"
 
-# Every corp VyOS + pfSense should have a default route in the FIB.
-# pp-isp-router is the internet edge — its "default" is its own external
-# 200.200.200.2 next-hop out to is-inet, so skip the default-route check
-# there and check something else that proves it's routing.
+# Every corp VyOS should have a default route in the FIB (via static).
 for rtr in pp-internal-router site-edge-router pp-corp-router; do
   check_vyos "$rtr" \
     "show ip route 0.0.0.0/0" \
-    'static|S\\*|S>|B>|iBGP|bgp' \
-    "$rtr default route present in FIB"
+    'static|S\\*|S>' \
+    "$rtr default route present in FIB (static)"
 done
 
-# pp-isp-router eBGP -- when Established, FRR replaces the State column
-# with a numeric PfxRcd, so `Establ` never appears. Match on the Up/Down
-# HH:MM:SS uptime column instead, which only prints when the session has
-# been Established at least once. `never` there = never came up.
+# eBGP edge -- pp-isp-router <-> pp-external-firewall.
 check_vyos pp-isp-router \
   "show ip bgp summary" \
   'Establ|[0-9]+:[0-9]+:[0-9]+' \
   "pp-isp-router: eBGP session Established (peer pp-external-firewall)"
 
-# The routes-only appliance can still be queried for its static routes.
+check_pf_shell pp-external-firewall \
+  'vtysh -c "show ip bgp summary"' \
+  'Establ|[0-9]+:[0-9]+:[0-9]+' \
+  "pp-external-firewall: eBGP session Established (peer pp-isp-router)"
+
+# OSPF between the two firewalls -- feeds corp routes into eBGP via
+# pp-external-fw's `redistribute_ospf: true`. If OSPF is down, ISP side
+# loses everything behind pp-external-fw.
+for fw in pp-external-firewall pp-internal-firewall; do
+  check_pf_shell "$fw" \
+    'vtysh -c "show ip ospf neighbor"' \
+    'Full/' \
+    "$fw OSPF: at least one Full neighbor"
+done
+
+# Static-only appliances: prove they have a default route.
 check_vyos pp-ot-router \
   "show ip route static" \
   'S|static|0\.0\.0\.0|192\.168' \
   "pp-ot-router: static routes present"
 
-# pp-corp-router advertises the four corporate /24s into iBGP.
-check_vyos pp-corp-router \
-  "show ip bgp summary" \
-  'Establ|[0-9]+:[0-9]+:[0-9]+' \
-  "pp-corp-router: iBGP session Established (peer pp-internal-firewall)"
-
-# pp-internal-router is the iBGP hub -- expects Established sessions to
-# 3 peers (pp-internal-firewall + pp-corp-router + pp-ot-firewall).
-# Match on the "Total number of neighbors N" line in the summary output
-# with N >= 3. (Piping via `| match` in the vyos_command string breaks
-# quote parsing; grep locally instead.)
-check_vyos pp-internal-router \
-  "show ip bgp summary" \
-  'Total number of neighbors [3-9]' \
-  "pp-internal-router: >= 3 iBGP neighbors configured"
-
-# pfSense FRR-BGP convergence -- each firewall should have BGP peers
-# Established. `admin` user account on pfSense can run vtysh.
-for fw in pp-external-firewall pp-internal-firewall pp-ot-firewall; do
-  check_pf_shell "$fw" \
-    'vtysh -c "show ip bgp summary"' \
-    'Establ|\(Policy\)' \
-    "$fw BGP: at least one Established peer"
-done
+check_pf_shell pp-ot-firewall \
+  'netstat -rn -f inet | awk "/^default/ {print \$2; exit}"' \
+  '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' \
+  "pp-ot-firewall: default route in kernel FIB (static-only by design, no FRR)"
 
 # FRR-RIB vs kernel-FIB divergence check on pp-internal-firewall -- this
 # is the same failure class that hit airfield's bs-ops-fw (dhclient
