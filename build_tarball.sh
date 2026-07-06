@@ -196,6 +196,11 @@ cp    "$SS_PP_AB/hosts"                   "$STAGE/"
 cp    "$SS_PP_AB/arbitr_pp_playbook.yaml" "$STAGE/"
 cp    "$SS_PP_AB/deploy.sh"               "$STAGE/"
 chmod +x "$STAGE/deploy.sh"
+# Read-only post-deploy verification script (optional but very useful).
+if [ -f "$SS_PP_AB/verify_deployment.sh" ]; then
+  cp "$SS_PP_AB/verify_deployment.sh" "$STAGE/"
+  chmod +x "$STAGE/verify_deployment.sh"
+fi
 # Ansible Galaxy collection requirements (pfsensible.core etc.)
 if [ -f "$SS_PP_AB/requirements.yml" ]; then
   cp "$SS_PP_AB/requirements.yml" "$STAGE/"
@@ -220,6 +225,7 @@ fi
 
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh)
+[ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)
 tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
