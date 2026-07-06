@@ -178,9 +178,11 @@ check_vyos pp-ot-router \
   'S|static|0\.0\.0\.0|192\.168' \
   "pp-ot-router: static routes present"
 
+# Avoid awk-through-ansible quoting problems -- grep -c returns a plain
+# integer that survives --one-line's stdout joining cleanly.
 check_pf_shell pp-ot-firewall \
-  'netstat -rn -f inet | awk "/^default/ {print \$2; exit}"' \
-  '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' \
+  'c=$(netstat -rn -f inet | grep -c "^default"); [ "$c" -ge 1 ] && echo HAS_DEFAULT || echo NO_DEFAULT' \
+  'HAS_DEFAULT' \
   "pp-ot-firewall: default route in kernel FIB (static-only by design, no FRR)"
 
 # FRR-RIB vs kernel-FIB divergence check on pp-internal-firewall -- this
