@@ -180,8 +180,11 @@ check_vyos pp-ot-router \
 
 # Avoid awk-through-ansible quoting problems -- grep -c returns a plain
 # integer that survives --one-line's stdout joining cleanly.
+# pfSense/FreeBSD prints the default route as either `default` or `0.0.0.0`
+# in the Destination column depending on the netstat flavor/version. Match
+# both.
 check_pf_shell pp-ot-firewall \
-  'c=$(netstat -rn -f inet | grep -c "^default"); [ "$c" -ge 1 ] && echo HAS_DEFAULT || echo NO_DEFAULT' \
+  'c=$(netstat -rn -f inet | grep -cE "^(default|0\\.0\\.0\\.0)"); [ "$c" -ge 1 ] && echo HAS_DEFAULT || echo NO_DEFAULT' \
   'HAS_DEFAULT' \
   "pp-ot-firewall: default route in kernel FIB (static-only by design, no FRR)"
 
