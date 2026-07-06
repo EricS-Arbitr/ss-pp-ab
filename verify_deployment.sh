@@ -141,9 +141,13 @@ for rtr in pp-internal-router site-edge-router pp-corp-router; do
     "$rtr default route present in FIB"
 done
 
+# pp-isp-router eBGP -- when Established, FRR replaces the State column
+# with a numeric PfxRcd, so `Establ` never appears. Match on the Up/Down
+# HH:MM:SS uptime column instead, which only prints when the session has
+# been Established at least once. `never` there = never came up.
 check_vyos pp-isp-router \
   "show ip bgp summary" \
-  'Establ' \
+  'Establ|[0-9]+:[0-9]+:[0-9]+' \
   "pp-isp-router: eBGP session Established (peer pp-external-firewall)"
 
 # The routes-only appliance can still be queried for its static routes.
@@ -155,14 +159,17 @@ check_vyos pp-ot-router \
 # pp-corp-router advertises the four corporate /24s into iBGP.
 check_vyos pp-corp-router \
   "show ip bgp summary" \
-  'Establ' \
+  'Establ|[0-9]+:[0-9]+:[0-9]+' \
   "pp-corp-router: iBGP session Established (peer pp-internal-firewall)"
 
 # pp-internal-router is the iBGP hub -- expects Established sessions to
-# at least two peers (pp-internal-firewall + pp-corp-router + pp-ot-firewall).
+# 3 peers (pp-internal-firewall + pp-corp-router + pp-ot-firewall).
+# Match on the "Total number of neighbors N" line in the summary output
+# with N >= 3. (Piping via `| match` in the vyos_command string breaks
+# quote parsing; grep locally instead.)
 check_vyos pp-internal-router \
-  'show ip bgp summary | match "Total number of neighbors"' \
-  '[3-9]' \
+  "show ip bgp summary" \
+  'Total number of neighbors [3-9]' \
   "pp-internal-router: >= 3 iBGP neighbors configured"
 
 # pfSense FRR-BGP convergence -- each firewall should have BGP peers
@@ -269,10 +276,12 @@ done
 
 # Both additional DCs should be actual DCs, not just members. Get-ADDomainController
 # should return the host itself. Confirms dcpromo actually finished.
+# Windows echoes hostname UPPERCASE (PP-DC02), so match case-insensitively.
 for adc in pp-dc02 pp-dc03; do
+  UPPER=$(echo "$adc" | tr '[:lower:]' '[:upper:]')
   check_ps "$adc" \
     'try { (Get-ADDomainController -Identity $env:COMPUTERNAME).Name } catch { "NOT_A_DC" }' \
-    "\\(stdout\\)[[:space:]]+$adc" \
+    "\\(stdout\\)[[:space:]]+($adc|$UPPER)" \
     "$adc: is a real DC in voltgrid.com (Get-ADDomainController)"
 done
 
@@ -339,9 +348,11 @@ check_pf_shell pp-syslog \
   'LISTENERS_OK' \
   "pp-syslog listening on UDP+TCP 514"
 
-# Every VyOS router + pfSense firewall should have a live file under
-# /var/log/remote/<host>/. Fresh mtime (<10 min) proves messages still flow.
-for src in pp-isp-router pp-internal-router site-edge-router pp-corp-router \
+# Every VyOS router (except pp-isp-router -- ISP-role, intentionally
+# excluded from syslog client play per CLAUDE.md) + pfSense firewall
+# should have a live file under /var/log/remote/<host>/. Fresh mtime
+# (<10 min) proves messages still flow.
+for src in pp-internal-router site-edge-router pp-corp-router \
            pp-external-firewall pp-internal-firewall pp-ot-firewall; do
   check_pf_shell pp-syslog \
     "test -f /var/log/remote/$src/syslog.log && age=\$((\$(date +%s) - \$(stat -c %Y /var/log/remote/$src/syslog.log))) && [ \$age -lt 600 ] && echo OK_FRESH || echo STALE_OR_MISSING" \
@@ -457,11 +468,13 @@ check_pf_shell pp-proxy \
   'OK_3128' \
   "pp-proxy: listening on :3128 (squid HTTP proxy)"
 
-# is-inet global_dns via unbound -- www.faa.gov to the value in
-# group_vars/all.yml (70.39.65.10 across both repos). Resolve from
-# pp-syslog which uses corp DNS -> pp-dc01 forwarder -> is-inet.
+# is-inet global_dns via unbound -- query is-inet directly (via 8.8.8.8
+# lo alias) rather than through corp AD DNS. AD DNS is authoritative for
+# voltgrid.com locally and answers with internal IPs; the unbound records
+# are the *external-facing* view meant for hosts outside the range.
+# 8.8.8.8 is a lo alias on is-inet so this hits unbound directly.
 check_pf_shell pp-syslog \
-  'r=$(getent hosts www.faa.gov 2>/dev/null | awk "{print \$1}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'r=$(nslookup www.faa.gov 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "70.39.65.10" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_70\.39\.65\.10' \
   "is-inet: unbound resolves www.faa.gov -> 70.39.65.10 (global_dns loaded)"
 
@@ -515,26 +528,31 @@ check_pf_shell pp-www \
   '^200$|200|302' \
   "pp-www: nginx serves billing for Host: billing.voltgrid.com"
 
-# is-inet unbound has the apex + mail A records.
+# is-inet unbound has the apex + mail A records. Query is-inet's unbound
+# DIRECTLY (via 8.8.8.8 lo alias) -- otherwise corp AD DNS answers first
+# with the internal 172.16.8.5 A record (that's correct behavior for
+# internal clients; the unbound records are what OUTSIDE hosts see).
 check_pf_shell pp-syslog \
-  'r=$(getent hosts voltgrid.com 2>/dev/null | awk "{print \$1}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'r=$(nslookup voltgrid.com 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "52.96.223.2" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_52\.96\.223\.2' \
   "is-inet: unbound resolves voltgrid.com apex -> 52.96.223.2"
 
 check_pf_shell pp-syslog \
-  'r=$(getent hosts www.voltgrid.com 2>/dev/null | awk "{print \$1}"); [ "$r" = "75.21.1.1" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'r=$(nslookup www.voltgrid.com 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "75.21.1.1" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_75\.21\.1\.1' \
   "is-inet: unbound resolves www.voltgrid.com -> 75.21.1.1 (pp-external-fw WAN)"
 
 check_pf_shell pp-syslog \
-  'r=$(getent hosts billing.voltgrid.com 2>/dev/null | awk "{print \$1}"); [ "$r" = "75.21.1.1" ] && echo "OK_$r" || echo "GOT_$r"' \
+  'r=$(nslookup billing.voltgrid.com 8.8.8.8 2>/dev/null | awk "/^Address: / {print \$2; exit}"); [ "$r" = "75.21.1.1" ] && echo "OK_$r" || echo "GOT_$r"' \
   'OK_75\.21\.1\.1' \
   "is-inet: unbound resolves billing.voltgrid.com -> 75.21.1.1 (pp-external-fw WAN)"
 
 # Email container up + Dovecot listening + our bob.burke test user exists.
+# Avoid Docker's `--format "{{.Status}}"` here -- Ansible tries to Jinja-
+# render the braces and fails. Grep the plain `docker ps` output instead.
 check_pf_shell is-inet \
-  'docker ps --filter name=email --format "{{.Status}}" 2>&1 | head -1' \
-  'Up' \
+  'docker ps --filter name=email 2>&1 | grep -E "\\s+Up\\s+" | head -1' \
+  '\bUp\b' \
   "is-inet: email container running"
 
 check_pf_shell is-inet \
