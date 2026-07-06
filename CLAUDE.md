@@ -82,41 +82,46 @@ ansible-playbook arbitr_pp_playbook.yaml --limit pp-ot-firewall
                        eBGP │ 75.21.1.0/30
               ┌──────────────────────────────────────────────┐
               │  pp-external-firewall (pfSense 2.8.1)        │ ← DMZ 172.16.8.0/24
-              │  AS 65001                                    │   (pp-www)
+              │  AS 65001 · eBGP peer + OSPF                 │   (pp-www)
               └──────────────────────────────────────────────┘
-                       iBGP │ 172.16.0.8/30
+                       static │ 172.16.0.8/30
               ┌──────────────────────────────────────────────┐
-              │  site-edge-router (VyOS, AS 65001)           │
+              │  site-edge-router (VyOS, static-only)        │
               └──────────────────────────────────────────────┘
-                       iBGP │ 172.16.0.16/30
+                       static │ 172.16.0.16/30 · OSPF adj
               ┌──────────────────────────────────────────────┐
               │  pp-internal-firewall (pfSense 2.8.1)        │
-              │  AS 65001                                    │
+              │  OSPF-only (no BGP)                          │
               └──────────────────────────────────────────────┘
-                       iBGP │ 172.16.0.24/30
+                       static │ 172.16.0.24/30
               ┌──────────────────────────────────────────────┐
-              │  pp-internal-router (VyOS, AS 65001)         │ ← pp-security 172.16.9.0/24
+              │  pp-internal-router (VyOS, static-only)      │ ← pp-security 172.16.9.0/24
               └──────────────────────────────────────────────┘
                   │ 172.16.0.40/30      │ 172.16.0.48/30
-                  │ iBGP                │ iBGP
+                  │ static              │ static
        ┌──────────────────────┐   ┌─────────────────────────────────┐
-       │ pp-corp-router       │   │ pp-ot-firewall (pfSense, AS 65001)│
-       │ VyOS AS 65001        │   └─────────────────────────────────┘
-       │                      │                │  static (no BGP)
-       │ Corp /24s:           │                │  192.168.200.200/30
-       │ 172.16.2.0/24 PP-Svc │   ┌─────────────────────────────────┐
-       │ 172.16.3.0/24 BP     │   │ pp-ot-router (RC_NG_OT_Router,  │
-       │ 172.16.4.0/24 Eng    │   │ VyOS-CLI only — vyos_routes_only)│
-       │ 172.16.5.0/24 LS     │   │                                 │
-       │ 172.16.6.0/24 IS     │   │ OT subnets:                     │
-       └──────────────────────┘   │ 192.168.95.0/24 Gas-Turbine     │
+       │ pp-corp-router       │   │ pp-ot-firewall (pfSense)         │
+       │ VyOS, static-only    │   │ static-only (no BGP, no OSPF)    │
+       │                      │   └─────────────────────────────────┘
+       │ Corp /24s:           │                │  static
+       │ 172.16.2.0/24 PP-Svc │                │  192.168.200.200/30
+       │ 172.16.3.0/24 BP     │   ┌─────────────────────────────────┐
+       │ 172.16.4.0/24 Eng    │   │ pp-ot-router (RC_NG_OT_Router,  │
+       │ 172.16.5.0/24 LS     │   │ VyOS-CLI only — vyos_routes_only)│
+       │ 172.16.6.0/24 IS     │   │                                 │
+       └──────────────────────┘   │ OT subnets:                     │
+                                  │ 192.168.95.0/24 Gas-Turbine     │
                                   │ 192.168.90.0/27 Gas-Turbine-Sim │
                                   │ 192.168.90.96/27 PP-OT-Services │
                                   │ 192.168.90.128/27 PP-OT-DMZ     │
                                   └─────────────────────────────────┘
 ```
 
-**Routing model**: iBGP mesh inside AS 65001; eBGP to pp-isp-router (AS 65002). pp-ot-router is in `[vyos_routes_only]` because its image (`RC_NG_OT_Router`) doesn't accept the base `vyos` role's interface commands — we only push raw static routes via `vyos_config`. The OT subnets behind pp-ot-router are advertised into the iBGP mesh by pp-ot-firewall's FRR `redistribute static`.
+**Routing model** (verified 2026-07-06 via host_vars audit; supersedes earlier all-iBGP intent in PROJECT_LOG.md Phase 1):
+- **eBGP-only-at-edge**: exactly ONE BGP session in the fabric — pp-isp-router (AS 65002) ↔ pp-external-firewall (AS 65001). Everything else in AS 65001 is BGP-free.
+- **OSPF between the two upstream firewalls**: pp-external-firewall ↔ pp-internal-firewall run OSPF to exchange corp routes. pp-external-firewall carries `redistribute_ospf: true` in its `pfsense_bgp` so those corp routes propagate up to the ISP via eBGP.
+- **Static everywhere else**: pp-corp-router, pp-internal-router, and site-edge-router all carry `remove_vyos_bgp: true` in host_vars — corp core is intentionally static-only. pp-ot-firewall has neither BGP nor OSPF (comment in its host_vars: "ESP boundary; default-deny, static-only"). pp-ot-router is in `[vyos_routes_only]` because its image (`RC_NG_OT_Router`) doesn't accept the base `vyos` role's interface commands — only raw static routes via `vyos_config`.
+- **OT umbrella reachability**: 192.168.100.0/24 (OT domain + pp-dcs-ctrl + pp-ctl-wks-*) reaches corp via static routes at each pfSense boundary, backstopped by pp-internal-firewall's FRR-RIB.
 
 **Management plane**: every managed host has a SimSpace-assigned IP in `10.255.240.0/20` on its first NIC (Linux/Windows host_vars eth0/Ethernet0; pfSense vmx0 — *on the 2.8.1 image*). That subnet is out-of-band — workstation→server traffic must NOT traverse it during scenario play. Two consequences:
 - Windows DDNS on the mgmt adapter is disabled (`Strip mgmt interface from AD DNS registration` play); mgmt-IP A records are scrubbed from AD DNS.
@@ -291,7 +296,7 @@ A few things that will save the next session time:
 ## Last-known-good state (as of the most recent session)
 
 - Three pfSense firewalls (pp-ot-firewall, pp-internal-firewall, pp-external-firewall) on pfSense 2.8.1 image — auth working with `admin:simspace1`, FRR runtime dir creation fix landed but full FRR convergence pending verification.
-- Routing intent: iBGP AS 65001 among all corp routers + firewalls; eBGP AS 65002 to pp-isp-router; pp-ot-router static-only via `vyos_routes_only` group.
+- Routing model: eBGP-only-at-edge (pp-isp-router AS 65002 ↔ pp-external-firewall AS 65001), OSPF between the two upstream firewalls, STATIC everywhere else (all VyOS corp routers carry `remove_vyos_bgp: true`; pp-ot-firewall has neither BGP nor OSPF). Verified against host_vars 2026-07-06.
 - Syslog collection wired end-to-end (Linux → rsyslog forwarder; VyOS → `set system syslog host`; pfSense → `<syslog>` block via php -r) into pp-syslog → Splunk UF → `netfw` index.
 - GNOME initial-setup wizard suppressed on Linux desktops.
 - DDNS mgmt-IP leakage stripped from AD DNS.
