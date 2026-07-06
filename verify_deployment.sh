@@ -352,16 +352,29 @@ check_pf_shell pp-syslog \
   'LISTENERS_OK' \
   "pp-syslog listening on UDP+TCP 514"
 
-# Every VyOS router (except pp-isp-router -- ISP-role, intentionally
-# excluded from syslog client play per CLAUDE.md) + pfSense firewall
-# should have a live file under /var/log/remote/<host>/. Fresh mtime
-# (<10 min) proves messages still flow.
+# VyOS routers land under /var/log/remote/<hostname>/ (customer syslog_server
+# role's rsyslog template resolves the syslog HOSTNAME field).
+# pfSense firewalls land under /var/log/remote/<source-ip>/ because pfSense's
+# built-in syslog doesn't populate a hostname the template can pick up --
+# rsyslog falls back to source IP. (Filed in UPSTREAM_FIXES.md 2026-07-06;
+# the range-dev syslog_server role should reverse-resolve or template on
+# fromhost-ip -> hostname.) IP mapping confirmed via `ifconfig` on each fw:
+#   pp-external-firewall -> 172.16.0.9
+#   pp-internal-firewall -> 172.16.0.25
+#   pp-ot-firewall       -> 172.16.0.50
+# Fresh mtime (<10 min) proves messages still flow.
 for src in pp-internal-router site-edge-router pp-corp-router \
-           pp-external-firewall pp-internal-firewall pp-ot-firewall; do
+           172.16.0.9 172.16.0.25 172.16.0.50; do
+  case "$src" in
+    172.16.0.9)  label="pp-external-firewall (via IP $src)" ;;
+    172.16.0.25) label="pp-internal-firewall (via IP $src)" ;;
+    172.16.0.50) label="pp-ot-firewall (via IP $src)" ;;
+    *)           label="$src" ;;
+  esac
   check_pf_shell pp-syslog \
     "test -f /var/log/remote/$src/syslog.log && age=\$((\$(date +%s) - \$(stat -c %Y /var/log/remote/$src/syslog.log))) && [ \$age -lt 600 ] && echo OK_FRESH || echo STALE_OR_MISSING" \
     'OK_FRESH' \
-    "pp-syslog receiving from $src (log mtime <10min)"
+    "pp-syslog receiving from $label (log mtime <10min)"
 done
 
 # =========================================================================

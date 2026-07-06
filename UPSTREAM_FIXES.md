@@ -9,6 +9,31 @@ Severity key:
 
 ---
 
+## 2026-07-06 · gap · roles/syslog_server/templates — pfSense sources land in IP-named dirs, not hostname-named
+
+**Symptom.** `verify_deployment.sh` Section 6 flagged the 3 pfSense firewalls as not forwarding syslog. Investigation confirmed they ARE forwarding (packets caught via tcpdump on pp-syslog; matching per-source directories exist under `/var/log/remote/`) — but the directories are named by **source IP**, not hostname:
+```
+/var/log/remote/172.16.0.9/    <- pp-external-firewall
+/var/log/remote/172.16.0.25/   <- pp-internal-firewall
+/var/log/remote/172.16.0.50/   <- pp-ot-firewall
+/var/log/remote/pp-corp-router/     <- VyOS routers land under hostname
+/var/log/remote/pp-internal-router/
+...
+```
+Any downstream tooling that expects `/var/log/remote/<hostname>/` for pfSense sources (Splunk inputs, ad-hoc grep, verify_deployment.sh) breaks.
+
+**Root cause.** pfSense's built-in `syslogd` doesn't fill in the syslog HOSTNAME field the way modern rsyslog senders do (or fills it with something like `pfSense`, not the FQDN). The `syslog_server` role's rsyslog template on pp-syslog uses `%HOSTNAME%` for the directory name, which resolves to the source IP when the header field is missing or generic. Result: 3 IP-named dirs plus 6 hostname-named dirs on the same box.
+
+**Fix (upstream).** Change the rsyslog template on the syslog collector to prefer `%FROMHOST-IP% ↔ hostname` reverse resolution before falling back to raw `%HOSTNAME%`. Two options:
+1. Static map in the rsyslog config: `set $.friendlyname = re_extract($fromhost-ip, "^172\\.16\\.0\\.9$", 0, 0, "pp-external-firewall") ; ...` — brittle but explicit.
+2. Reverse DNS: rsyslog's `%FROMHOST%` property does PTR resolution if the collector has the AD DNS forwarders + PTR zones populated. Cheapest fix, but requires PTR records for the transit /30 addresses (`172.16.0.9`, `172.16.0.25`, `172.16.0.50`) — currently only production /24 hosts have PTRs.
+
+Option 2 is preferred because it's declarative and works for any future pfSense/appliance sources without a template edit. Would need to add PTR records for the /30 links in `internal_dns_records` (group_vars/voltgrid.yml).
+
+**Workaround (overlay).** `verify_deployment.sh` Section 6 hardcodes the IP-based dir names for the 3 pfSense firewalls. If firewall count or link addressing changes, update the mapping in the script.
+
+---
+
 ## 2026-07-03 · gap · roles/domain_member_retry/tasks/main.yml — `pause` incompatible with `strategy: free`
 
 **Symptom.** With the Join Domain play set to `strategy: free` (added on 2026-07-02 as a wall-clock optimization for per-host reboots), the deploy fails immediately after the first host's "Check if already domain joined" task:
