@@ -210,6 +210,23 @@ Role is structurally invalid. `main.yml` sits at the role root (instead of `task
 
 ---
 
+## 2026-04-17 · enhancement · deploy.sh
+
+Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.
+
+**Fix:** switch on the exit code — retry only on `3`, treat `0` as success, and bail fast on `≥1 && !=3`:
+```bash
+ansible-playbook "$PLAYBOOK" "$@"
+rc=$?
+case $rc in
+  0) echo "Success on attempt $i"; break ;;
+  3) echo "Unreachable host on attempt $i — retrying" ;;
+  *) echo "Non-retryable failure (exit $rc)"; exit $rc ;;
+esac
+```
+
+---
+
 ## 2026-05-07 · gap · roles/common/tasks/windows.yml
 
 **PowerPlant status (2026-05-11): resolved by host migration.** `pp-mail` and `pp-dmz-smtp` were re-imaged from Server 2012 R2 to Server 2019 (which has TLS 1.2 default-on). No Server 2012 hosts remain in this range. The `enable_tls12` and `prestage_range_agent` overlay roles, and their plays, have been removed. The upstream fix remains worth doing for future ranges that need Server 2012 hosts.
@@ -743,7 +760,10 @@ Root cause: the pfSense GUI's interface-save flow calls `interface_configure($ke
 
 ---
 
-## 2026-06-09 · gap · roles/vyos — iBGP no-readvertise (RFC 4271 §9.2) needs route reflectors
+## 2026-06-09 · gap · roles/vyos — iBGP no-readvertise (RFC 4271 §9.2) needs route reflectors (SUPERSEDED)
+
+> **SUPERSEDED 2026-06-10:** The per-/24 static-route workarounds described below (on `pp-internal-firewall`, `pp-external-firewall`, `site-edge-router`, `pp-isp-router`) were **removed** in the 2026-06-10 architectural redesign, which shifted the corp domain from iBGP to OSPF area 0 as the IGP. Under OSPF, the no-readvertise rule is not an issue — every internal router learns every corp prefix. See the 2026-06-10 entry below for the full new routing model. The root-cause explanation and the upstream `route_reflector: true` proposal remain valid guidance for any future range that stays on iBGP.
+
 
 PowerPlant's BGP design has pp-internal-router as the central hub of a hub-and-spoke iBGP topology in AS 65001. Its three iBGP peers:
 
@@ -834,7 +854,10 @@ The customer `vyos` role already supports OSPF (per-interface `ospf: true` flag)
 
 ---
 
-## 2026-06-16 · platform · SimSpace pfSense image — management vNIC provisioned outside VMware MAC pool, lands on infrastructure network instead of range mgmt
+## 2026-06-16 · platform · SimSpace pfSense image — management vNIC provisioned outside VMware MAC pool, lands on infrastructure network instead of range mgmt (LIKELY RESOLVED)
+
+> **Status update 2026-07-08:** Every fresh-range PowerPlant deploy since 2026-07-02 has come up with all three pfSense hosts reachable over mgmt (`10.255.240.190/191/197`) on the first boot. The 3-for-3 `02:00:00:00:00:XX` MAC pattern documented below has not recurred. Either SimSpace patched the image's `managementInterface` provisioning code path, or the blueprint moved off the affected image variant. Entry retained for historical context and the reproducer methodology; verify against the current live image before assuming the issue is fully gone.
+
 
 The SimSpace `RC_pfSense:1.0.0` image provisions the **management vNIC** (vmx0) through a different platform code path than the data-plane vNICs (vmx1+). The management vNIC ends up with:
 
@@ -869,21 +892,4 @@ Hostname stays at factory `pfSense.home.arpa` because the platform's hostname-vi
 2. **Bypass SimSpace YAML's `managementInterface` block**: define mgmt as just another `networkInterfaces:` entry (so it's allocated through the working data-plane code path). The `managementInterface.position` semantics may break, but the vNIC would attach to the right vSwitch.
 3. **Wait for the platform fix** — preferred, since options 1 and 2 each introduce other maintenance burden.
 
-Affects every deploy of this range until SimSpace patches their image-handling code.
-
----
-
-## 2026-04-17 · enhancement · deploy.sh
-
-Retry loop treats every non-zero Ansible exit code as a retry signal, including legitimate task failures and parse errors. It also re-runs transparently on exit code `3` (unreachable host) — which is often transient and worth retrying, but indistinguishable from code `2` (task failed) in current logic. End result: every deploy with at least one Ansible-unmanaged host (PLCs, HMIs, phones, etc.) always goes through three attempts, then exits 1, confusing operators who see "Attempt 3 failed" despite no real failure.
-
-**Fix:** switch on the exit code — retry only on `3`, treat `0` as success, and bail fast on `≥1 && !=3`:
-```bash
-ansible-playbook "$PLAYBOOK" "$@"
-rc=$?
-case $rc in
-  0) echo "Success on attempt $i"; break ;;
-  3) echo "Unreachable host on attempt $i — retrying" ;;
-  *) echo "Non-retryable failure (exit $rc)"; exit $rc ;;
-esac
-```
+Per the status update at the top of this entry (2026-07-08), every fresh-range deploy since 2026-07-02 has been unaffected. Retain the reproducer methodology (minimal blueprint, 3-MAC sequential pattern as diagnostic evidence) in case this recurs with a future image variant.
