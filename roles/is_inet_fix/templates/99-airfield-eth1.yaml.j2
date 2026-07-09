@@ -1,0 +1,14 @@
+# Ansible-managed netplan drop-in. Fixes the RC-IS-INET image's default
+# eth1 provisioning:
+#   - image ships eth1 with /32 mask (no connected route to LAN)
+#   - image ships no default gateway on the data plane
+# Both are covered here. Mgmt (eth0) is left to the platform/cloud-init.
+network:
+  version: 2
+  ethernets:
+    eth1:
+      addresses:
+        - {{ isinet_dataplane_ip }}/{{ isinet_dataplane_prefix }}
+      routes:
+        - to: default
+          via: {{ isinet_dataplane_gateway }}

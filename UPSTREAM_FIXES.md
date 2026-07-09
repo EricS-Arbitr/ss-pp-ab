@@ -9,6 +9,28 @@ Severity key:
 
 ---
 
+## 2026-07-09 · bug · roles/is_inet_fix (back-ported from airfield-range) — eth1 provisioning + unbound supervisor
+
+**Landed on branch `is-inet-persistence` (not main). Reviewer approval needed before merging.**
+
+**Symptom.** On the 2026-05-22 entry below we documented that the RC-IS-INET image brings eth1 up as `/32` with no default gateway, and noted that a durable fix would be "a small `is_inet_fix` role (planned)". Airfield-range hit the same wall on 2026-07-08 plus a second latent issue: the container's entrypoint doesn't launch unbound at all. The `reload unbound` handler in `range-development-ansible/roles/handlers/` uses `ignore_errors: yes`, so PowerPlant deploys silently succeed even though corp DNS to 8.8.8.8 never actually reaches unbound.
+
+**Fix (overlay, back-ported).** Copied `roles/is_inet_fix/` verbatim from airfield-range 2026-07-08. Deploys:
+1. Netplan drop-in at `/etc/netplan/99-airfield-eth1.yaml` — corrects the /32 → /24 mask + adds default gateway (200.200.200.1 = pp-isp-router). Values driven from `host_vars/is-inet.yml` (`isinet_dataplane_ip`, `_prefix`, `_gateway`).
+2. Systemd oneshot + timer at `/etc/systemd/system/airfield-unbound-supervise.{service,timer}` — checks whether unbound is listening in the container, starts it via `docker exec -d is-inet /usr/sbin/unbound` if not. Also creates `/var/log/unbound.log` with `unbound:unbound` ownership (the image doesn't ship it, and unbound aborts at start "Could not open logfile"). Re-runs every 60 seconds so container restarts self-heal.
+
+Wired into `arbitr_pp_playbook.yaml` as a new play immediately before `global_dns`, tagged `is_inet_fix` and `is_inet`.
+
+**Also back-ported.** Extended `roles/global_dns/templates/simspace_includes.conf.j2` to emit `local-zone: "<zone>." transparent` for every unique zone at the top of the file. This defeats the `redirect` zones the corpora ships that would otherwise abort unbound at startup with "local-data in redirect zone must reside at top of zone." Airfield hit this because global_dns_records includes github.com / google.com etc. PowerPlant's records (voltgrid.com, outlook.com) may not currently collide, but the safety net costs nothing.
+
+**Fix (upstream / platform).** Same as the 2026-05-22 entry (SimSpace image should honor YAML-declared prefix + gateway), plus:
+- Container image should either bake `/var/log/unbound.log` with unbound-user ownership OR extend entrypoint to launch unbound.
+- Customer `reload unbound` handler should NOT swallow errors with `ignore_errors: yes`; masks the "unbound never actually running" state.
+
+**Review notes for main merge.** The `roles/is_inet_fix/` scripts hard-code `is-inet` as the container name (matches this range's `global_dns_container_name`). If PowerPlant ever renames it, parametrize via a role default. Otherwise the role is drop-in.
+
+---
+
 ## 2026-07-06 · gap · roles/syslog_server/templates — pfSense sources land in IP-named dirs, not hostname-named
 
 **Symptom.** `verify_deployment.sh` Section 6 flagged the 3 pfSense firewalls as not forwarding syslog. Investigation confirmed they ARE forwarding (packets caught via tcpdump on pp-syslog; matching per-source directories exist under `/var/log/remote/`) — but the directories are named by **source IP**, not hostname:

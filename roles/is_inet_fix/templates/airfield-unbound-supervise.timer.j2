@@ -1,0 +1,13 @@
+[Unit]
+Description=Airfield: periodic unbound-in-is-inet health check
+Requires=airfield-unbound-supervise.service
+
+[Timer]
+# Run 30 seconds after boot to give docker + the is-inet container a
+# beat to come up, then every minute.
+OnBootSec=30sec
+OnUnitActiveSec=60sec
+Unit=airfield-unbound-supervise.service
+
+[Install]
+WantedBy=timers.target

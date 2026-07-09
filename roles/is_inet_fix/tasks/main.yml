@@ -1,0 +1,76 @@
+---
+# is_inet_fix — restore is-inet to a working state after fresh SimSpace
+# platform provisioning. Addresses three latent issues the RC-IS-INET
+# image ships with:
+#
+#   1. eth1 comes up as `/32` with no default gateway (per PowerPlant
+#      UPSTREAM_FIXES 2026-05-22 -- the `is_inet_fix` role that was
+#      "planned" there but never landed). Without this, is-inet has no
+#      connected route to its own LAN and replies to corp DNS queries
+#      go nowhere.
+#   2. Inside the is-inet container, unbound does NOT auto-start from
+#      the image's entrypoint. Postfix/Dovecot/httpd do, but unbound
+#      needs an explicit `docker exec -d is-inet /usr/sbin/unbound`.
+#      Once started, if the container ever restarts, unbound is gone
+#      again -- so we supervise it from the host via a systemd timer.
+#   3. `/var/log/unbound.log` doesn't exist with unbound-user
+#      ownership inside the container, so unbound fails with
+#      "Could not open logfile: Permission denied" on start.
+#
+# All three fixes are idempotent; role can run repeatedly. Landed in
+# airfield-range 2026-07-08 after a full debugging pass; PowerPlant
+# still doesn't have the equivalent -- worth back-porting if that range
+# ever needs corp -> is-inet DNS to actually work end-to-end.
+
+- name: Drop netplan override for eth1 (correct /24 + default gateway)
+  ansible.builtin.template:
+    src: 99-airfield-eth1.yaml.j2
+    dest: /etc/netplan/99-airfield-eth1.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  notify: apply netplan
+
+- name: Deploy the unbound supervisor script
+  ansible.builtin.copy:
+    src: airfield-unbound-supervise.sh
+    dest: /usr/local/sbin/airfield-unbound-supervise.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy systemd unit for unbound supervisor
+  ansible.builtin.template:
+    src: airfield-unbound-supervise.service.j2
+    dest: /etc/systemd/system/airfield-unbound-supervise.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart unbound supervisor
+
+- name: Deploy systemd timer for the supervisor (re-check every minute)
+  ansible.builtin.template:
+    src: airfield-unbound-supervise.timer.j2
+    dest: /etc/systemd/system/airfield-unbound-supervise.timer
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart unbound supervisor timer
+
+- name: Enable + start the supervisor service (also runs the script once)
+  ansible.builtin.systemd:
+    name: airfield-unbound-supervise.service
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Enable + start the supervisor timer (re-checks every minute)
+  ansible.builtin.systemd:
+    name: airfield-unbound-supervise.timer
+    enabled: yes
+    state: started
+    daemon_reload: yes

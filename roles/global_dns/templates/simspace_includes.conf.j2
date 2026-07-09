@@ -2,11 +2,27 @@
 # Generated: {{ ansible_date_time.iso8601 }}
 #
 # ss-pp-ab overlay of range-development-ansible/roles/global_dns.
-# Delta from upstream: A-record block handles zone-apex records
-# (name: "" or "@") so we can point voltgrid.com and outlook.com
-# directly at is-inet for user@voltgrid.com webmail login.
-# See ss-pp-ab/UPSTREAM_FIXES.md 2026-07-02 entry.
+# Deltas from upstream:
+#   1. A-record block handles zone-apex records (name: "" or "@") so
+#      we can point voltgrid.com / blackstone.mil / outlook.com directly
+#      at is-inet for user@<domain> webmail login. See PowerPlant
+#      UPSTREAM_FIXES.md 2026-07-02 and airfield-range 2026-07-02 entries.
+#   2. Emits `local-zone: "<zone>." transparent` for every unique zone
+#      before any records. Without this, unbound aborts at startup with
+#      "local-data in redirect zone must reside at top of zone" when
+#      any of our records collide with a corpus-shipped `redirect`
+#      zone (github.com, google.com, microsoft.com, plus any tld the
+#      corpora happen to redirect). `transparent` overrides the corpora
+#      zone type so our sub-domain records get honored. See airfield-
+#      range UPSTREAM_FIXES.md 2026-07-08 entry.
 
+# --- Override corpora `redirect` zones for every zone we serve records in ---
+{% set _all_zones = global_dns_records | map(attribute='zone', default=(domain_name | default(''))) | list | unique %}
+{% for _zone in _all_zones if _zone | length > 0 %}
+local-zone: "{{ _zone }}." transparent
+{% endfor %}
+
+# --- Records ---
 {% for record in global_dns_records %}
 {% if record.type|upper == 'A' %}
 {% set _apex = (record.name | default('') in ['', '@']) %}

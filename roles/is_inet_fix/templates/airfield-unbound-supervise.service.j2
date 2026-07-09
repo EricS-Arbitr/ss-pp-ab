@@ -1,0 +1,13 @@
+[Unit]
+Description=Airfield: ensure the is-inet container's unbound is running
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/airfield-unbound-supervise.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

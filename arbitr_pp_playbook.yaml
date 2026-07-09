@@ -664,6 +664,24 @@
     - splunk
     - splunk-es
 
+# is_inet_fix must run BEFORE global_dns. The RC-IS-INET image ships
+# eth1 as /32 with no default gateway (this repo's UPSTREAM_FIXES.md
+# 2026-05-22 entry -- was "planned" as an is_inet_fix role but never
+# built) AND the container entrypoint doesn't launch unbound. Without
+# is_inet_fix, global_dns's `reload unbound` handler silently fails
+# (`ignore_errors: yes` in the customer handler masks it) and corp DNS
+# queries to 8.8.8.8/8.8.4.4/1.1.1.1 don't resolve. Back-ported from
+# airfield-range 2026-07-09 on branch `is-inet-persistence`.
+- name: is_inet_fix — eth1 netmask + gateway + unbound supervisor
+  hosts: is-inet
+  gather_facts: true
+  become: true
+  roles:
+    - is_inet_fix
+  tags:
+    - is_inet_fix
+    - is_inet
+
 - name: global_dns
   hosts: global_dns
   gather_facts: true
