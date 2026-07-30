@@ -250,6 +250,14 @@ pp-syslog
 pp-www
 pp-proxy
 pp-splunk
+# Security Onion nodes — same RDP_Ubuntu_Desktop_22.04.5 image as the four
+# above, so they inherit group_vars/linux.yml credentials (simspace/simspace1,
+# the SHORT form this image uses) and the `common` baseline unchanged.
+so-manager
+so-search
+so-sensor-corp
+so-sensor-ot
+so-sensor-edge
 
 [linux:children]
 ubuntu22
@@ -260,6 +268,50 @@ ubuntu22
 [security]
 pp-splunk
 win-hunt-1
+so-manager
+so-search
+so-sensor-corp
+so-sensor-ot
+so-sensor-edge
+
+# ------------------------------------------------------------
+# Security Onion 2.4.x — distributed grid on pp-security
+# ------------------------------------------------------------
+# Group names are the so-ansible role contract; the roles reference them
+# literally (notably groups['so_manager'][0] for every delegated grid-join
+# task, which is why so_manager must hold EXACTLY ONE host).
+#
+# Deploy order is load-bearing: the manager must complete before search and
+# sensor can join it.
+[so_manager]
+so-manager
+
+[so_search]
+so-search
+
+# One sensor per mirrored router — see docs/security-onion/.
+#   corp → pp-corp-router   (5 corporate departments)
+#   ot   → pp-ot-router     (Gas-Turbine, -Sim, OT-Services, PP-OT-Ctrl)
+#   edge → pp-isp-router    (Internet + red-net, i.e. the attack path)
+[so_sensor]
+so-sensor-corp
+so-sensor-ot
+so-sensor-edge
+
+[so_all:children]
+so_manager
+so_search
+so_sensor
+
+# Routers that mirror traffic to a sensor via GRE + tc mirred. NOT the same
+# as [vyos] — pp-ot-router is deliberately absent from that group (its
+# RC_NG_OT_Router image rejects the vyos role's interface commands) but IS a
+# mirror source here, so vyos_mirror must be verified against that image
+# before the OT sensor can work.
+[so_mirror_routers]
+pp-corp-router
+pp-ot-router
+pp-isp-router
 
 [splunk]
 pp-splunk

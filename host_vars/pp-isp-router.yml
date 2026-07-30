@@ -61,3 +61,25 @@ bgp:
     neighbor:
       ip: "75.21.1.1"                 # pp-external-firewall (AS 65001 — eBGP)
       as: 65001
+
+# --- Security Onion GRE mirror → so-sensor-edge -------------------------
+# Mirrors the external-facing interfaces into a GRE tunnel terminating on
+# so-sensor-edge (172.16.9.42). This is the attack-path sensor: it sees
+# inbound traffic and Internet↔DMZ BEFORE the external firewall, which is
+# the one blind spot the corp and OT sensors cannot cover.
+# eth0 (switch-0 transit, shares mgmt) excluded.
+#
+# ⚠ BLOCKER: the tunnel crosses TWO pfSense firewalls —
+#   pp-isp-router → pp-external-firewall → site-edge-router
+#                 → pp-internal-firewall → pp-internal-router → pp-security
+# BOTH pp-external-firewall AND pp-internal-firewall must permit IP protocol
+# 47 from 75.21.1.2 to 172.16.9.42, or this sensor receives nothing.
+vyos_mirror_source_interfaces:
+  - eth1   # red-net    210.210.210.0/24  (Red-1 Kali, Activity-Emulation)
+  - eth2   # Internet   200.200.200.0/24  (is-inet, elgg)
+
+vyos_gre_source_ip: "75.21.1.2"        # eth0, routes toward pp-security
+vyos_gre_remote_ip: "172.16.9.42"      # so-sensor-edge
+vyos_gre_local_addr: "10.100.3.1"
+vyos_gre_remote_addr: "10.100.3.2"
+vyos_gre_tunnel_prefix: 30

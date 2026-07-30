@@ -1,0 +1,102 @@
+# =========================================================================
+# group_vars/so_all.yml — Security Onion 2.4.x settings (PowerPlant)
+# =========================================================================
+# Ported from so-ansible's group_vars (all/main.yml + so_all.yml), which was
+# validated end-to-end on a fresh range 2026-07-29/30. Values here are the
+# PowerPlant-specific ones; anything not listed keeps the role defaults.
+#
+# See so-ansible/docs/PORTING_GUIDE.md — especially §9, the failure modes
+# that silently break a new range. Read it before debugging this stack.
+# =========================================================================
+
+# --- Pinned SO source ----------------------------------------------------
+# The `automation/` answer-file mechanism exists only at this pin; SO's
+# tagged releases do not carry it. so_base snapshots so-setup and friends
+# from here. Do NOT bump casually — see PORTING_GUIDE §10 for the functions
+# that must be re-diffed on upgrade.
+so_git_ref: "55af7eb541f086c4e7d6d3182fb2bc4fbc2b9e21"   # 2.4/main HEAD @ 2026-07-22
+so_git_branch: "2.4/main"
+so_git_repo: "https://github.com/Security-Onion-Solutions/securityonion.git"
+
+# Only working install mode on Ubuntu — `so-setup iso` is CentOS/Rocky only.
+so_setup_type: "network"
+
+# --- Install-time egress -------------------------------------------------
+# so-setup pulls from packages.securityonion.net, Docker, Elastic and Ubuntu
+# repos. Reuses the range's existing mgmt-plane proxy rather than defining a
+# second one; that plane is out-of-band and invisible in-scenario.
+so_upstream_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
+
+# --- In-range mirror (on the Ansible controller) -------------------------
+# Serves the pinned SO source + the ETOPEN tarball + airgap content repos.
+# `ansible` is 10.255.240.152 (mgmt) / 10.10.10.10 (control-10). The mgmt IP
+# is used because that is the interface the SO nodes can reach it on.
+# NOTE: earmarked to move to a platform-hosted Nexus later (Eric, 2026-07-30).
+so_mirror_host: "10.255.240.152"
+so_mirror_port: 80
+so_mirror_url: "http://{{ so_mirror_host }}:{{ so_mirror_port }}"
+so_source_tarball_url: "{{ so_mirror_url }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+so_bundled_rules_filename: "emerging.rules.tar.gz"
+
+# --- Grid ----------------------------------------------------------------
+so_manager_ip: "172.16.9.30"
+so_manager_hostname: "so-manager"
+so_msrv: "{{ so_manager_hostname }}"
+so_msrv_ip: "{{ so_manager_ip }}"
+
+# --- Range subnets -------------------------------------------------------
+so_subnet_security: "172.16.9.0/24"          # pp-security — SO lives here
+so_subnet_services: "172.16.2.0/24"
+so_subnet_business: "172.16.3.0/24"
+so_subnet_engineering: "172.16.4.0/24"
+so_subnet_legal: "172.16.5.0/24"
+so_subnet_infosec: "172.16.6.0/24"
+so_subnet_dmz: "172.16.8.0/24"
+
+# Who may reach the SOC WebUI. ALLOW_CIDR in the manager answer file must be
+# a SINGLE CIDR (so-ansible UPSTREAM_FIXES 2026-07-22) — so_subnet_security
+# is what gets rendered there; this list is for so-allow rules.
+so_allow_subnets:
+  - "{{ so_subnet_security }}"
+  - "10.255.240.0/20"
+
+# --- Answer-file values (rendered into the so-setup templates) -----------
+so_nids: "Suricata"
+so_zeek_version: "ZEEK"
+so_rule_set: "ETOPEN"
+so_manager_adv: "BASIC"
+so_address_type: "STATIC"
+so_web_access_type: "IP"
+
+# SOC WebUI admin + the shared secret search/sensor use to join the manager.
+# NOTE: ss-pp-ab keeps secrets in plaintext group_vars (cf. domain_admin_password
+# and splunk_admin_password in all.yml) — it has no ansible-vault, unlike
+# so-ansible. Following the repo's existing convention rather than introducing
+# a second secrets mechanism. Rotate before any customer-facing use.
+so_web_user: "admin@voltgrid.com"
+so_web_password: "Simspace1!Simspace1!"
+so_remote_password: "Simspace1!Simspace1!"
+
+# --- Airgap mode (IS-INET range) -----------------------------------------
+# PowerPlant's in-game plane has no real internet — only is-inet's staged
+# simulation. SOC's detection engines would otherwise try github and
+# rules.emergingthreats.net every 5 minutes and fail forever.
+#
+# SO has first-class airgap support keyed off ONE pillar boolean
+# (`global:airgap`); setting it swaps every remote content source for a local
+# path. so_apt_mirror stages the content, so_manager flips the pillar and
+# proves it took. See so-ansible roles/so_manager/tasks/airgap_mode.yml.
+so_airgap_mode: true
+so_airgap_build_dir: "/var/tmp/so-airgap-build"
+so_airgap_etopen_dest: "/nsm/rules/suricata/etopen"
+so_airgap_pillar_file: "/opt/so/saltstack/local/pillar/global/adv_global.sls"
+so_airgap_repos:
+  - name: securityonion-resources
+    url: "https://github.com/Security-Onion-Solutions/securityonion-resources"
+    dest: "/nsm/rules/detect-sigma/repos/securityonion-resources"
+  - name: securityonion-yara
+    url: "https://github.com/Security-Onion-Solutions/securityonion-yara"
+    dest: "/nsm/rules/detect-yara/repos/securityonion-yara"
+  - name: securityonion-resources-playbooks
+    url: "https://github.com/Security-Onion-Solutions/securityonion-resources-playbooks"
+    dest: "/nsm/airgap-resources/playbooks/securityonion-resources-playbooks"

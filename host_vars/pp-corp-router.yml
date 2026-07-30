@@ -65,3 +65,30 @@ extra_static_routes_remove:
 # /30). The overlay's "Remove stale VyOS iBGP" play strips legacy
 # `set protocols bgp` config from this router.
 remove_vyos_bgp: true
+
+# --- Security Onion GRE mirror → so-sensor-corp -------------------------
+# Mirrors the five corporate department interfaces into a GRE tunnel
+# terminating on so-sensor-corp (172.16.9.40). Path crosses NO firewall
+# (corp-router → pp-internal-router → pp-security), so no pfSense rule is
+# needed for this one.
+#
+# eth5 (switch-10 transit) is deliberately excluded — mirroring transit
+# duplicates what the department interfaces already carry.
+#
+# ⚠ eth0 SHARES THE MGMT IP (10.255.240.199) with the PP-Services gateway.
+# Mirroring it therefore also captures mgmt-plane traffic — every Ansible
+# SSH/WinRM session to every corp host. Verify on the live device before
+# enabling; if the noise is unacceptable, drop eth0 and lose PP-Services
+# (pp-dc01/02, pp-sql, pp-file, pp-mail) visibility, or add a tc filter.
+vyos_mirror_source_interfaces:
+  - eth0   # PP-Services      172.16.2.0/24  (⚠ shares mgmt — see above)
+  - eth1   # BP               172.16.3.0/24
+  - eth2   # Engineering      172.16.4.0/24
+  - eth3   # Legal Staff      172.16.5.0/24
+  - eth4   # InfoSec          172.16.6.0/24
+
+vyos_gre_source_ip: "172.16.0.42"      # eth5, routes to pp-security
+vyos_gre_remote_ip: "172.16.9.40"      # so-sensor-corp
+vyos_gre_local_addr: "10.100.1.1"
+vyos_gre_remote_addr: "10.100.1.2"
+vyos_gre_tunnel_prefix: 30

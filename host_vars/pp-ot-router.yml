@@ -51,3 +51,34 @@ extra_static_routes:
     descr: "Default inward via pp-ot-firewall"
 
 bgp: []
+
+# --- Security Onion GRE mirror → so-sensor-ot ---------------------------
+# Mirrors the four OT interfaces into a GRE tunnel terminating on
+# so-sensor-ot (172.16.9.41). eth0 (switch-8 transit, shares mgmt) excluded.
+#
+# ⚠ TWO BLOCKERS, both must be cleared before this sensor sees traffic:
+#
+# 1. pp-ot-firewall must PERMIT IP PROTOCOL 47 (GRE) from 192.168.200.202
+#    to 172.16.9.41. The tunnel path is
+#    pp-ot-router → pp-ot-firewall → pp-internal-router → pp-security.
+#    Symptom if missed: tunnel UP both ends, router TX incrementing, sensor
+#    RX flat at zero. Configure via the pfsense_firewall role.
+#
+# 2. This host is in [vyos_routes_only], NOT [vyos] — its RC_NG_OT_Router
+#    image rejects the vyos role's interface commands and accepts only raw
+#    static routes via vyos_config. vyos_mirror does two things: a tunnel
+#    interface via vyos_config (probably fine) and a tc script pushed over
+#    plain SSH (unproven on this image). VERIFY before assuming the OT
+#    mirror works — this is the same class of image limitation that made the
+#    old OT-pfSense image unmanageable from Ansible.
+vyos_mirror_source_interfaces:
+  - eth1   # Gas-Turbine      192.168.95.0/24
+  - eth2   # Gas-Turbine-Sim  192.168.90.0/27
+  - eth3   # PP-OT-Services   192.168.90.96/27
+  - eth4   # PP-OT-Ctrl       192.168.100.0/24
+
+vyos_gre_source_ip: "192.168.200.202"  # eth0, routes to pp-security
+vyos_gre_remote_ip: "172.16.9.41"      # so-sensor-ot
+vyos_gre_local_addr: "10.100.2.1"
+vyos_gre_remote_addr: "10.100.2.2"
+vyos_gre_tunnel_prefix: 30

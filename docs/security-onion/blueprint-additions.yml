@@ -1,5 +1,5 @@
 # =========================================================================
-# Security Onion — blueprint additions for ARBITR_PP_1328
+# Security Onion — blueprint additions (APPLIED as ARBITR_PP_1455)
 # =========================================================================
 # Paste these entries into the `resources:` list of the PowerPlant
 # blueprint. Format matches the existing `pp-splunk` entry (the closest
@@ -11,12 +11,15 @@
 #   mgmt 10.255.240.x: 57 addresses in use between .101 and .208
 #                      per the blueprint
 #
-# WARNING — the blueprint is NOT authoritative for the mgmt plane.
-# .136 was free according to ARBITR_PP_1328.yml and is in fact allocated
-# (Eric, 2026-07-30), so something outside this file consumes addresses in
-# this range. .136 is skipped below. VERIFY ALL FIVE against the platform
-# before applying; a programmatic check against the blueprint alone is not
-# sufficient evidence.
+# APPLIED 2026-07-30 as ARBITR_PP_1455. The values below are the ACTUAL
+# allocations from that blueprint, not the original draft — the sensor mgmt
+# IPs were assigned in a different order than proposed, and host_vars are
+# generated from the blueprint rather than from this file.
+#
+# The .136 mystery is solved: is-inet MOVED from .108 to .136 in this
+# revision. The earlier draft's collision check was clean only because it
+# compared against the stale ARBITR_PP_1328 copy. Lesson stands — diff the
+# CURRENT blueprint, never a local copy of an older one.
 #
 # DESIGN (agreed 2026-07-30): 3 sensors, one per VyOS router that fronts a
 # distinct zone. pp-security is deliberately NOT mirrored — mirroring the
@@ -72,7 +75,7 @@
       ipAddress: "172.16.9.40"
       prefix: 24
     managementInterface:
-      ipAddress: "10.255.240.137"
+      ipAddress: "10.255.240.139"
       position: "FIRST"
 
 # --- Sensor 2: OT --------------------------------------------------------
@@ -90,7 +93,7 @@
       ipAddress: "172.16.9.41"
       prefix: 24
     managementInterface:
-      ipAddress: "10.255.240.138"
+      ipAddress: "10.255.240.137"
       position: "FIRST"
 
 # --- Sensor 3: edge / attack path ---------------------------------------
@@ -109,7 +112,7 @@
       ipAddress: "172.16.9.42"
       prefix: 24
     managementInterface:
-      ipAddress: "10.255.240.139"
+      ipAddress: "10.255.240.138"
       position: "FIRST"
 
 # =========================================================================
@@ -172,7 +175,8 @@
 # wrong interfaces (so-ansible PORTING_GUIDE 9.9).
 #   pp-corp-router : the 5 department NICs; EXCLUDE switch-10 (transit)
 #   pp-ot-router   : Gas-Turbine, Gas-Turbine-Sim, PP-OT-Services,
-#                    subnet-0; EXCLUDE switch-8 (transit)
+#                    PP-OT-Ctrl (renamed from subnet-0 in _1455);
+#                    EXCLUDE switch-8 (transit)
 #   pp-isp-router  : Internet, red-net; EXCLUDE switch-0 (transit)
 #
 # KNOWN PORTING GAP — so_sensor's GRE firewall rule:

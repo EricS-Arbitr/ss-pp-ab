@@ -1,0 +1,49 @@
+# host_vars/so-sensor-corp.yml — Security Onion sensor — corporate
+# Blueprint: ARBITR_PP_1455 · image RDP_Ubuntu_Desktop_22.04.5:1.1.0 (8c/16G)
+# Prod: pp-security 172.16.9.40/24 → gw 172.16.9.1   Mgmt: 10.255.240.139/20 (position FIRST)
+ansible_host: 10.255.240.139
+
+# --- `common` role schema (ss-pp-ab convention, cf. host_vars/pp-splunk.yml) ---
+network_interfaces:
+  - name: "eth0"                      # mgmt — out-of-band, no gateway in-scenario
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.139"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"                      # pp-security (in-scenario)
+    ipv4:
+      type: "ethernet"
+      address: "172.16.9.40"
+      netmask: "255.255.255.0"
+      gateway: "172.16.9.1"
+    dns:
+      - "172.16.2.7"                  # pp-dc01, matching pp-splunk
+
+# --- so-ansible role contract ---
+so_role: "sensor"
+so_hostname: "so-sensor-corp"
+so_prod_ip: "172.16.9.40"
+so_prod_prefix: 24
+so_prod_gateway: "172.16.9.1"
+so_prod_dns:
+  - "172.16.2.7"
+
+# --- GRE mirror endpoint (pairs with pp-corp-router) ---
+# The /30 is arbitrary but must be unused and must match the router's
+# vyos_gre_* values.
+so_gre_tunnel_local: "10.100.1.2"
+so_gre_tunnel_remote: "10.100.1.1"
+so_gre_tunnel_prefix: 30
+so_monitor_interface: "tun0"
+
+# PORTING FIX — so-ansible hardcoded the permitted GRE source as
+# `so_prod_gateway`, which was correct in the dev range because the mirroring
+# router WAS the sensor's gateway. Here every sensor's gateway is 172.16.9.1
+# while the mirroring routers are remote, so the sensor's SO firewall rule
+# must permit the ROUTER's tunnel source instead or the mirror is dropped.
+# so_sensor's so_gre_rule_block has to consume this variable.
+so_gre_allowed_source: "172.16.0.42"
+
+# Which router feeds this sensor (documentation + play targeting).
+so_mirror_router: "pp-corp-router"
