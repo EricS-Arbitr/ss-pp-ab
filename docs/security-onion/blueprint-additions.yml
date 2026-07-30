@@ -8,9 +8,15 @@
 # IP ALLOCATIONS — verified against ARBITR_PP_1328.yml 2026-07-30
 #   pp-security (172.16.9.0/24) in use: .1 pp-internal-router,
 #                                       .11 win-hunt-1, .20 pp-splunk
-#   mgmt 10.255.240.x: 57 addresses in use between .101 and .208;
-#                      .134-.139 is a contiguous free block
-# Re-verify before applying if the blueprint has changed since.
+#   mgmt 10.255.240.x: 57 addresses in use between .101 and .208
+#                      per the blueprint
+#
+# WARNING — the blueprint is NOT authoritative for the mgmt plane.
+# .136 was free according to ARBITR_PP_1328.yml and is in fact allocated
+# (Eric, 2026-07-30), so something outside this file consumes addresses in
+# this range. .136 is skipped below. VERIFY ALL FIVE against the platform
+# before applying; a programmatic check against the blueprint alone is not
+# sufficient evidence.
 #
 # DESIGN (agreed 2026-07-30): 3 sensors, one per VyOS router that fronts a
 # distinct zone. pp-security is deliberately NOT mirrored — mirroring the
@@ -66,7 +72,7 @@
       ipAddress: "172.16.9.40"
       prefix: 24
     managementInterface:
-      ipAddress: "10.255.240.136"
+      ipAddress: "10.255.240.137"
       position: "FIRST"
 
 # --- Sensor 2: OT --------------------------------------------------------
@@ -84,7 +90,7 @@
       ipAddress: "172.16.9.41"
       prefix: 24
     managementInterface:
-      ipAddress: "10.255.240.137"
+      ipAddress: "10.255.240.138"
       position: "FIRST"
 
 # --- Sensor 3: edge / attack path ---------------------------------------
@@ -103,7 +109,7 @@
       ipAddress: "172.16.9.42"
       prefix: 24
     managementInterface:
-      ipAddress: "10.255.240.138"
+      ipAddress: "10.255.240.139"
       position: "FIRST"
 
 # =========================================================================
