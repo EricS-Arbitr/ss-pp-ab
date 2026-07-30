@@ -224,7 +224,7 @@ fi
 # --- Pack ------------------------------------------------------------------
 
 cd "$STAGE"
-TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh)
+TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh ansible.cfg)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)

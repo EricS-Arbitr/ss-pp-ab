@@ -1,5 +1,5 @@
 domain_admin: "simspace"
-domain_admin_password: "Simspace1!Simspace1!"
+domain_admin_password: "{{ vault_domain_admin_password }}"
 cs_certs:
   - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertHighAssuranceEVRootCA.crt"
   - "https://nexus.dev.ng.simspace.lan/repository/ng_raw/certificates/DigiCertGlobalRootG2.crt"
@@ -15,9 +15,9 @@ global_dns_container_name: "is-inet"
 
 # Splunk server + forwarder shared config
 splunk_admin: "admin"
-splunk_admin_password: "simspace1"
+splunk_admin_password: "{{ vault_splunk_admin_password }}"
 splunk_user: "admin"
-splunk_password: "simspace1"
+splunk_password: "{{ vault_splunk_password }}"
 splunk_server_ip: "172.16.9.20"          # pp-splunk's PP-Security IP
 splunk_forwarder_port: "9997"
 

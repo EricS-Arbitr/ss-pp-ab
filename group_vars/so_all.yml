@@ -69,13 +69,11 @@ so_address_type: "STATIC"
 so_web_access_type: "IP"
 
 # SOC WebUI admin + the shared secret search/sensor use to join the manager.
-# NOTE: ss-pp-ab keeps secrets in plaintext group_vars (cf. domain_admin_password
-# and splunk_admin_password in all.yml) — it has no ansible-vault, unlike
-# so-ansible. Following the repo's existing convention rather than introducing
-# a second secrets mechanism. Rotate before any customer-facing use.
+# Both live in group_vars/all/vault.yml (ansible-vault, password `simspace1`),
+# added 2026-07-30 along with every other credential in this repo.
 so_web_user: "admin@voltgrid.com"
-so_web_password: "Simspace1!Simspace1!"
-so_remote_password: "Simspace1!Simspace1!"
+so_web_password: "{{ vault_so_web_password }}"
+so_remote_password: "{{ vault_so_remote_password }}"
 
 # --- Airgap mode (IS-INET range) -----------------------------------------
 # PowerPlant's in-game plane has no real internet — only is-inet's staged

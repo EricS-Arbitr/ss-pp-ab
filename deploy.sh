@@ -47,6 +47,36 @@ mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
 # VMs finish booting before the deploy started, but the retry loop already
 # handles any "host unreachable" from a VM that isn't ready. On iterative
 # deploys the sleep is pure wasted wall clock.
+# --- Vault guard -------------------------------------------------------------
+# Refuse to deploy if the vault is missing or plaintext. Written FAIL-CLOSED on
+# purpose: the equivalent guard in so-ansible was
+#   if [ -f <path> ] && ! head -1 <path> | grep -q '^$ANSIBLE_VAULT'
+# and a MISSING file short-circuited the whole test to false, so it passed on
+# every run and had never once fired. A plaintext vault would have shipped
+# silently. Two separate checks here, both fatal.
+VAULT_FILE="group_vars/all/vault.yml"
+
+if [ ! -f "$VAULT_FILE" ]; then
+	echo "ERROR: $VAULT_FILE not found. Refusing to deploy."
+	echo "       Every credential in this repo resolves through it."
+	exit 1
+fi
+
+if ! head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
+	echo "ERROR: $VAULT_FILE is plaintext. Refusing to deploy."
+	echo "       Re-encrypt: ansible-vault encrypt $VAULT_FILE"
+	exit 1
+fi
+
+if [ ! -f /home/simspace/.vault_pass ]; then
+	echo "ERROR: /home/simspace/.vault_pass not found — it does NOT persist"
+	echo "       across range spin-ups. Recreate it:"
+	echo "         sudo bash -c 'echo -n \"simspace1\" > /home/simspace/.vault_pass'"
+	echo "         sudo chown simspace:simspace /home/simspace/.vault_pass"
+	echo "         sudo chmod 600 /home/simspace/.vault_pass"
+	exit 1
+fi
+
 echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then

@@ -2,7 +2,7 @@ ansible_connection: winrm
 ansible_winrm_transport: ntlm
 ansible_port: 5985
 ansible_user: simspace
-ansible_password: Simspace1!Simspace1!
+ansible_password: "{{ vault_windows_password }}"
 ansible_python_interpreter: python
 ansible_become_method: runas
 ansible_become_user: simspace

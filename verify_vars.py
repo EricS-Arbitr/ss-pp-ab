@@ -58,7 +58,11 @@ JINJA_FOR_RE = re.compile(r"\{%\s*for\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+in\s")
 # {% set X = ... %} captures X
 JINJA_SET_RE = re.compile(r"\{%\s*set\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=")
 # Any reference starting with this prefix is treated as magic (runtime facts)
-MAGIC_PREFIXES = ("ansible_",)
+# "vault_": group_vars/all/vault.yml is ansible-vault encrypted, so this
+# script cannot read its keys — the file is ciphertext on disk. Everything it
+# provides is prefixed vault_ by convention, so treat the prefix as defined
+# rather than warning on every credential. Added 2026-07-30 with the vault.
+MAGIC_PREFIXES = ("ansible_", "vault_")
 
 
 def relevant_files(root):
@@ -91,7 +95,8 @@ def collect_defined(stage):
     defined = set(MAGIC)
 
     # Top-level keys in dedicated var files only.
-    var_files = list((stage / "group_vars").glob("*.yml"))
+    # rglob, not glob: group_vars/all/ is a DIRECTORY since the vault landed
+    var_files = list((stage / "group_vars").rglob("*.yml"))
     var_files += list((stage / "host_vars").glob("*.yml"))
     for role in (stage / "roles").glob("*"):
         for sub in ("defaults", "vars"):

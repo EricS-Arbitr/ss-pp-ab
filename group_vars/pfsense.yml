@@ -12,7 +12,7 @@
 # (which they always are on pfSense): `PermissionError: '/cf/conf/config.xml'`.
 ansible_connection: ssh
 ansible_user: admin
-ansible_ssh_pass: simspace1
+ansible_ssh_pass: "{{ vault_pfsense_password }}"
 ansible_become: false
 ansible_python_interpreter: /usr/local/bin/python3.11
 

@@ -206,3 +206,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ansible-vault password (never commit; recreate on the controller)
+.vault_pass
