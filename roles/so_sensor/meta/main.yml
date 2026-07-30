@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: so_sensor
+  author: eric@arbitrsecurity.com
+  description: >
+    SENSOR install + auto-join manager. Brings up GRE tunnel to router-0
+    (sensor endpoint of vyos_mirror's GRE-encapsulated mirror) so
+    Suricata + Zeek see decapsulated mirrored traffic on tun0.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+
+dependencies:
+  - role: so_base

@@ -53,6 +53,18 @@ so_subnet_legal: "172.16.5.0/24"
 so_subnet_infosec: "172.16.6.0/24"
 so_subnet_dmz: "172.16.8.0/24"
 
+# In-range subnets that bypass the upstream proxy (so_base/environment.j2).
+# PowerPlant has no "operations" subnet, which is what so-ansible's template
+# used to hardcode — hence the list form.
+so_no_proxy_subnets:
+  - "{{ so_subnet_security }}"
+  - "{{ so_subnet_services }}"
+  - "{{ so_subnet_business }}"
+  - "{{ so_subnet_engineering }}"
+  - "{{ so_subnet_legal }}"
+  - "{{ so_subnet_infosec }}"
+  - "{{ so_subnet_dmz }}"
+
 # Who may reach the SOC WebUI. ALLOW_CIDR in the manager answer file must be
 # a SINGLE CIDR (so-ansible UPSTREAM_FIXES 2026-07-22) — so_subnet_security
 # is what gets rendered there; this list is for so-allow rules.

@@ -1,0 +1,386 @@
+---
+# =========================================================================
+# so_search — join manager as SEARCHNODE
+# =========================================================================
+# Structurally identical to so_manager except for template + answer name.
+# Kept as its own role (rather than parameterizing so_manager) so future
+# per-role divergence (heap-tuning, disk layout, etc.) is trivial to add.
+
+- name: Idempotency probe
+  ansible.builtin.stat:
+    path: "{{ so_search_installed_marker }}"
+  register: so_installed
+
+- name: End play early on this host if SO is already installed
+  ansible.builtin.meta: end_host
+  when: so_installed.stat.exists
+
+- name: Precondition — SO source must be at {{ so_source_dest }}
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/setup/so-setup"
+  register: so_setup_present
+
+- name: Fail loudly if so_base didn't stage the source
+  ansible.builtin.fail:
+    msg: |
+      SO source missing at {{ so_source_dest }}/setup/so-setup. Re-run 30-prereqs.
+  when: not so_setup_present.stat.exists
+
+- name: Gather network facts (need per-iface ipv4)
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+
+- name: Compute so_prod_nic
+  ansible.builtin.set_fact:
+    so_prod_nic: >-
+      {{ (ansible_facts['interfaces']
+          | map('regex_replace', '-', '_')
+          | map('extract', ansible_facts)
+          | selectattr('ipv4', 'defined')
+          | selectattr('ipv4.address', 'equalto', so_prod_ip)
+          | map(attribute='device')
+          | list
+          | first) }}
+
+- name: Compute so_prod_netmask
+  ansible.builtin.set_fact:
+    so_prod_netmask: >-
+      {{ {16:'255.255.0.0', 20:'255.255.240.0', 22:'255.255.252.0',
+          23:'255.255.254.0', 24:'255.255.255.0', 25:'255.255.255.128',
+          26:'255.255.255.192', 27:'255.255.255.224', 28:'255.255.255.240',
+          29:'255.255.255.248', 30:'255.255.255.252',
+          31:'255.255.255.254', 32:'255.255.255.255'
+      }[so_prod_prefix | int] }}
+
+- name: Render search answer file to /root/so-answers.env
+  ansible.builtin.template:
+    src: search.env.j2
+    dest: /root/so-answers.env
+    mode: '0600'
+    owner: root
+    group: root
+
+# --- so-setup skip decision (POSITIVE proof, not just an exit code) ------
+# 2026-07-28: the old design gated the shell task on `creates: <marker>`
+# and treated rc=0 as proof of success. That is self-perpetuating and
+# unsafe: when `creates:` is satisfied, Ansible's command module returns
+# rc=0 WITH skipped=true, so the "fail if rc != 0" guard below passes
+# whether so-setup succeeded OR was skipped — and then we re-touch the
+# marker. Once the marker exists for ANY reason the node can never
+# self-heal, because the only task that would repair it is the one being
+# skipped. so-sensor-1 landed in exactly that state (marker present, no
+# /root/so-setup.log, no Salt installed at all, no key on the master).
+#
+# Fix: skip so-setup only when the marker exists AND Salt is genuinely
+# present. Either condition alone is insufficient — the marker alone is
+# the bug above, and Salt alone would skip a so-setup that installed Salt
+# then died before finishing.
+# NOTE: do NOT probe /etc/salt/minion_id — this SO version never writes
+# it. It sets `id:` inside /etc/salt/minion instead (verified 2026-07-28:
+# /etc/salt/ held grains, minion, minion.d/, pki/ but no minion_id, while
+# the minion was correctly identifying as so-sensor-1_sensor). Probing
+# minion_id made so_setup_can_skip permanently false, which would re-run
+# 30-45 min of so-setup on every attempt forever.
+- name: Probe for a real Salt install (minion config written by so-setup)
+  ansible.builtin.stat:
+    path: /etc/salt/minion
+  register: salt_minion_id
+
+- name: Probe for the salt-minion systemd unit
+  ansible.builtin.command: systemctl list-unit-files salt-minion.service
+  register: salt_unit_probe
+  changed_when: false
+  failed_when: false
+
+- name: Probe for the so-setup completion marker
+  ansible.builtin.stat:
+    path: "{{ so_search_setup_marker }}"
+  register: so_setup_marker_stat
+
+- name: Decide whether the 30-45 min so-setup call can be skipped
+  ansible.builtin.set_fact:
+    so_setup_can_skip: >-
+      {{ so_setup_marker_stat.stat.exists
+         and salt_minion_id.stat.exists
+         and 'salt-minion.service' in salt_unit_probe.stdout }}
+
+- name: Report so-setup skip decision
+  ansible.builtin.debug:
+    msg: >-
+      so-setup {{ 'SKIPPED (marker + Salt both present)' if so_setup_can_skip
+      else 'WILL RUN' }} — marker={{ so_setup_marker_stat.stat.exists }},
+      minion_id={{ salt_minion_id.stat.exists }},
+      unit={{ 'salt-minion.service' in salt_unit_probe.stdout }}
+
+- name: Kick off so-setup network (bash-source env then invoke)
+  ansible.builtin.shell: |
+    source /root/so-answers.env
+    cd {{ so_source_dest }}/setup
+    ./so-setup {{ so_setup_type }} > {{ so_search_setup_log }} 2>&1
+  args:
+    executable: /bin/bash
+  async: "{{ so_search_install_timeout }}"
+  poll: 0
+  register: so_setup_async
+  when: not so_setup_can_skip
+
+- name: Poll so-setup completion
+  ansible.builtin.async_status:
+    jid: "{{ so_setup_async.ansible_job_id }}"
+  register: so_setup_result
+  until: so_setup_result.finished
+  retries: "{{ (so_search_install_timeout / so_search_poll_interval) | int }}"
+  delay: "{{ so_search_poll_interval }}"
+  when: not so_setup_can_skip
+
+- name: Report so-setup exit code + last log lines
+  ansible.builtin.debug:
+    msg: |
+      so-setup rc={{ so_setup_result.rc | default('unknown') }}
+      Last 20 log lines:
+      {{ so_setup_result.stdout_lines[-20:] | default(['<no stdout captured>']) | join('\n') }}
+  when: not so_setup_can_skip
+
+- name: Fail if so-setup exited non-zero
+  ansible.builtin.fail:
+    msg: |
+      so-setup returned {{ so_setup_result.rc }}. Full log at
+      {{ so_search_setup_log }} on {{ inventory_hostname }}.
+  when:
+    - not so_setup_can_skip
+    - so_setup_result.rc | default(1) != 0
+
+# so-setup's exit code is NOT trustworthy. Verified 2026-07-28 on the
+# sensor: it logged "WARNING: Errors detected during setup" with a fatal
+# NetworkManager error and still exited 0. SO writes its own signals
+# instead — a /root/failure marker file and /root/errors.log. Check those
+# first; they are authoritative where rc is not.
+- name: Check SO's own failure marker
+  ansible.builtin.stat:
+    path: /root/failure
+  register: so_failure_marker
+  when: not so_setup_can_skip
+
+- name: Read SO's errors.log (for the failure message)
+  ansible.builtin.slurp:
+    src: /root/errors.log
+  register: so_errors_log
+  failed_when: false
+  when: not so_setup_can_skip
+
+# /root/failure alone is NOT grounds to fail. See the long note in
+# so_manager/tasks/main.yml: the SimSpace image pre-bakes SO remnants, so
+# so-setup always takes its reinstall path, whose elastic-agent uninstall
+# logs "notify Fleet: failed" against a Fleet server that is not up yet.
+# SO writes /root/failure for that and then succeeds anyway. Failing here
+# would break every fresh deploy. Warn; let the outcome checks gate.
+- name: Report SO's failure marker + errors.log (warning, not fatal)
+  ansible.builtin.debug:
+    msg: |
+      NOTE: SO wrote /root/failure on {{ inventory_hostname }} (so-setup
+      still exited {{ so_setup_result.rc | default('?') }}). Often benign on
+      this image — see so_manager/tasks/main.yml. Judge success by the Salt
+      + so-status checks that follow.
+
+      /root/errors.log:
+      {{ (so_errors_log.content | b64decode) if so_errors_log.content is defined
+         else '<errors.log unreadable>' }}
+
+      Full setup log: {{ so_search_setup_log }} (ours) and /root/sosetup.log
+      (SO's own, more detail).
+  when:
+    - not so_setup_can_skip
+    - so_failure_marker.stat.exists
+
+# Second net: even with no failure marker, confirm Salt actually landed.
+- name: Re-probe for Salt after so-setup
+  ansible.builtin.stat:
+    path: /etc/salt/minion
+  register: salt_minion_id_after
+  when: not so_setup_can_skip
+
+- name: Fail if so-setup exited 0 but never installed Salt
+  ansible.builtin.fail:
+    msg: |
+      so-setup exited 0 on {{ inventory_hostname }} but Salt was never
+      installed — /etc/salt/minion does not exist. The exit code lied.
+      Do NOT trust rc here. Check {{ so_search_setup_log }} on the host;
+      if that file is missing entirely, so-setup never actually ran.
+  when:
+    - not so_setup_can_skip
+    - not salt_minion_id_after.stat.exists
+
+# Marker for so-setup completion — separate from the final "installed"
+# marker so retries only re-run grid-join + verify, not the 30-45 min
+# so-setup call. Only reached once Salt is confirmed present above.
+- name: Mark so-setup as completed (short-circuits shell task on retry)
+  ansible.builtin.file:
+    path: "{{ so_search_setup_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+  when: not so_setup_can_skip
+
+# so-setup regenerates this minion's keypair on every (re)install. If the
+# master still holds the OLD public key for this minion id, it rejects the
+# new one and salt-minion crash-loops out with 77/NOPERM:
+#   [CRITICAL] The Salt Master has rejected this minion's public key!
+# Verified 2026-07-28 on so-sensor-1. Delete the stale key so the fresh
+# one arrives as Unaccepted and grid-join below can accept it normally.
+# Gated on `not so_setup_can_skip` — only when so-setup just re-ran and we
+# therefore know the keypair was regenerated. Never touch a healthy grid
+# member's key.
+- name: Grid join — delete stale salt key for this minion on the master
+  ansible.builtin.command: "sudo salt-key -d {{ inventory_hostname }}_{{ so_role }} -y"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: stale_key_del
+  changed_when: "'Removed' in stale_key_del.stdout"
+  # "does not match any ... keys" on a first install is the expected no-op.
+  failed_when: false
+  when: not so_setup_can_skip
+
+# Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
+# master. Grid-join tasks below wait for that key to appear before trying
+# to accept it — otherwise so-minion -o=add races with the minion's own
+# initial auth attempt and hits "does not match any unaccepted keys"
+# (verified 2026-07-27 on so-search first fresh deploy: firewall opened,
+# but pillar generation never happened because the key wasn't yet pending
+# when so-minion ran).
+- name: Reboot the search node
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 60
+    post_reboot_delay: 30
+
+# --- Grid-join handshake (delegated to manager, POST-reboot) ------------
+# so-setup only performs a lightweight one-shot handshake at install time
+# via SOREMOTEPASS. It does NOT re-invoke on subsequent minion re-auth,
+# and it does NOT populate so-firewall or generate the per-minion pillar.
+# Result: after so-setup completes with rc=0, the joining node is
+# actually stuck — salt-minion can't reach master (firewall drops
+# TCP 4505/4506), and highstate would fail even if it could
+# (per-minion pillar missing).
+#
+# Fix: delegate four tasks to the manager to finish grid-join steps
+# so-setup should have done itself:
+#   1. Add this node's IP to the appropriate so-firewall hostgroup so
+#      TCP 4505/4506 (salt master) opens for it.
+#   2. Wait for this node's salt-key to appear in Unaccepted (may take
+#      30-90s post-reboot before salt-minion connects + submits key).
+#   3. Run so-minion -o=add to accept the salt-key AND generate the
+#      per-minion pillar files under /opt/so/saltstack/local/pillar/minions/.
+#   4. Kick a state.highstate for this node so it pulls docker
+#      + container images + configs from the master in one push.
+
+- name: Grid join — on manager, add this node's IP to searchnode firewall hostgroup
+  ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost searchnode {{ so_prod_ip }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_add
+  changed_when: "'Successfully added' in fw_add.stdout"
+  # so-firewall returns rc=3 with 'WARNING - IP ... already exists in hostgroup ...' when
+  # the IP was already added by a previous attempt. That's idempotent, not a failure.
+  failed_when:
+    - fw_add.rc != 0
+    - "'already exists' not in fw_add.stderr"
+
+- name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
+  ansible.builtin.command: sudo salt-call state.apply firewall
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_apply
+  changed_when: fw_apply.rc == 0
+  # The highstate scheduler on manager fires every 15 min. If it's mid-run
+  # when our state.apply fires, salt refuses with 'The function state.highstate
+  # is running as PID X'. Highstates take ~5-8 min. Retry 20×30s = 10 min ceiling.
+  until: fw_apply.rc == 0
+  retries: 20
+  delay: 30
+
+- name: Grid join — preflight, confirm salt-key is invokable on manager
+  ansible.builtin.command: "sudo salt-key --version"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  changed_when: false
+  # Fail fast and loud. Without this, a missing/renamed salt-key binary is
+  # swallowed by the 30×10s `until` loop below — it retries a hard
+  # "command not found" for a full 5 min before surfacing the real error.
+
+- name: Grid join — wait for this node's salt-key to appear in Unaccepted on master
+  # Invoked bare (not /usr/sbin/salt-key). SO ships its OWN helpers in
+  # /usr/sbin (so-firewall, so-minion), but salt's binaries come from the
+  # Salt onedir package and land in /usr/bin. sudo's secure_path covers
+  # them — `sudo salt-call` above already proves that.
+  ansible.builtin.command: "sudo salt-key --list=unaccepted --no-color"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: pending_keys
+  # Salt-minion connects to master within 30-90s post-reboot. Poll for
+  # up to 5 min (30 × 10s) for our key to appear. Without this wait,
+  # so-minion -o=add below races with the minion's own auth and no-ops
+  # with "does not match any unaccepted keys".
+  until: (inventory_hostname + '_' + so_role) in pending_keys.stdout
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Grid join — on manager, so-minion -o=add (accept key + generate per-minion pillar)
+  ansible.builtin.command: "sudo /usr/sbin/so-minion -o=add -m={{ inventory_hostname }}_{{ so_role }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_min_add
+  # so-minion -o=add returns success both on fresh accept and on "key already
+  # accepted, re-generating pillar" — both are what we want. Only fail on hard errors.
+  failed_when:
+    - so_min_add.rc != 0
+    - "'does not match any unaccepted keys' not in so_min_add.stdout"
+
+- name: Grid join — kick highstate on this node (fire-and-forget; so-status wait below covers it)
+  ansible.builtin.command: "sudo salt {{ inventory_hostname }}_{{ so_role }} state.highstate --async"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  changed_when: false
+
+- name: Verify search node has joined the grid (so-status)
+  ansible.builtin.command: sudo so-status
+  register: so_status
+  changed_when: false
+  # Post grid-join push: install docker + pull the elasticsearch/logstash
+  # images from the manager's registry + start the 4 search-node containers
+  # (elasticsearch, logstash, sensoroni, telegraf). Empirically 8-12 min.
+  # 40 × 30s = 20 min ceiling.
+  retries: 40
+  delay: 30
+  until: so_status.rc == 0
+
+- name: Assert so-status actually reports a healthy grid (rc alone is not proof)
+  ansible.builtin.assert:
+    that:
+      - "'adversaries cry' in so_status.stdout or 'STATUS: OK' in so_status.stdout"
+    fail_msg: |
+      so-status exited 0 on {{ inventory_hostname }} but did not report a
+      healthy grid. An exit code is not proof — so-setup already taught us
+      that (UPSTREAM_FIXES 2026-07-28 later 6). Last lines:
+      {{ so_status.stdout_lines[-15:] | join('\n') }}
+    success_msg: "so-status reports a healthy grid"
+    quiet: true
+
+- name: Report search node status
+  ansible.builtin.debug:
+    msg: "{{ so_status.stdout_lines[-15:] }}"
+
+# so-setup does NOT write this marker on its own (2026-07-23). Touch it
+# AFTER so-status verify passes so the idempotency probe at the top of
+# this role short-circuits ONLY on truly complete runs. If a run fails
+# at grid-join or so-status verify, a re-invocation will re-execute
+# grid-join tasks instead of assuming completion.
+- name: Write installed marker for idempotent re-runs (only after so-status green)
+  ansible.builtin.file:
+    path: "{{ so_search_installed_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root

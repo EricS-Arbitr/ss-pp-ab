@@ -1,0 +1,50 @@
+---
+# =========================================================================
+# 20-vyos.yml — router-0 GRE tunnel + tc mirror rules to sensor
+# =========================================================================
+# TWO plays because VyOS orchestration mixes two connection profiles:
+#
+#   Play 1 (network_cli): vyos.vyos.vyos_config for declarative tunnel
+#                         setup. network_cli intercepts everything and
+#                         cannot run ansible.builtin.* modules.
+#   Play 2 (ssh):         ansible.builtin.template + command to write
+#                         and run the tc-mirror shell script. Uses the
+#                         underlying VyOS Debian shell + Python3.
+#
+# Both plays reference the SAME vyos_mirror role via `tasks_from:` so
+# task ordering + variable resolution stay together in one role.
+# =========================================================================
+
+- name: VyOS mirror config on router-0 — Part A (GRE tunnel via network_cli)
+  # so-ansible mirrors from a single router group [net_vyos]. Here the
+  # mirror sources are their own group: pp-corp-router, pp-ot-router and
+  # pp-isp-router. Deliberately NOT [vyos] — pp-ot-router is excluded from
+  # that group (its RC_NG_OT_Router image rejects the vyos role's interface
+  # commands) but IS a mirror source.
+  hosts: so_mirror_routers
+  gather_facts: false
+  connection: network_cli
+  tasks:
+    - name: Include tunnel tasks
+      ansible.builtin.import_role:
+        name: vyos_mirror
+        tasks_from: tunnel
+
+- name: VyOS mirror config on router-0 — Part B (tc script via ssh)
+  # so-ansible mirrors from a single router group [net_vyos]. Here the
+  # mirror sources are their own group: pp-corp-router, pp-ot-router and
+  # pp-isp-router. Deliberately NOT [vyos] — pp-ot-router is excluded from
+  # that group (its RC_NG_OT_Router image rejects the vyos role's interface
+  # commands) but IS a mirror source.
+  hosts: so_mirror_routers
+  gather_facts: false
+  connection: ssh
+  vars:
+    # SSH into VyOS's underlying Debian; explicit interpreter because
+    # VyOS's /usr/bin/python doesn't always exist.
+    ansible_python_interpreter: /usr/bin/python3
+  tasks:
+    - name: Include tc tasks
+      ansible.builtin.import_role:
+        name: vyos_mirror
+        tasks_from: tc

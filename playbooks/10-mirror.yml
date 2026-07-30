@@ -1,0 +1,29 @@
+---
+# =========================================================================
+# 10-mirror.yml — stage SO ISO on ansible controller for airgap install
+# =========================================================================
+# Runs on ansible box itself (ansible_connection=local). Serves ISO +
+# eventually SO package/signature mirror over nginx :80. All SO nodes
+# fetch the ISO from here during install (see so_manager/so_search/
+# so_sensor roles).
+# =========================================================================
+
+- name: SO local mirror — nginx serving SO source tarball on ansible controller
+  # ss-pp-ab names the controller group [infrastructure], not
+  # [ansible_controller] as so-ansible does. Note it also connects over SSH
+  # here (host_vars/ansible.yml sets ansible_host) rather than
+  # ansible_connection=local, so so_apt_mirror runs remotely — functionally
+  # the same, just not a local action.
+  hosts: infrastructure
+  become: true
+  gather_facts: true
+  roles:
+    # NOTE: intentionally NOT running the `common` role here (or on SO
+    # nodes). Discovered 2026-07-21: the airfield-range `common` role
+    # does wholesale NetworkManager + netplan surgery driven by a
+    # `network_interfaces` host_vars dict we don't populate. On the
+    # ansible controller it'd fail with 'network_interfaces is undefined'
+    # and even if we defined it, running netplan surgery on a working
+    # controller is asking for a broken deploy. so_base handles the
+    # cross-cutting SO-side prep; SO's own so-setup handles netplan.
+    - so_apt_mirror

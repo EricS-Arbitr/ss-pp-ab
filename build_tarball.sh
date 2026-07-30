@@ -37,8 +37,17 @@ trap 'rm -rf "$STAGE_PARENT"' EXIT
 
 # --- Helpers ---------------------------------------------------------------
 
-# Extract role names from a playbook's `roles:` blocks.
-# Handles both "  - rolename" and "  - role: rolename" forms.
+# Extract role names from a playbook.
+# Handles three forms:
+#   roles:  - rolename
+#   roles:  - role: rolename
+#   import_role:/include_role: with a following `name:` (any indentation)
+#
+# The third form was added 2026-07-30. Without it vyos_mirror was invisible:
+# playbooks/20-vyos.yml pulls it in via `import_role` + `tasks_from` inside a
+# `tasks:` block, not a `roles:` block, so the role was never bundled and the
+# deploy would have failed on the controller with "role not found" — after
+# the tarball had already shipped.
 extract_playbook_roles() {
   awk '
     /^  roles:/ { inroles=1; next }
@@ -49,6 +58,17 @@ extract_playbook_roles() {
       sub(/[ \t#].*$/, "")
       if (length($0) > 0) print
     }
+    # import_role / include_role — capture the name: on a following line
+    /(import_role|include_role):[[:space:]]*$/ { inrole_mod=1; next }
+    inrole_mod && /^[[:space:]]*name:[[:space:]]*/ {
+      line=$0
+      sub(/^[[:space:]]*name:[[:space:]]*/, "", line)
+      sub(/[ \t#].*$/, "", line)
+      gsub(/["\047]/, "", line)
+      if (length(line) > 0) print line
+      inrole_mod=0
+    }
+    inrole_mod && /^[[:space:]]*[a-z_]+:/ && !/name:/ { inrole_mod=0 }
   ' "$1"
 }
 
@@ -139,7 +159,23 @@ fi
 
 seen=()
 queue=()
-while IFS= read -r r; do queue+=("$r"); done < <(extract_playbook_roles "$PLAYBOOK")
+# Scan the range playbook AND every phase playbook under playbooks/.
+#
+# This used to read $PLAYBOOK alone. Once the Security Onion phases moved
+# into playbooks/*.yml (site.yml imports them), any role referenced only
+# there was invisible to discovery — so it would not be bundled, and the
+# deploy would fail on the controller with a missing-role error after the
+# tarball had already shipped. Silent at build time, which is the worst
+# place for it.
+PLAYBOOK_SCAN=("$PLAYBOOK")
+if [ -d "$SS_PP_AB/playbooks" ]; then
+  while IFS= read -r pb; do PLAYBOOK_SCAN+=("$pb"); done \
+    < <(find "$SS_PP_AB/playbooks" -maxdepth 1 -name '*.yml' | sort)
+fi
+for pb in "${PLAYBOOK_SCAN[@]}"; do
+  while IFS= read -r r; do queue+=("$r"); done < <(extract_playbook_roles "$pb")
+done
+echo "Scanned ${#PLAYBOOK_SCAN[@]} playbook(s) for roles."
 
 missing=()
 while [ ${#queue[@]} -gt 0 ]; do
@@ -192,9 +228,12 @@ fi
 # Other deployment files
 cp -R "$SS_PP_AB/host_vars"               "$STAGE/"
 cp -R "$SS_PP_AB/group_vars"              "$STAGE/"
+cp    "$SS_PP_AB/site.yml"               "$STAGE/"
+cp -R "$SS_PP_AB/playbooks"              "$STAGE/"
 cp    "$SS_PP_AB/hosts"                   "$STAGE/"
 cp    "$SS_PP_AB/arbitr_pp_playbook.yaml" "$STAGE/"
 cp    "$SS_PP_AB/deploy.sh"               "$STAGE/"
+cp    "$SS_PP_AB/ansible.cfg"            "$STAGE/"   # vault_password_file lives here
 chmod +x "$STAGE/deploy.sh"
 # Read-only post-deploy verification script (optional but very useful).
 if [ -f "$SS_PP_AB/verify_deployment.sh" ]; then
@@ -224,7 +263,7 @@ fi
 # --- Pack ------------------------------------------------------------------
 
 cd "$STAGE"
-TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh ansible.cfg)
+TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml site.yml playbooks deploy.sh ansible.cfg)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)

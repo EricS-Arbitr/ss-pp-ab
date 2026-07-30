@@ -1,0 +1,14 @@
+---
+so_search_answer_name: "so-ansible-search"
+so_search_install_timeout: 1200   # 20 min
+so_search_poll_interval: 30
+so_search_setup_log: "/root/so-setup.log"
+so_search_installed_marker: "/opt/so/state/installed"
+
+# Separate marker for so-setup completion (so-setup rc=0). The shell
+# task uses this for its `creates:` short-circuit so retries don't
+# re-invoke 30-45 min of so-setup on a failed grid-join or so-status
+# verify. `installed` marker at the end of the role gates the FULL
+# idempotency probe at the top; `setup-completed` gates only the
+# expensive so-setup call.
+so_search_setup_marker: "/opt/so/state/setup-completed"

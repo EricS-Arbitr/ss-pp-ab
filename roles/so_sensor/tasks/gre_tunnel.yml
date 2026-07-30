@@ -1,0 +1,41 @@
+---
+# =========================================================================
+# so_sensor/gre_tunnel.yml — bring up tun0 (sensor side of vyos_mirror)
+# =========================================================================
+# Independent of so-setup. Included from main.yml BEFORE the pexpect
+# so-setup wrapper (so BNICS=tun0 validates during install), and
+# reusable stand-alone via `--tags gre_tunnel` to bring up just the
+# monitor path for network testing without SO.
+# =========================================================================
+
+- name: Deploy netplan drop-in for GRE tunnel {{ so_monitor_interface }}
+  ansible.builtin.template:
+    src: 60-so-mirror-tun.yaml.j2
+    dest: "{{ so_sensor_netplan_tun }}"
+    mode: '0600'
+    owner: root
+    group: root
+  register: netplan_tun
+
+- name: netplan apply (brings tun0 up)
+  ansible.builtin.command: netplan apply
+  when: netplan_tun.changed
+
+- name: Wait for {{ so_monitor_interface }} to appear
+  ansible.builtin.wait_for:
+    path: "/sys/class/net/{{ so_monitor_interface }}"
+    timeout: 15
+
+- name: Force promiscuous on {{ so_monitor_interface }} (needed for sniffing)
+  ansible.builtin.command: "ip link set dev {{ so_monitor_interface }} promisc on"
+  changed_when: false
+
+- name: Verify tunnel is up
+  ansible.builtin.command: "ip -brief link show {{ so_monitor_interface }}"
+  register: tun_state
+  changed_when: false
+  failed_when: "'UP' not in tun_state.stdout"
+
+- name: Report tunnel state
+  ansible.builtin.debug:
+    msg: "{{ so_monitor_interface }}: {{ tun_state.stdout }}"

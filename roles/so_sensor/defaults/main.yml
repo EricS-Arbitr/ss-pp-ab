@@ -1,0 +1,66 @@
+---
+so_sensor_answer_name: "so-ansible-sensor"
+so_sensor_install_timeout: 1200   # 20 min (similar to search)
+so_sensor_poll_interval: 30
+so_sensor_setup_log: "/root/so-setup.log"
+so_sensor_installed_marker: "/opt/so/state/installed"
+
+# Separate marker for so-setup completion (see so_search defaults for
+# rationale). Retries don't re-invoke 30-45 min of so-setup on a failed
+# grid-join or so-status verify.
+so_sensor_setup_marker: "/opt/so/state/setup-completed"
+
+# Netplan drop-in path for our GRE tunnel.
+so_sensor_netplan_tun: "/etc/netplan/60-so-mirror-tun.yaml"
+
+# --- GRE firewall override ------------------------------------------------
+# Anchor line in SO's firewall/iptables.jinja that our GRE ACCEPT is
+# inserted BEFORE. Must be the catch-all that ends the INPUT chain — our
+# rule has to precede it or the LOGGING chain drops the packet first.
+# Appears exactly once in the stock template (the DOCKER-USER LOGGING jump
+# is a different string, so this is unambiguous).
+so_gre_anchor: "-A INPUT -j LOGGING"
+
+# The block injected immediately ahead of that anchor.
+#
+# Deliberately a PLAIN iptables line with NO Jinja in it. The first
+# attempt wrapped it in a `{%- if GLOBALS.role == 'so-sensor' %}` guard,
+# {% raw %}-fenced so salt would see it literally. That produced
+# concatenated rules and a silently-skipped restore, because TWO
+# whitespace rules compounded (2026-07-29):
+#   1. Ansible templates with trim_blocks=True, which ate the newline
+#      right after `{% endraw %}` — putting the guard and the rule on one
+#      line.
+#   2. Salt's `{%-` then stripped the newline BEFORE it, gluing the rule
+#      onto the preceding `-A INPUT -p icmp -j ACCEPT`.
+# Result: `...-j ACCEPT-A INPUT -s ... -j ACCEPT`, which fails
+# `iptables-restore --test`, so init.sls's `onlyif` skipped the restore
+# and salt still reported success.
+#
+# The anchor already sits at the start of its own line, so prefixing this
+# block directly (with one trailing newline) is correct and needs no
+# whitespace control at all.
+#
+# TRADEOFF: without the role guard, manager and search nodes also get this
+# ACCEPT, since they render the same template. That is a deliberate choice
+# — it is a no-op there (no GRE tunnel exists, so the kernel drops proto
+# 47 at demux anyway) and it buys immunity from the Jinja-in-Jinja
+# fragility above. The rule is source-restricted to the router's mirror
+# endpoint, not 0.0.0.0/0.
+# Which source address the sensor's SO firewall permits GRE from.
+#
+# Defaults to so_prod_gateway, which is correct ONLY where the mirroring
+# router is also the sensor's gateway — true in this dev range, where
+# router-0 is both. It is NOT true in general: PowerPlant's sensors sit on
+# pp-security behind pp-internal-router (172.16.9.1) while the mirroring
+# routers are remote (172.16.0.42, 192.168.200.202, 75.21.1.2), so the rule
+# would drop every mirrored packet. Override per sensor in host_vars.
+so_gre_allowed_source: "{{ so_prod_gateway }}"
+
+so_gre_rule_block: "-A INPUT -s {{ so_gre_allowed_source }} -p gre -j ACCEPT\n"
+
+# Create /etc/SOCLOUD so so-setup takes its "cloud" interface path, which
+# is the only path that honors BNICS as the monitor interface instead of
+# hardcoding INTERFACE=bond0. See the long comment in tasks/main.yml.
+# Set false to get stock (bond0) behavior back.
+so_sensor_force_cloud_mode: true

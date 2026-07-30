@@ -1,0 +1,33 @@
+---
+# so_manager defaults
+
+# Answer file name inside setup/automation/. Prefixed with `so-ansible-`
+# so it doesn't collide with SO's shipped templates.
+so_manager_answer_name: "so-ansible-manager"
+
+# How long we're willing to wait for `so-setup network` to complete before
+# giving up (seconds). Manager install with airgap package pulls is 20-30
+# min; add slack for slow proxies.
+so_manager_install_timeout: 5400   # 90 min (was 45 — real installs seen at 45+ min in dev)
+
+# Poll cadence while so-setup runs (seconds).
+so_manager_poll_interval: 30
+
+# Log destination on the manager host.
+so_manager_setup_log: "/root/so-setup.log"
+
+# Marker path we check for idempotency (present after successful install).
+so_manager_installed_marker: "/opt/so/state/installed"
+
+# Separate marker for "so-setup itself finished", written as soon as Salt is
+# confirmed installed — BEFORE the reboot and so-status wait.
+#
+# Added 2026-07-29 after a working manager was reinstalled from scratch. The
+# role previously had ONE marker, written at the very end, gating everything
+# via `meta: end_host`. A run that died anywhere between so-setup and that
+# marker therefore left no record that so-setup had succeeded, and the next
+# run redid the full 45-minute install on a healthy 14-container manager.
+# so_search and so_sensor have had this two-marker split since 2026-07-28;
+# so_manager was missed, including by the 2026-07-29 audit which added its
+# failure/Salt checks but not its skip logic.
+so_manager_setup_marker: "/opt/so/state/setup-completed"

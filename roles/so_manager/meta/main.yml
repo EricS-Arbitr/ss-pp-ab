@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: so_manager
+  author: eric@arbitrsecurity.com
+  description: >
+    Render distributed-net-ubuntu-manager answer file + run so-setup on
+    a fresh Ubuntu 22.04 host. Idempotent via /opt/so/state/installed
+    marker. Async so-setup + poll (~30 min install).
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+
+dependencies:
+  - role: so_base

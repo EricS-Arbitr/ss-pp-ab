@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  role_name: so_search
+  author: eric@arbitrsecurity.com
+  description: >
+    SEARCHNODE install + auto-join manager via SOREMOTEPASS. Depends on
+    so_base + manager reachable (short-hostname resolves via /etc/hosts).
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+
+dependencies:
+  - role: so_base

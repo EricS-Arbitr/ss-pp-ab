@@ -1,0 +1,221 @@
+---
+# =========================================================================
+# so_apt_mirror — nginx on ansible box serves SO source tarball to SO nodes.
+# =========================================================================
+# Scope reduced 2026-07-21: no ISO. Ubuntu SO 2.4 uses `so-setup network`
+# (not iso airgap; that's CentOS-only), so we don't need to serve an ISO
+# at all. SO nodes pull the source tarball from us during so_base, and
+# packages come from upstream via corp proxy during so-setup.
+# =========================================================================
+
+# APT proxy must be configured BEFORE the first apt update, otherwise
+# ubuntu.archive.ubuntu.com is unreachable through the range's mgmt plane.
+# (First live dry-run on 2026-07-21 failed here with "Failed to update
+# apt cache: unknown reason" because the RC_NG_Ansible image doesn't
+# ship with apt proxy pre-configured — only env vars.)
+- name: APT proxy for the ansible controller's own apt calls
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/95so-proxy
+    mode: '0644'
+    content: |
+      # Added by so_apt_mirror role so apt-get can reach ubuntu.archive
+      # through the range's mgmt-plane HTTP proxy.
+      Acquire::http::Proxy "{{ so_mirror_proxy }}";
+      Acquire::https::Proxy "{{ so_mirror_proxy }}";
+      # Bypass proxy for local (loopback) fetches once nginx is up.
+      Acquire::http::Proxy::127.0.0.1 "DIRECT";
+      Acquire::http::Proxy::localhost "DIRECT";
+
+# `apt-get update` via shell so we can tolerate signature errors on
+# unrelated third-party repos baked into the SimSpace image (RC_NG_Ansible
+# ships stale apt.puppet.com + apt.puppetlabs.com with expired signing
+# keys; apt-get update returns non-zero on those and the ansible apt
+# module reports "Failed to update apt cache: unknown reason"). Success
+# on the ubuntu.archive fetches is enough for the nginx + git install
+# that follows.
+- name: apt-get update (tolerating third-party signature warnings)
+  ansible.builtin.shell: apt-get update 2>&1 | tail -3
+  register: apt_update
+  changed_when: "'Fetched' in apt_update.stdout"
+  failed_when: false
+
+- name: Install nginx + git (git needed to snapshot SO source)
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - git
+      - ca-certificates
+    state: present
+    update_cache: no    # already done via shell above
+
+- name: Mirror root + subdirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: www-data
+    group: www-data
+  loop:
+    - "{{ so_mirror_root }}"
+    - "{{ so_mirror_root }}/so-source"
+
+# --- SO source tarball at pinned SHA -------------------------------------
+
+- name: Check if SO source snapshot already exists
+  ansible.builtin.stat:
+    path: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+  register: so_source_tarball
+
+- name: Clone SO source at pinned SHA (temp dir; only runs if snapshot missing)
+  ansible.builtin.git:
+    repo: "{{ so_git_repo }}"
+    dest: "/tmp/so_source_build"
+    version: "{{ so_git_ref }}"
+    depth: 1
+    force: yes
+  environment:
+    HTTPS_PROXY: "{{ so_mirror_proxy }}"
+    HTTP_PROXY: "{{ so_mirror_proxy }}"
+  when: not so_source_tarball.stat.exists
+
+- name: Tar the SO source snapshot into the mirror (excluding .git for size)
+  ansible.builtin.command: >
+    tar --exclude='.git' --exclude='.github'
+    -czf {{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
+    -C /tmp/so_source_build .
+  args:
+    creates: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+  when: not so_source_tarball.stat.exists
+
+- name: Fix ownership on SO source tarball
+  ansible.builtin.file:
+    path: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+
+- name: Clean up SO source build tree
+  ansible.builtin.file:
+    path: "/tmp/so_source_build"
+    state: absent
+  when: not so_source_tarball.stat.exists
+
+# --- Bundled detection rulesets (ETOPEN + friends) -----------------------
+# so-soc's suricataengine tries to fetch ETOPEN from
+# rules.emergingthreats.net but the container has no proxy env vars AND
+# docker's embedded DNS resolver (127.0.0.11) can't reach external hosts.
+# We ship the rules tarball with our so-ansible tarball (see build_tarball.sh
+# rules/ handling), serve it from THIS mirror, and patch soc.json on the
+# manager (see so_manager) to point at the local URL. SOC then fetches
+# from http://10.255.240.157/so-source/emerging.rules.tar.gz which works
+# without proxy or external DNS.
+- name: Check if bundled ETOPEN rules tarball shipped with so-ansible tarball
+  ansible.builtin.stat:
+    path: "{{ so_bundled_rules_src }}"
+  register: bundled_rules
+
+- name: Copy bundled ETOPEN rules to nginx mirror
+  ansible.builtin.copy:
+    src: "{{ so_bundled_rules_src }}"
+    dest: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+    remote_src: yes
+  when: bundled_rules.stat.exists
+
+- name: Compute md5 sibling for bundled ETOPEN rules (SOC verifies via .md5)
+  ansible.builtin.shell: |
+    set -e
+    cd "{{ so_mirror_root }}/so-source"
+    md5sum "{{ so_bundled_rules_filename }}" | awk '{print $1}' > "{{ so_bundled_rules_filename }}.md5"
+    chown www-data:www-data "{{ so_bundled_rules_filename }}.md5"
+    chmod 644 "{{ so_bundled_rules_filename }}.md5"
+  args:
+    creates: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}.md5"
+  when: bundled_rules.stat.exists
+
+# --- nginx config --------------------------------------------------------
+
+- name: nginx site config for so-mirror
+  ansible.builtin.template:
+    src: nginx-so-mirror.conf.j2
+    dest: /etc/nginx/sites-available/so-mirror
+    mode: '0644'
+  notify: reload nginx
+
+- name: Enable so-mirror site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/so-mirror
+    dest: /etc/nginx/sites-enabled/so-mirror
+    state: link
+  notify: reload nginx
+
+- name: Disable nginx default site (would 502 our :80)
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Ensure nginx is running + enabled
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+# Flush any pending `reload nginx` handlers now so the smoke test hits
+# nginx running with OUR so-mirror site config, not the still-default
+# nginx from install. Handlers otherwise queue until end-of-play.
+- name: Flush handlers so nginx reload happens before smoke test
+  ansible.builtin.meta: flush_handlers
+
+# Belt-and-suspenders: on subsequent runs where the site file is already
+# in place (no change → no notify → no flush), nginx would still be
+# running whatever config it loaded last. Explicit test + reload catches
+# that case. Idempotency cost: `changed=1` on every run (harmless — a
+# reload is instant + doesn't drop connections).
+- name: Validate nginx config
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Reload nginx to pick up our so-mirror site (unconditional)
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+
+- name: Smoke test — SO source tarball reachable via HTTP
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ so_mirror_port }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+    method: HEAD
+    status_code: 200
+  register: mirror_smoke
+  changed_when: false
+  retries: 3
+  delay: 2
+
+- name: Smoke test — bundled ETOPEN rules + md5 reachable via HTTP (if shipped)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ so_mirror_port }}/so-source/{{ item }}"
+    method: HEAD
+    status_code: 200
+  loop:
+    - "{{ so_bundled_rules_filename }}"
+    - "{{ so_bundled_rules_filename }}.md5"
+  changed_when: false
+  when: bundled_rules.stat.exists
+
+# SO's airgap mode reads sigma / yara / playbook content from local file://
+# repos instead of github. Clone + publish them here — the controller is the
+# only host with mgmt-plane egress, and the in-game plane is airgapped in the
+# target IS-INET ranges.
+- name: Stage SO airgap detection content on the mirror
+  ansible.builtin.include_tasks: airgap_content.yml
+  when: so_airgap_mode | bool
+
+- name: Report mirror status
+  ansible.builtin.debug:
+    msg: |
+      so-mirror OK on http://{{ so_mirror_host }}:{{ so_mirror_port }}/
+        SO source: /so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
+      {% if bundled_rules.stat.exists %}  ETOPEN rules: /so-source/{{ so_bundled_rules_filename }}
+      {% endif %}{% if so_airgap_mode %}  Airgap content: {{ so_airgap_repos | map(attribute='name') | join(', ') }}{% endif %}

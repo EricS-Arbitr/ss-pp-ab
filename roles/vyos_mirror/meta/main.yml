@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: vyos_mirror
+  author: eric@arbitrsecurity.com
+  description: >
+    router-0 GRE tunnel + tc mirred to feed so-sensor-1's tun0 monitor
+    interface. Declarative tunnel + imperative tc via VyOS post-config
+    boot script.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: VyOS
+      versions:
+        - "1.4"
+        - "1.5"
+
+dependencies: []

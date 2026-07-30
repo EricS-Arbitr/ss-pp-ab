@@ -1,0 +1,572 @@
+---
+# =========================================================================
+# so_sensor — GRE tunnel + SENSOR install joining manager
+# =========================================================================
+
+# NOTE: this block runs BEFORE the idempotency probe below on purpose.
+# The probe ends the host via `meta: end_host` once /opt/so/state/installed
+# exists, so ANY task placed after it can never reach an already-installed
+# node. Discovered 2026-07-29 when this exact fix silently no-op'd on
+# so-sensor-1. Same family as the self-blessing setup marker: a guard that
+# blocks its own remediation.
+# --- Permit GRE through SO's host firewall ------------------------------
+# SO's firewall DROPs the GRE mirror before it ever reaches the kernel's
+# tunnel decap. Verified 2026-07-29: every rule SO can generate carries a
+# mandatory `--dport` (firewall/iptables.jinja), and GRE is portless — so
+# there is NO hostgroup/portgroup/pillar combination that expresses proto
+# 47. SO hardcodes `-A INPUT -p icmp -j ACCEPT` for the one portless
+# protocol it supports, which confirms there's no general mechanism.
+# Unmatched traffic falls to the LOGGING chain, which is log-then-DROP.
+#
+# `iptables_restore` in firewall/init.sls is a bare cmd.run with no
+# `onchanges`, so it re-runs on EVERY highstate (~15 min) — a manually
+# added rule cannot survive. The fix has to live in salt.
+#
+# Salt file_roots put /opt/so/saltstack/local/salt AHEAD of default/salt,
+# so a file at local/salt/firewall/iptables.jinja overrides the stock
+# template. Rather than vendoring a 5KB fork into this repo (which would
+# silently go stale on SO upgrades), we DERIVE the override from whatever
+# SO currently ships and inject one guarded block. The result is correct
+# by construction on any SO version whose template still contains the
+# anchor line.
+#
+# Runs on the MANAGER: the sensor has no /opt/so/saltstack at all — rules
+# are rendered master-side and pushed.
+- name: GRE firewall — read SO's stock iptables template on the manager
+  ansible.builtin.slurp:
+    src: /opt/so/saltstack/default/salt/firewall/iptables.jinja
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_stock_ipt
+
+- name: GRE firewall — fail loudly if the anchor line is gone (SO upgraded)
+  ansible.builtin.fail:
+    msg: |
+      Cannot patch SO's firewall template: anchor '{{ so_gre_anchor }}' not
+      found in /opt/so/saltstack/default/salt/firewall/iptables.jinja.
+      SO's firewall template changed shape. Re-derive the override by hand
+      and update so_gre_anchor. Until then the GRE mirror will be dropped
+      and the sensor will capture nothing.
+  when: so_gre_anchor not in (so_stock_ipt.content | b64decode)
+
+- name: GRE firewall — write derived override into local/salt (takes precedence)
+  ansible.builtin.copy:
+    # Single-line form on purpose — a `|` block scalar would re-indent and
+    # newline-pad the rendered file.
+    content: "{{ (so_stock_ipt.content | b64decode) | replace(so_gre_anchor, so_gre_rule_block + so_gre_anchor) }}"
+    dest: /opt/so/saltstack/local/salt/firewall/iptables.jinja
+    owner: socore
+    group: socore
+    mode: '0640'
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_gre_override
+
+# On a FRESH sensor this runs before grid-join, when salt-call cannot
+# reach the master yet. Skip the apply in that case — the manager-side
+# override is already written, so the sensor's first highstate renders it
+# correctly on its own. Only already-joined nodes need the nudge.
+- name: GRE firewall — is this node already a grid member?
+  ansible.builtin.stat:
+    path: /etc/salt/pki/minion/minion_master.pub
+  register: so_grid_member
+
+- name: GRE firewall — apply firewall state on this sensor
+  ansible.builtin.command: "sudo salt-call state.apply firewall"
+  become: true
+  when: so_grid_member.stat.exists
+  register: gre_fw_apply
+  changed_when: gre_fw_apply.rc == 0
+  # Same highstate-scheduler collision as the grid-join firewall apply.
+  until: gre_fw_apply.rc == 0
+  retries: 20
+  delay: 30
+
+# firewall/init.sls guards its restore with `onlyif: iptables-restore
+# --test <file>`. A malformed rendered file therefore SKIPS the restore
+# silently while salt still reports success — the running ruleset just
+# goes stale. Check it explicitly so a syntax error is loud and names
+# itself, instead of surfacing as a mysterious "rule not present".
+- name: GRE firewall — syntax-check the rendered ruleset
+  ansible.builtin.command: "iptables-restore --test /etc/iptables/rules.v4"
+  become: true
+  changed_when: false
+  register: ipt_syntax
+  failed_when: ipt_syntax.rc != 0
+  when: so_grid_member.stat.exists
+
+- name: GRE firewall — verify proto 47 is now accepted in INPUT
+  ansible.builtin.shell: |
+    iptables -S INPUT | grep -E '\-p (gre|47) '
+  become: true
+  changed_when: false
+  register: gre_rule_check
+  failed_when: gre_rule_check.rc != 0
+  when: so_grid_member.stat.exists
+
+- name: GRE firewall — report
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'GRE accepted in INPUT: ' ~ gre_rule_check.stdout_lines
+         if so_grid_member.stat.exists
+         else 'Fresh node — manager-side override written; first highstate will apply it.' }}
+
+- name: Idempotency probe
+  ansible.builtin.stat:
+    path: "{{ so_sensor_installed_marker }}"
+  register: so_installed
+
+- name: End play early if SO is already installed
+  ansible.builtin.meta: end_host
+  when: so_installed.stat.exists
+
+- name: Precondition — SO source must be at {{ so_source_dest }}
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/setup/so-setup"
+  register: so_setup_present
+
+- name: Fail loudly if so_base didn't stage the source
+  ansible.builtin.fail:
+    msg: "SO source missing at {{ so_source_dest }}/setup/so-setup. Re-run 30-prereqs."
+  when: not so_setup_present.stat.exists
+
+# --- Bring up GRE tunnel BEFORE so-setup validates BNICS=tun0 -----------
+
+- name: Deploy netplan drop-in for GRE tunnel {{ so_monitor_interface }}
+  ansible.builtin.template:
+    src: 60-so-mirror-tun.yaml.j2
+    dest: "{{ so_sensor_netplan_tun }}"
+    mode: '0600'
+    owner: root
+    group: root
+  register: netplan_tun
+
+- name: netplan apply (brings tun0 up)
+  ansible.builtin.command: netplan apply
+  when: netplan_tun.changed
+
+- name: Wait for {{ so_monitor_interface }} to appear
+  ansible.builtin.wait_for:
+    path: "/sys/class/net/{{ so_monitor_interface }}"
+    timeout: 15
+
+- name: Force promiscuous on {{ so_monitor_interface }} (needed for sniffing)
+  ansible.builtin.command: "ip link set dev {{ so_monitor_interface }} promisc on"
+  changed_when: false
+
+- name: Verify tunnel is up
+  ansible.builtin.command: "ip -brief link show {{ so_monitor_interface }}"
+  register: tun_state
+  changed_when: false
+  failed_when: "'UP' not in tun_state.stdout"
+
+- name: Report tunnel state
+  ansible.builtin.debug:
+    msg: "{{ so_monitor_interface }}: {{ tun_state.stdout }}"
+
+# --- Compute prod NIC + netmask -----------------------------------------
+
+- name: Gather network facts
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+
+- name: Compute so_prod_nic
+  ansible.builtin.set_fact:
+    so_prod_nic: >-
+      {{ (ansible_facts['interfaces']
+          | map('regex_replace', '-', '_')
+          | map('extract', ansible_facts)
+          | selectattr('ipv4', 'defined')
+          | selectattr('ipv4.address', 'equalto', so_prod_ip)
+          | map(attribute='device')
+          | list
+          | first) }}
+
+- name: Compute so_prod_netmask
+  ansible.builtin.set_fact:
+    so_prod_netmask: >-
+      {{ {16:'255.255.0.0', 20:'255.255.240.0', 22:'255.255.252.0',
+          23:'255.255.254.0', 24:'255.255.255.0', 25:'255.255.255.128',
+          26:'255.255.255.192', 27:'255.255.255.224', 28:'255.255.255.240',
+          29:'255.255.255.248', 30:'255.255.255.252',
+          31:'255.255.255.254', 32:'255.255.255.255'
+      }[so_prod_prefix | int] }}
+
+# --- Render + drop answer file ------------------------------------------
+
+- name: Render sensor answer file to /root/so-answers.env
+  ansible.builtin.template:
+    src: sensor.env.j2
+    dest: /root/so-answers.env
+    mode: '0600'
+    owner: root
+    group: root
+
+# --- Force so-setup's "cloud" interface path -----------------------------
+# BNICS=tun0 is IGNORED on a normal install. Verified 2026-07-28 against
+# our pinned SO source:
+#
+#   so-functions generate_interface_vars():
+#     if [[ $is_cloud ]]; then INTERFACE=${BNICS[0]}; else INTERFACE='bond0'; fi
+#
+# BNICS is not "the interface to monitor" — it is "the NICs to enslave
+# into bond0", and INTERFACE is hardcoded to bond0 off-cloud. so-setup
+# duly created a bond0 (NO-CARRIER, DOWN, mtu 9000) and pointed Suricata
+# and Zeek at it, which is why the sensor captured nothing.
+#
+# A GRE tunnel cannot be enslaved into a bond, so the bond path can never
+# work for our GRE-mirror design. The cloud path is the one that fits:
+#
+#   so-functions configure_network_sensor(): nmcli type ethernet (not bond)
+#   so-common    add_interface_bond0():      ALL slave logic is wrapped in
+#                                            `if ! [[ $is_cloud ]]` — so it
+#                                            only sets promisc on tun0
+#   so-functions generate_interface_vars():  INTERFACE=${BNICS[0]} = tun0
+#
+# detect_cloud() keys off a bare file test (`[ -f /etc/SOCLOUD ]`), so we
+# opt in without patching any SO script — CLAUDE.md §8 prefers this over
+# editing SO's own files. Sensor-only: manager/search have no monitor
+# interface and should keep stock behavior.
+- name: Force so-setup cloud interface path (makes BNICS=tun0 actually apply)
+  ansible.builtin.file:
+    path: /etc/SOCLOUD
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+  when: so_sensor_force_cloud_mode | bool
+
+# --- Run so-setup + wait ------------------------------------------------
+
+# --- so-setup skip decision (POSITIVE proof, not just an exit code) ------
+# See so_search/tasks/main.yml for the full rationale. Short version:
+# `creates: <marker>` + "rc == 0" is self-perpetuating — a satisfied
+# `creates:` returns rc=0, so the guard cannot tell success from skip, and
+# the marker re-blesses itself forever. so-sensor-1 was found in exactly
+# that state on 2026-07-28: marker present, no /root/so-setup.log, no Salt
+# installed, no key on the master, and unrepairable by any redeploy.
+# NOTE: do NOT probe /etc/salt/minion_id — this SO version never writes
+# it. It sets `id:` inside /etc/salt/minion instead (verified 2026-07-28:
+# /etc/salt/ held grains, minion, minion.d/, pki/ but no minion_id, while
+# the minion was correctly identifying as so-sensor-1_sensor). Probing
+# minion_id made so_setup_can_skip permanently false, which would re-run
+# 30-45 min of so-setup on every attempt forever.
+- name: Probe for a real Salt install (minion config written by so-setup)
+  ansible.builtin.stat:
+    path: /etc/salt/minion
+  register: salt_minion_id
+
+- name: Probe for the salt-minion systemd unit
+  ansible.builtin.command: systemctl list-unit-files salt-minion.service
+  register: salt_unit_probe
+  changed_when: false
+  failed_when: false
+
+- name: Probe for the so-setup completion marker
+  ansible.builtin.stat:
+    path: "{{ so_sensor_setup_marker }}"
+  register: so_setup_marker_stat
+
+- name: Decide whether the 30-45 min so-setup call can be skipped
+  ansible.builtin.set_fact:
+    so_setup_can_skip: >-
+      {{ so_setup_marker_stat.stat.exists
+         and salt_minion_id.stat.exists
+         and 'salt-minion.service' in salt_unit_probe.stdout }}
+
+- name: Report so-setup skip decision
+  ansible.builtin.debug:
+    msg: >-
+      so-setup {{ 'SKIPPED (marker + Salt both present)' if so_setup_can_skip
+      else 'WILL RUN' }} — marker={{ so_setup_marker_stat.stat.exists }},
+      minion_id={{ salt_minion_id.stat.exists }},
+      unit={{ 'salt-minion.service' in salt_unit_probe.stdout }}
+
+- name: Kick off so-setup network (bash-source env then invoke)
+  ansible.builtin.shell: |
+    source /root/so-answers.env
+    cd {{ so_source_dest }}/setup
+    ./so-setup {{ so_setup_type }} > {{ so_sensor_setup_log }} 2>&1
+  args:
+    executable: /bin/bash
+  async: "{{ so_sensor_install_timeout }}"
+  poll: 0
+  register: so_setup_async
+  when: not so_setup_can_skip
+
+- name: Poll so-setup completion
+  ansible.builtin.async_status:
+    jid: "{{ so_setup_async.ansible_job_id }}"
+  register: so_setup_result
+  until: so_setup_result.finished
+  retries: "{{ (so_sensor_install_timeout / so_sensor_poll_interval) | int }}"
+  delay: "{{ so_sensor_poll_interval }}"
+  when: not so_setup_can_skip
+
+- name: Report so-setup exit code + last log lines
+  ansible.builtin.debug:
+    msg: |
+      so-setup rc={{ so_setup_result.rc | default('unknown') }}
+      Last 20 log lines:
+      {{ so_setup_result.stdout_lines[-20:] | default(['<no stdout captured>']) | join('\n') }}
+  when: not so_setup_can_skip
+
+- name: Fail if so-setup exited non-zero
+  ansible.builtin.fail:
+    msg: |
+      so-setup returned {{ so_setup_result.rc }}. Full log at
+      {{ so_sensor_setup_log }} on {{ inventory_hostname }}.
+  when:
+    - not so_setup_can_skip
+    - so_setup_result.rc | default(1) != 0
+
+# so-setup's exit code is NOT trustworthy. Verified 2026-07-28: it logged
+# "WARNING: Errors detected during setup" with a fatal NetworkManager
+# error and still exited 0. SO writes its own signals instead — a
+# /root/failure marker file and /root/errors.log. Check those first;
+# they are authoritative where rc is not.
+- name: Check SO's own failure marker
+  ansible.builtin.stat:
+    path: /root/failure
+  register: so_failure_marker
+  when: not so_setup_can_skip
+
+- name: Read SO's errors.log (for the failure message)
+  ansible.builtin.slurp:
+    src: /root/errors.log
+  register: so_errors_log
+  failed_when: false
+  when: not so_setup_can_skip
+
+# /root/failure alone is NOT grounds to fail. See the long note in
+# so_manager/tasks/main.yml: the SimSpace image pre-bakes SO remnants, so
+# so-setup always takes its reinstall path, whose elastic-agent uninstall
+# logs "notify Fleet: failed" against a Fleet server that is not up yet.
+# SO writes /root/failure for that and then succeeds anyway. Failing here
+# would break every fresh deploy. Warn; let the outcome checks gate.
+- name: Report SO's failure marker + errors.log (warning, not fatal)
+  ansible.builtin.debug:
+    msg: |
+      NOTE: SO wrote /root/failure on {{ inventory_hostname }} (so-setup
+      still exited {{ so_setup_result.rc | default('?') }}). Often benign on
+      this image — see so_manager/tasks/main.yml. Judge success by the Salt
+      + so-status checks that follow.
+
+      /root/errors.log:
+      {{ (so_errors_log.content | b64decode) if so_errors_log.content is defined
+         else '<errors.log unreadable>' }}
+
+      Full setup log: {{ so_sensor_setup_log }} (ours) and /root/sosetup.log
+      (SO's own, more detail).
+  when:
+    - not so_setup_can_skip
+    - so_failure_marker.stat.exists
+
+# Second net: even with no failure marker, confirm Salt actually landed.
+- name: Re-probe for Salt after so-setup
+  ansible.builtin.stat:
+    path: /etc/salt/minion
+  register: salt_minion_id_after
+  when: not so_setup_can_skip
+
+- name: Fail if so-setup exited 0 but never installed Salt
+  ansible.builtin.fail:
+    msg: |
+      so-setup exited 0 on {{ inventory_hostname }} but Salt was never
+      installed — /etc/salt/minion does not exist. The exit code lied.
+      Do NOT trust rc here. Check {{ so_sensor_setup_log }} on the host;
+      if that file is missing entirely, so-setup never actually ran.
+  when:
+    - not so_setup_can_skip
+    - not salt_minion_id_after.stat.exists
+
+# Marker for so-setup completion (see so_search for rationale). Only
+# reached once Salt is confirmed genuinely present above.
+- name: Mark so-setup as completed (short-circuits shell task on retry)
+  ansible.builtin.file:
+    path: "{{ so_sensor_setup_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+  when: not so_setup_can_skip
+
+# so-setup regenerates this minion's keypair on every (re)install
+# ("Generating keys: /etc/salt/pki/minion" in sosetup.log). If the master
+# still holds the OLD public key for this minion id, it rejects the new
+# one and salt-minion crash-loops out with 77/NOPERM:
+#   [CRITICAL] The Salt Master has rejected this minion's public key!
+#   To repair this issue, delete the public key for this minion on the
+#   Salt Master and restart this minion.
+# Verified 2026-07-28 on so-sensor-1 — three consecutive start attempts,
+# all rejected, so no key ever reached Unaccepted and grid-join could
+# never succeed. Delete the stale key so the fresh one arrives as
+# Unaccepted and the grid-join tasks below can accept it normally.
+#
+# Gated on `not so_setup_can_skip` — only when we have just re-run
+# so-setup and therefore know the keypair was regenerated. Never touch a
+# healthy grid member's key.
+- name: Grid join — delete stale salt key for this minion on the master
+  ansible.builtin.command: "sudo salt-key -d {{ inventory_hostname }}_{{ so_role }} -y"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: stale_key_del
+  changed_when: "'Removed' in stale_key_del.stdout"
+  # "does not match any accepted, unaccepted or rejected keys" on a first
+  # install is the expected no-op, not a failure.
+  failed_when: false
+  when: not so_setup_can_skip
+
+# Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
+# master. Grid-join tasks below wait for that key to appear before trying
+# to accept it. See so_search/tasks/main.yml for full rationale.
+- name: Reboot the sensor
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 60
+    post_reboot_delay: 30
+
+# --- Grid-join handshake (delegated to manager, POST-reboot) ------------
+# See so_search/tasks/main.yml for full rationale. Sensor has one extra
+# step vs search: after so-minion generates the per-minion pillar, we
+# override sensor.interface from the default 'bond0' to
+# {{ so_monitor_interface }} (tun0 on our GRE-mirror setup) — else
+# suricata + zeek would bind to a phantom bond0 and capture 0 packets.
+
+- name: Grid join — on manager, add this node's IP to sensor firewall hostgroup
+  ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost sensor {{ so_prod_ip }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_add
+  changed_when: "'Successfully added' in fw_add.stdout"
+  # so-firewall returns rc=3 with "WARNING - IP already exists" on repeated adds. Idempotent, not a failure.
+  failed_when:
+    - fw_add.rc != 0
+    - "'already exists' not in fw_add.stderr"
+
+- name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
+  ansible.builtin.command: sudo salt-call state.apply firewall
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_apply
+  changed_when: fw_apply.rc == 0
+  # Highstate scheduler retry logic (see so_search for full rationale).
+  until: fw_apply.rc == 0
+  retries: 20
+  delay: 30
+
+- name: Grid join — preflight, confirm salt-key is invokable on manager
+  ansible.builtin.command: "sudo salt-key --version"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  changed_when: false
+  # Fail fast and loud. Without this, a missing/renamed salt-key binary is
+  # swallowed by the 30×10s `until` loop below — it retries a hard
+  # "command not found" for a full 5 min before surfacing the real error.
+
+- name: Grid join — wait for this node's salt-key to appear in Unaccepted on master
+  # Invoked bare (not /usr/sbin/salt-key). SO ships its OWN helpers in
+  # /usr/sbin (so-firewall, so-minion), but salt's binaries come from the
+  # Salt onedir package and land in /usr/bin. sudo's secure_path covers
+  # them — `sudo salt-call` above already proves that.
+  ansible.builtin.command: "sudo salt-key --list=unaccepted --no-color"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: pending_keys
+  until: (inventory_hostname + '_' + so_role) in pending_keys.stdout
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Grid join — on manager, so-minion -o=add (accept key + generate per-minion pillar)
+  ansible.builtin.command: "sudo /usr/sbin/so-minion -o=add -m={{ inventory_hostname }}_{{ so_role }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_min_add
+  failed_when:
+    - so_min_add.rc != 0
+    - "'does not match any unaccepted keys' not in so_min_add.stdout"
+
+- name: Grid join — override sensor.interface in per-minion pillar (bond0 → {{ so_monitor_interface }})
+  ansible.builtin.replace:
+    path: "/opt/so/saltstack/local/pillar/minions/{{ inventory_hostname }}_{{ so_role }}.sls"
+    regexp: "^(\\s*interface:\\s*)'bond0'"
+    replace: "\\1'{{ so_monitor_interface }}'"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+
+# The `replace` above is a SILENT NO-OP if the pattern misses — it matches
+# `interface: 'bond0'` with single quotes specifically. Since the (later 7)
+# SOCLOUD fix, so-setup writes tun0 itself and the replace legitimately
+# changes nothing, so "it reported ok" proves nothing either way. Verify
+# the end state instead of trusting the transformation.
+- name: Grid join — verify per-minion pillar carries the intended monitor interface
+  ansible.builtin.command: "grep -E '^[[:space:]]*interface:' /opt/so/saltstack/local/pillar/minions/{{ inventory_hostname }}_{{ so_role }}.sls"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: pillar_iface
+  changed_when: false
+  failed_when: so_monitor_interface not in pillar_iface.stdout
+
+- name: Grid join — report per-minion pillar interface
+  ansible.builtin.debug:
+    msg: "per-minion pillar interface: {{ pillar_iface.stdout | trim }}"
+
+- name: Grid join — kick highstate on this node (fire-and-forget; so-status wait below covers it)
+  ansible.builtin.command: "sudo salt {{ inventory_hostname }}_{{ so_role }} state.highstate --async"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  changed_when: false
+
+# --- Verify + marker ---------------------------------------------------
+
+- name: Verify sensor has joined + services up
+  ansible.builtin.command: sudo so-status
+  register: so_status
+  changed_when: false
+  # Sensor's grid-join highstate installs docker + pulls ~11 container
+  # images (suricata, zeek, strelka x6, steno, sensoroni, telegraf) from
+  # the manager's registry + starts them. Empirically 10-15 min.
+  # 40 × 30s = 20 min ceiling.
+  retries: 40
+  delay: 30
+  until: so_status.rc == 0
+
+- name: Assert so-status actually reports a healthy grid (rc alone is not proof)
+  ansible.builtin.assert:
+    that:
+      - "'adversaries cry' in so_status.stdout or 'STATUS: OK' in so_status.stdout"
+    fail_msg: |
+      so-status exited 0 on {{ inventory_hostname }} but did not report a
+      healthy grid. An exit code is not proof — so-setup already taught us
+      that (UPSTREAM_FIXES 2026-07-28 later 6). Last lines:
+      {{ so_status.stdout_lines[-15:] | join('\n') }}
+    success_msg: "so-status reports a healthy grid"
+    quiet: true
+
+- name: Report sensor status
+  ansible.builtin.debug:
+    msg: "{{ so_status.stdout_lines[-15:] }}"
+
+# Marker written AFTER so-status verify passes. If grid-join or verify
+# fails, a re-run re-executes grid-join instead of short-circuiting.
+- name: Write installed marker for idempotent re-runs (only after so-status green)
+  ansible.builtin.file:
+    path: "{{ so_sensor_installed_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+
+# --- Traffic-flow smoke test -------------------------------------------
+
+- name: 5-sec tcpdump on {{ so_monitor_interface }} — packet count > 0 means GRE mirror delivering
+  ansible.builtin.shell: |
+    timeout 5 tcpdump -i {{ so_monitor_interface }} -c 100 -nn 2>&1 | tail -3
+  changed_when: false
+  register: pcap_smoke
+
+- name: Report pcap flow
+  ansible.builtin.debug:
+    msg: "{{ pcap_smoke.stdout_lines }}"

@@ -1,0 +1,34 @@
+# so-mirror nginx site — serves SO source tarball + ISO to SO nodes.
+# Rendered by roles/so_apt_mirror/tasks/main.yml.
+
+server {
+    listen {{ so_mirror_port }} default_server;
+    listen [::]:{{ so_mirror_port }} default_server;
+
+    server_name {{ so_mirror_host }} _;
+
+    root {{ so_mirror_root }};
+
+    # Enable directory autoindex so SO nodes can browse the mirror.
+    # Dev-only; if this migrates to a customer range, drop autoindex + add
+    # bs-ops-fw ACL to restrict who can reach :80.
+    autoindex on;
+    autoindex_exact_size off;
+
+    # Standard streaming (was tuned for the 5 GB ISO with aio + directio,
+    # but ISO handling was dropped 2026-07-21; source tarball is ~30 MB
+    # so sendfile alone is plenty. Also: aio on failed with "unsupported
+    # on this platform" on the SimSpace RC_NG_Ansible kernel/glibc build).
+    sendfile on;
+    tcp_nopush on;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    client_max_body_size 100M;
+    send_timeout 300;
+
+    access_log /var/log/nginx/so-mirror-access.log;
+    error_log  /var/log/nginx/so-mirror-error.log warn;
+}

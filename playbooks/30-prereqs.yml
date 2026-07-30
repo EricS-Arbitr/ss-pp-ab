@@ -1,0 +1,30 @@
+---
+# =========================================================================
+# 30-prereqs.yml — baseline hardening + SO-specific prereqs on all Linux
+# nodes (manager, search, sensor)
+# =========================================================================
+# `common` neutralizes cloud-init networking, applies netplan for the
+# in-game static IP + mgmt NIC, installs apt updates. `init` handles
+# hostname + basic /etc/hosts. `so_base` layers SO-specific prep: pulls
+# the ISO from the mirror, mounts it locally, populates /etc/hosts with
+# the other SO nodes, opens ephemeral so-firewall pinholes.
+# =========================================================================
+
+- name: SO Linux node baseline (so_base only)
+  hosts: so_all
+  become: true
+  gather_facts: true
+  roles:
+    # NOTE: dropped `common` + `init` from this play 2026-07-21. The
+    # airfield-range `common` role does NetworkManager reconfig driven
+    # by a `network_interfaces` host_vars dict we don't use, and would
+    # additionally conflict with `so-setup network`'s own netplan
+    # writes. `init` from range-development-ansible is Windows-only.
+    # so_base is the single source of prep for SO Linux nodes:
+    #   - apt prereqs (curl, ca-certs, python3-apt, wget, net-tools, jq)
+    #   - system-wide HTTP/HTTPS proxy env + APT proxy for so-setup
+    #   - /etc/hosts entries for peer SO nodes (MSRV resolution)
+    #   - SO source tarball pull from ansible-hosted mirror
+    #   - Snapshotted so-setup overlay
+    #   - Disable UFW (SO uses so-firewall)
+    - so_base

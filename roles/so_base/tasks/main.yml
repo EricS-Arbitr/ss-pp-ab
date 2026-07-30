@@ -1,0 +1,305 @@
+---
+# =========================================================================
+# so_base — shared prep for every SO Linux node before so-setup runs
+# =========================================================================
+
+# APT proxy MUST be written before the first apt call so ubuntu.archive
+# is reachable. Moved here up front (was later in the file); the same
+# task also appears further below to keep it declarative-idempotent.
+- name: APT proxy (so `apt-get update` from so-setup honors the corp proxy)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/95so-proxy
+    mode: '0644'
+    content: |
+      # Added by so_base role
+      Acquire::http::Proxy "{{ so_upstream_proxy }}";
+      Acquire::https::Proxy "{{ so_upstream_proxy }}";
+      # Bypass proxy for our local mirror (fetching SO source tarball).
+      Acquire::http::Proxy::{{ so_mirror_host }} "DIRECT";
+
+# apt-get update via shell so we can tolerate signature errors on
+# unrelated third-party repos baked into the SimSpace image (some ship
+# stale apt.puppet.com / apt.puppetlabs.com sources with expired signing
+# keys; apt-get update returns non-zero on those and the ansible apt
+# module surfaces "Failed to update apt cache: unknown reason").
+- name: apt-get update (tolerating third-party signature warnings)
+  ansible.builtin.shell: apt-get update 2>&1 | tail -3
+  register: apt_update
+  changed_when: "'Fetched' in apt_update.stdout"
+  failed_when: false
+
+- name: Baseline packages needed for SO 2.4 network install on Ubuntu 22.04
+  ansible.builtin.apt:
+    name:
+      - curl
+      - ca-certificates
+      - python3-apt      # ansible.builtin.apt requires it on target
+      - wget             # so-setup's own downloads fall back to wget
+      - net-tools        # so-setup uses `netstat` for NIC detection
+      - jq               # useful for later grid-status parsing
+    state: present
+    update_cache: no    # done above via shell to tolerate 3rd-party sig errors
+
+# --- Proxy env for so-setup's upstream package fetches -------------------
+
+- name: System-wide proxy env vars (so /etc/environment picks up on login)
+  ansible.builtin.template:
+    src: environment.j2
+    dest: /etc/environment
+    mode: '0644'
+    backup: yes
+
+# --- /etc/hosts entries for peer SO nodes --------------------------------
+
+- name: /etc/hosts with peer SO nodes (needed for MSRV short-hostname resolution)
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: /etc/hosts
+    mode: '0644'
+    backup: yes
+
+# --- SO source tarball fetch from ansible mirror -------------------------
+
+- name: Ensure so_source_dest parent exists
+  ansible.builtin.file:
+    path: "/root/manager_setup"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+# Marker-file idempotency (not "does setup/so-setup exist" — the
+# SimSpace RDP_Ubuntu_Desktop image ships with a legacy SO 2.3.300
+# install pre-baked at /root/manager_setup/securityonion/, and a plain
+# file-existence check false-positives on that. Discovered 2026-07-22.
+# We stamp {{ so_source_dest }}/.so-ansible-pinned-<sha[:12]> after our
+# extract; on redeploy that marker embeds the CURRENT pinned SHA so a
+# bumped so_git_ref no longer matches → re-extract triggers.
+- name: Check if OUR pinned SO source has been extracted (marker file)
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/.so-ansible-pinned-{{ so_git_ref[:12] }}"
+  register: so_source_current
+
+- name: Wipe pre-baked or stale SO source tree (only if OUR marker missing)
+  ansible.builtin.file:
+    path: "{{ so_source_dest }}"
+    state: absent
+  when: not so_source_current.stat.exists
+
+- name: Fetch SO source tarball from ansible mirror
+  ansible.builtin.get_url:
+    url: "{{ so_source_tarball_url }}"
+    dest: "/tmp/securityonion.tar.gz"
+    mode: '0644'
+    force: yes
+    use_proxy: no
+  when: not so_source_current.stat.exists
+
+- name: Extract SO source to so_source_dest
+  ansible.builtin.unarchive:
+    src: "/tmp/securityonion.tar.gz"
+    dest: "/root/manager_setup"
+    remote_src: yes
+    creates: "{{ so_source_dest }}/setup/so-setup"
+  when: not so_source_current.stat.exists
+
+# Extract puts the tarball CONTENTS (bin/, salt/, setup/, etc.) at the
+# top of /root/manager_setup because so_apt_mirror tars with `-C
+# /tmp/so_source_build .`. Move them under securityonion/ so the
+# so_source_dest path resolves. Runs BEFORE the marker drop so the
+# marker's destination exists.
+- name: Detect whether tarball extracted at top-level (contents-only)
+  ansible.builtin.stat:
+    path: "/root/manager_setup/setup/so-setup"
+  register: so_setup_at_top
+
+- name: Move top-level extract into securityonion/ subdir if needed
+  ansible.builtin.shell: |
+    set -e
+    cd /root/manager_setup
+    mkdir -p securityonion
+    for item in *; do
+      [ "$item" = "securityonion" ] && continue
+      mv "$item" securityonion/
+    done
+  args:
+    executable: /bin/bash
+  when:
+    - so_setup_at_top.stat.exists
+    - not so_source_current.stat.exists
+
+- name: Drop marker file to make future runs idempotent
+  ansible.builtin.copy:
+    dest: "{{ so_source_dest }}/.so-ansible-pinned-{{ so_git_ref[:12] }}"
+    content: "SO source pinned to {{ so_git_branch | default('unknown branch') }}@{{ so_git_ref }}\n"
+    mode: '0644'
+  when: not so_source_current.stat.exists
+
+- name: Clean up tarball after extract
+  ansible.builtin.file:
+    path: "/tmp/securityonion.tar.gz"
+    state: absent
+  when: not so_source_current.stat.exists
+
+# --- Overlay snapshotted so-setup + supporting scripts -------------------
+# Belt-and-suspenders: even if the git tarball's copies drift from what we
+# snapshotted, our snapshots win. This makes the answer-file mechanism
+# deterministic regardless of what happens upstream on master.
+
+- name: Overlay snapshotted so-setup + supporting scripts
+  ansible.builtin.copy:
+    src: "setup-automation-source/{{ item }}"
+    dest: "{{ so_source_dest }}/setup/{{ item }}"
+    mode: '0755'
+    owner: root
+    group: root
+  loop: "{{ so_snapshot_files }}"
+
+- name: Ensure automation dir exists in extracted source (older tarballs may lack it)
+  ansible.builtin.file:
+    path: "{{ so_source_dest }}/setup/automation"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+# check_elastic_license() in salt/common/tools/sbin/so-common returns
+# early when TESTING is set (which we set via /root/so-answers.env), so
+# the elastic_license whiptail prompt never fires — but the marker file
+# /opt/so/state/yeselastic.txt that would normally be created there
+# doesn't get touched. Downstream salt state code may check for it.
+# Pre-create to close the gap.
+- name: Ensure /opt/so/state exists
+  ansible.builtin.file:
+    path: /opt/so/state
+    state: directory
+    mode: '0755'
+
+- name: Pre-accept Elastic License 2.0 marker (TESTING skips the prompt)
+  ansible.builtin.copy:
+    dest: /opt/so/state/yeselastic.txt
+    content: "so-ansible: pre-accepted at {{ ansible_date_time.iso8601 | default('unknown') }}\n"
+    mode: '0644'
+
+# --- Docker daemon proxy config ------------------------------------------
+# so-setup installs Docker and immediately expects it to pull SO container
+# images (elasticsearch, kibana, nginx, etc. from ghcr.io + registry.k8s.io).
+# Docker does NOT read shell env vars — it needs a systemd drop-in with
+# Environment= lines. Discovered 2026-07-23 after so-setup completed but
+# every container stayed missing because docker pull hit
+# "dial tcp: lookup ghcr.io on 127.0.0.53:53: server misbehaving" (proxy
+# never in the picture). Applied preemptively here so future deploys
+# don't hit the same silent trap.
+- name: Ensure /etc/systemd/system/docker.service.d exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: '0755'
+
+- name: Docker daemon proxy config (env vars ARE NOT enough)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/http-proxy.conf
+    mode: '0644'
+    content: |
+      [Service]
+      # Managed by so-ansible/roles/so_base
+      Environment="HTTP_PROXY={{ so_upstream_proxy }}"
+      Environment="HTTPS_PROXY={{ so_upstream_proxy }}"
+      Environment="NO_PROXY=localhost,127.0.0.1,{% for h in groups['so_all'] %}{{ hostvars[h].so_hostname }},{% endfor %}{{ so_subnet_security }},10.255.240.0/20"
+  register: docker_proxy_conf
+
+- name: systemctl daemon-reload + restart docker if proxy conf changed
+  ansible.builtin.systemd:
+    name: docker
+    daemon_reload: yes
+    state: restarted
+  when: docker_proxy_conf.changed
+  failed_when: false   # docker may not be installed yet on first run — so-setup will install it later
+
+# --- Disable UFW; SO uses its own so-firewall ----------------------------
+
+- name: Stop + disable UFW (SO uses so-firewall which conflicts)
+  ansible.builtin.systemd:
+    name: ufw
+    state: stopped
+    enabled: no
+  failed_when: false   # ufw may not be installed on all images
+
+# --- Security-subnet scope-link route ------------------------------------
+# SimSpace platform netplan gives each SO node a /32 IP on its prod NIC
+# (eth1) with a default route pointing at 172.16.5.1. Because /32 leaves
+# the kernel unaware of any /24 subnet on eth1, the default gateway is
+# unreachable at boot → the default route silently drops and no
+# 172.16.5.x peer is reachable. so-setup on a joining node bails at
+# "Checking manager connectivity" 60 s in with "Could not reach
+# so-manager" (verified 2026-07-24 on so-search). Fix: add an explicit
+# scope-link route for the security subnet on the prod NIC so ARP
+# resolves for every peer's /32 as though they were all on one L2.
+# Persist via a netplan drop-in AND apply immediately (before so-setup
+# runs) so the current session can also reach the manager.
+- name: netplan drop-in — scope-link route for security subnet on prod NIC
+  ansible.builtin.copy:
+    dest: /etc/netplan/60-so-onlink.yaml
+    mode: '0600'
+    owner: root
+    group: root
+    content: |
+      # Added by so-ansible/roles/so_base — see task note for rationale.
+      network:
+        version: 2
+        ethernets:
+          eth1:
+            routes:
+              - to: {{ so_subnet_security }}
+                scope: link
+  register: netplan_onlink
+
+- name: netplan apply (activates scope-link route)
+  ansible.builtin.command: netplan apply
+  when: netplan_onlink.changed
+  changed_when: netplan_onlink.changed
+
+- name: Confirm we can reach the manager on the prod NIC
+  ansible.builtin.command: "ping -c 2 -W 2 {{ so_manager_ip }}"
+  changed_when: false
+  register: mgr_ping
+  # First run on the manager itself may or may not ping self; skip.
+  when: inventory_hostname != groups['so_manager'][0]
+  failed_when: mgr_ping.rc != 0
+
+# --- Kratos DB bind-mount ownership --------------------------------------
+# so-kratos container runs its entrypoint as UID 928 (kratos user, non-root
+# per the SO dockerfile). Entrypoint's `chown kratos:kratos db.sqlite`
+# then fails with EPERM because non-root can't chown, and if the file
+# was pre-created as root:root by an earlier init step, kratos can't
+# write to it either → migrate SQL fails with "attempt to write a
+# readonly database" → container crash-loops. Discovered 2026-07-23 on
+# a manager deploy that had all 20 SO container images seeded but never
+# reached serve. Pre-chowning /nsm/kratos/db* to UID:GID 928 lets the
+# first migrate run succeed as UID 928, and after that the chown
+# no-ops (target already matches). Only applies on so_manager hosts —
+# search/sensor don't run kratos.
+- name: Pre-create /nsm/kratos/db owned by kratos container UID (928)
+  ansible.builtin.file:
+    path: /nsm/kratos/db
+    state: directory
+    owner: '928'
+    group: '928'
+    mode: '0700'
+  when: so_role | default('') == 'manager'
+
+- name: Check if kratos db.sqlite already exists
+  ansible.builtin.stat:
+    path: /nsm/kratos/db/db.sqlite
+  register: kratos_db
+  when: so_role | default('') == 'manager'
+
+- name: Fix ownership of pre-existing (empty) kratos db.sqlite
+  ansible.builtin.file:
+    path: /nsm/kratos/db/db.sqlite
+    owner: '928'
+    group: '928'
+    mode: '0600'
+  when:
+    - so_role | default('') == 'manager'
+    - kratos_db.stat.exists

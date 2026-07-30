@@ -2,7 +2,7 @@
 #
 # deploy.sh — three-attempt Ansible runner with hybrid retry scope.
 #
-# Attempt 1: full arbitr_pp_playbook.yaml against every host
+# Attempt 1: full site.yml against every host
 # Attempt 2: --limit @retry-file (failed hosts only) if a retry file exists
 # Attempt 3: full playbook again (safety net if retry-scoped attempt didn't cover
 #            a cross-host dependency)
@@ -12,7 +12,10 @@
 # headroom (2-4 vCPU on the SimSpace VM); 40 concurrent workers is a
 # comfortable middle ground and matches the airfield-range deploy.sh.
 
-PLAYBOOK="arbitr_pp_playbook.yaml"
+# site.yml = arbitr_pp_playbook.yaml (range baseline) followed by the six
+# Security Onion phases. Run a single phase directly during development —
+# re-running the full range playbook to test an SO change is slow.
+PLAYBOOK="site.yml"
 RETRY_FILE="retry/$PLAYBOOK.retry"
 MAX_ATTEMPTS=3
 FORKS=40
@@ -36,17 +39,6 @@ export ANSIBLE_CACHE_PLUGIN_CONNECTION="$HOME/.ansible/fact_cache"
 export ANSIBLE_CACHE_PLUGIN_TIMEOUT=86400
 mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
 
-# --- Install Galaxy collections (idempotent — skips already-installed ones) ---
-# Required for the pfsensible.core collection that drives the pp-ot-firewall
-# pfSense play. Pulled through the corp proxy because the Ansible VM doesn't
-# have direct internet. Failure here doesn't abort the deploy — ansible-playbook
-# will surface a clear "collection not found" error if anything's actually missing.
-#
-# NOTE: The historical `sleep 120` before this section was removed 2026-07-02
-# as part of the speed pass. It was a defensive delay to let fresh-provisioned
-# VMs finish booting before the deploy started, but the retry loop already
-# handles any "host unreachable" from a VM that isn't ready. On iterative
-# deploys the sleep is pure wasted wall clock.
 # --- Vault guard -------------------------------------------------------------
 # Refuse to deploy if the vault is missing or plaintext. Written FAIL-CLOSED on
 # purpose: the equivalent guard in so-ansible was
@@ -77,6 +69,17 @@ if [ ! -f /home/simspace/.vault_pass ]; then
 	exit 1
 fi
 
+# --- Install Galaxy collections (idempotent — skips already-installed ones) ---
+# Required for the pfsensible.core collection that drives the pp-ot-firewall
+# pfSense play. Pulled through the corp proxy because the Ansible VM doesn't
+# have direct internet. Failure here doesn't abort the deploy — ansible-playbook
+# will surface a clear "collection not found" error if anything's actually missing.
+#
+# NOTE: The historical `sleep 120` before this section was removed 2026-07-02
+# as part of the speed pass. It was a defensive delay to let fresh-provisioned
+# VMs finish booting before the deploy started, but the retry loop already
+# handles any "host unreachable" from a VM that isn't ready. On iterative
+# deploys the sleep is pure wasted wall clock.
 echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then

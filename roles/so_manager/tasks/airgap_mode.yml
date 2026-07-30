@@ -1,0 +1,182 @@
+---
+# =========================================================================
+# airgap_mode.yml — put SO into its own airgap mode + stage local content
+# =========================================================================
+# WHY
+# ---
+# SOC's detection engines fetch content from the internet on a 5-minute
+# loop: the ETOPEN ruleset from rules.emergingthreats.net, and sigma, yara
+# and playbook repos from github. In an IS-INET range the in-game plane has
+# no real internet, so all four fail with
+#   lookup github.com on 127.0.0.11:53: server misbehaving
+# and the SOC Detections page shows "ElastAlert: Sync Failed" and
+# "Suricata: Rule Mismatch" permanently. ElastAlert ends up with zero
+# enabled rules.
+#
+# WHAT WE TRIED FIRST, AND WHY IT WAS WRONG
+# -----------------------------------------
+# Patching /opt/so/conf/soc/soc.json to point at our mirror. That file is
+# RENDERED BY SALT; the highstate rewrites it every 15 minutes and the patch
+# is gone. Same lesson as the GRE firewall — change salt's inputs, never its
+# rendered outputs. (UPSTREAM_FIXES 2026-07-30.)
+#
+# THE SUPPORTED MECHANISM
+# -----------------------
+# SO has first-class airgap support. `vars/globals.map.jinja` line 17 reads
+# `'airgap': INIT.PILLAR.global.airgap`, and `soc/merged.map.jinja` then
+# swaps every remote source for a local one:
+#   suricataengine.rulesetSources -> airgap : sourceType `directory`,
+#                                     sourcePath /nsm/rules/suricata/etopen/
+#   elastalertengine.rulesRepos   -> airgap : file:///nsm/rules/detect-sigma/...
+#   strelkaengine.rulesRepos      -> airgap : file:///nsm/rules/detect-yara/...
+#   playbook.playbookRepos        -> airgap : file:///nsm/airgap-resources/...
+# and sets `airgapEnabled: true`, which also stops Yara/Sigma auto-update.
+#
+# So we set ONE pillar boolean and stage the content those paths expect.
+# Upgrade-safe: this is the path SO documents and tests, unlike a bespoke
+# sourcePath override.
+#
+# CONSEQUENCE — read this before wondering why rules look stale
+# -------------------------------------------------------------
+# Detection content is now FROZEN at whatever we staged. That is correct for
+# an exercise range, but refreshing it is a deliberate act: delete the
+# tarballs under {{ so_mirror_root }}/so-source/ on the controller and re-run
+# the mirror role, then re-run this.
+# =========================================================================
+
+# --- 1. Stage the content the airgap paths expect ------------------------
+
+- name: Airgap — create the local content directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: socore
+    group: socore
+    mode: '0755'
+  loop:
+    - "{{ so_airgap_etopen_dest }}"
+    - /nsm/rules/detect-sigma/repos
+    - /nsm/rules/detect-yara/repos
+    - /nsm/airgap-resources/playbooks
+
+# ETOPEN in airgap mode is `sourceType: directory`, not a URL — SO expects
+# the .rules files sitting in the directory. Our bundled tarball extracts to
+# a `rules/` prefix, hence --strip-components=1.
+- name: Airgap — fetch the ETOPEN tarball from the mirror
+  ansible.builtin.get_url:
+    url: "{{ so_mirror_url }}/so-source/{{ so_bundled_rules_filename }}"
+    dest: "/root/{{ so_bundled_rules_filename }}"
+    mode: '0644'
+  register: etopen_dl
+
+- name: Airgap — extract ETOPEN into the directory SO reads
+  ansible.builtin.unarchive:
+    src: "/root/{{ so_bundled_rules_filename }}"
+    dest: "{{ so_airgap_etopen_dest }}"
+    remote_src: true
+    owner: socore
+    group: socore
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ so_airgap_etopen_dest }}/emerging-all.rules"
+
+- name: Airgap — fetch each content repo tarball from the mirror
+  ansible.builtin.get_url:
+    url: "{{ so_mirror_url }}/so-source/{{ item.name }}.tar.gz"
+    dest: "/root/{{ item.name }}.tar.gz"
+    mode: '0644'
+  loop: "{{ so_airgap_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Airgap — extract each content repo to its airgap path
+  ansible.builtin.unarchive:
+    src: "/root/{{ item.name }}.tar.gz"
+    dest: "{{ item.dest | dirname }}"
+    remote_src: true
+    owner: socore
+    group: socore
+    creates: "{{ item.dest }}/.git"
+  loop: "{{ so_airgap_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Airgap — confirm the staged content is actually present
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: airgap_staged
+  loop: >-
+    {{ [so_airgap_etopen_dest]
+       + (so_airgap_repos | map(attribute='dest') | list) }}
+
+- name: Airgap — fail if any expected path is missing
+  ansible.builtin.fail:
+    msg: |
+      Airgap content staging incomplete. Missing:
+      {{ airgap_staged.results | rejectattr('stat.exists') | map(attribute='item') | list }}
+      Without these, enabling airgap mode swaps SO onto file:// paths that
+      do not exist and the sync failures change shape rather than clear.
+  when: airgap_staged.results | rejectattr('stat.exists') | list | length > 0
+
+# --- 2. Flip the pillar switch -------------------------------------------
+# Read-modify-write rather than templating the file: SO or an operator may
+# already have keys under `global:` and clobbering them would be worse than
+# the problem we are solving.
+
+- name: Airgap — read the existing global pillar (may not exist)
+  ansible.builtin.slurp:
+    src: "{{ so_airgap_pillar_file }}"
+  register: global_pillar_raw
+  failed_when: false
+
+- name: Airgap — merge airgap:true into the existing global pillar
+  ansible.builtin.set_fact:
+    so_global_pillar_merged: >-
+      {{ ( (global_pillar_raw.content | b64decode | from_yaml)
+            if (global_pillar_raw.content is defined
+                and (global_pillar_raw.content | b64decode | trim | length) > 0)
+            else {} )
+         | combine({'global': {'airgap': true}}, recursive=True) }}
+
+- name: Airgap — write the global pillar
+  ansible.builtin.copy:
+    content: "{{ so_global_pillar_merged | to_nice_yaml(indent=2) }}"
+    dest: "{{ so_airgap_pillar_file }}"
+    owner: socore
+    group: socore
+    mode: '0640'
+  register: airgap_pillar_write
+
+# --- 3. Apply and PROVE it took --------------------------------------------
+
+- name: Airgap — apply the soc state so soc.json re-renders from the pillar
+  ansible.builtin.command: salt-call state.apply soc
+  become: true
+  register: airgap_apply
+  changed_when: airgap_apply.rc == 0
+  # Same 15-min highstate scheduler collision as everywhere else.
+  until: airgap_apply.rc == 0
+  retries: 20
+  delay: 30
+
+# Positive proof, not an exit code — the standing rule in this repo.
+- name: Airgap — verify the pillar actually resolves to True
+  ansible.builtin.command: salt-call pillar.get global:airgap --out=newline_values_only
+  become: true
+  register: airgap_pillar_check
+  changed_when: false
+  failed_when: "'True' not in airgap_pillar_check.stdout"
+
+- name: Airgap — verify soc.json now points at the LOCAL ETOPEN directory
+  ansible.builtin.command: grep -c "{{ so_airgap_etopen_dest }}" /opt/so/conf/soc/soc.json
+  become: true
+  register: airgap_socjson_check
+  changed_when: false
+  failed_when: airgap_socjson_check.rc != 0
+
+- name: Airgap — report
+  ansible.builtin.debug:
+    msg: >-
+      Airgap mode ON. soc.json references {{ so_airgap_etopen_dest }};
+      sigma/yara/playbooks read from local file:// repos. Detection content
+      is frozen until the mirror tarballs are refreshed.

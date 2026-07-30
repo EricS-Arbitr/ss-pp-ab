@@ -1,0 +1,349 @@
+---
+# =========================================================================
+# so_manager — render answer file, invoke so-setup network, verify install
+# =========================================================================
+
+# --- Idempotency: skip everything if SO is already installed -------------
+
+- name: Idempotency probe — has so-setup already completed on this host?
+  ansible.builtin.stat:
+    path: "{{ so_manager_installed_marker }}"
+  register: so_installed
+
+# Lifetime invariant — MUST sit between the probe and `end_host`. Airgap mode
+# has to be re-asserted on an already-installed manager (SO's highstate can
+# reshape config, and the flag may be added to a range built before we had
+# it), and anything after end_host can never reach an installed node —
+# UPSTREAM_FIXES §9.4, which has now bitten five times. Only runs when SO is
+# already installed; a fresh host gets it at the end of the role instead,
+# once /opt/so and salt-call actually exist.
+- name: Airgap — assert SO airgap mode on an already-installed manager
+  ansible.builtin.include_tasks: airgap_mode.yml
+  when:
+    - so_airgap_mode | bool
+    - so_installed.stat.exists
+
+- name: End play early on this host if SO is already installed
+  ansible.builtin.meta: end_host
+  when: so_installed.stat.exists
+
+# --- Precondition: so_base's source extract must be present --------------
+
+- name: Precondition — SO source must be at {{ so_source_dest }}
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/setup/so-setup"
+  register: so_setup_present
+
+- name: Fail loudly if so_base didn't stage the source
+  ansible.builtin.fail:
+    msg: |
+      SO source not present at {{ so_source_dest }}/setup/so-setup.
+      so_base role must run before so_manager. Re-run 30-prereqs.yml.
+  when: not so_setup_present.stat.exists
+
+# --- Compute NIC name + netmask from ansible_facts -----------------------
+# so_prod_nic: the interface whose IPv4 address matches so_prod_ip.
+# so_prod_netmask: dotted-quad from so_prod_prefix (e.g. 24 -> 255.255.255.0).
+# Netmask conversion uses the built-in ipv4() filter via ansible.utils
+# once added to requirements.yml; fallback below uses a lookup table for
+# the common prefixes (16/24/28/29/30) so we don't add a runtime dep.
+
+- name: Gather facts (need ansible_facts['interfaces'] + per-iface ipv4)
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+
+- name: Compute so_prod_nic from ansible_facts (interface with so_prod_ip)
+  ansible.builtin.set_fact:
+    so_prod_nic: >-
+      {{ (ansible_facts['interfaces']
+          | map('regex_replace', '-', '_')
+          | map('extract', ansible_facts)
+          | selectattr('ipv4', 'defined')
+          | selectattr('ipv4.address', 'equalto', so_prod_ip)
+          | map(attribute='device')
+          | list
+          | first) }}
+
+- name: Compute so_prod_netmask from prefix
+  ansible.builtin.set_fact:
+    so_prod_netmask: >-
+      {{ {
+        16: '255.255.0.0',
+        20: '255.255.240.0',
+        22: '255.255.252.0',
+        23: '255.255.254.0',
+        24: '255.255.255.0',
+        25: '255.255.255.128',
+        26: '255.255.255.192',
+        27: '255.255.255.224',
+        28: '255.255.255.240',
+        29: '255.255.255.248',
+        30: '255.255.255.252',
+        31: '255.255.255.254',
+        32: '255.255.255.255',
+      }[so_prod_prefix | int] }}
+
+- name: Sanity print the computed values
+  ansible.builtin.debug:
+    msg: "MNIC={{ so_prod_nic }} MIP={{ so_prod_ip }}/{{ so_prod_prefix }} = {{ so_prod_netmask }} MGATEWAY={{ so_prod_gateway }}"
+
+# --- Render + drop the answer file ---------------------------------------
+
+- name: Render manager answer file to /root/so-answers.env
+  ansible.builtin.template:
+    src: manager.env.j2
+    dest: /root/so-answers.env
+    mode: '0600'
+    owner: root
+    group: root
+
+# --- Invoke so-setup asynchronously --------------------------------------
+#
+# Pattern: source our answer file BEFORE invoking so-setup, in the same
+# shell. TESTING=true in the answer file causes every whiptail_* function
+# in so-whiptail to return early (verified 2026-07-22 against 2.4/main —
+# 80 functions all gated by `[ -n "$TESTING" ] && return`). Every value
+# that would otherwise come from a whiptail prompt is instead set by our
+# env source. Any variable we forget to set = empty in the install =
+# whichever downstream code path handles empty values (often: silent
+# accept-of-nothing or a validation error, depending on the field).
+
+# --- so-setup skip decision (POSITIVE proof, not just an exit code) ------
+# The `meta: end_host` probe above short-circuits on the FINAL marker
+# (/opt/so/state/installed), which is only written after the reboot and the
+# so-status verify. That leaves a wide window: any failure between so-setup
+# and that marker means the next run has no evidence so-setup ever ran, and
+# redoes the entire 45-minute install. That happened on 2026-07-29 — a
+# healthy 14-container manager was torn down and rebuilt because the prior
+# run died on the (then-fatal) /root/failure guard.
+#
+# Same design as so_search / so_sensor: skip so-setup only when the
+# setup-completed marker exists AND Salt is genuinely present. The marker
+# alone is not enough (a stale marker must not bless a broken node); Salt
+# alone is not enough (so-setup can install Salt and then die mid-way).
+- name: Probe for a real Salt install (minion config written by so-setup)
+  ansible.builtin.stat:
+    path: /etc/salt/minion
+  register: salt_minion_present
+
+- name: Probe for the salt-minion systemd unit
+  ansible.builtin.command: systemctl list-unit-files salt-minion.service
+  register: salt_unit_probe
+  changed_when: false
+  failed_when: false
+
+- name: Probe for the so-setup completion marker
+  ansible.builtin.stat:
+    path: "{{ so_manager_setup_marker }}"
+  register: so_setup_marker_stat
+
+- name: Decide whether the 45-90 min so-setup call can be skipped
+  ansible.builtin.set_fact:
+    so_setup_can_skip: >-
+      {{ so_setup_marker_stat.stat.exists
+         and salt_minion_present.stat.exists
+         and 'salt-minion.service' in salt_unit_probe.stdout }}
+
+- name: Report so-setup skip decision
+  ansible.builtin.debug:
+    msg: >-
+      so-setup {{ 'SKIPPED (marker + Salt both present)' if so_setup_can_skip
+      else 'WILL RUN' }} — marker={{ so_setup_marker_stat.stat.exists }},
+      minion={{ salt_minion_present.stat.exists }},
+      unit={{ 'salt-minion.service' in salt_unit_probe.stdout }}
+
+- name: Kick off so-setup network (long-running, backgrounded)
+  ansible.builtin.shell: |
+    source /root/so-answers.env
+    cd {{ so_source_dest }}/setup
+    ./so-setup {{ so_setup_type }} > {{ so_manager_setup_log }} 2>&1
+  args:
+    executable: /bin/bash
+    # `creates:` deliberately NOT used. A satisfied `creates:` makes the
+    # command module return rc=0 WITH skipped=true, so the rc check below
+    # could not tell success from skip (UPSTREAM_FIXES 2026-07-28 later 4).
+    # Gating is done with `when:` against positive proof instead.
+  async: "{{ so_manager_install_timeout }}"
+  poll: 0
+  register: so_setup_async
+  when: not so_setup_can_skip
+
+- name: Poll so-setup completion (every {{ so_manager_poll_interval }}s up to {{ so_manager_install_timeout }}s)
+  ansible.builtin.async_status:
+    jid: "{{ so_setup_async.ansible_job_id }}"
+  register: so_setup_result
+  until: so_setup_result.finished
+  retries: "{{ (so_manager_install_timeout / so_manager_poll_interval) | int }}"
+  delay: "{{ so_manager_poll_interval }}"
+  when: not so_setup_can_skip
+
+- name: Report so-setup exit code + last log lines
+  ansible.builtin.debug:
+    msg: |
+      so-setup rc={{ so_setup_result.rc | default('unknown') }}
+      Last 20 log lines:
+      {{ so_setup_result.stdout_lines[-20:] | default(['<no stdout captured>']) | join('\n') }}
+  when: not so_setup_can_skip
+
+- name: Fail if so-setup exited non-zero
+  ansible.builtin.fail:
+    msg: |
+      so-setup returned {{ so_setup_result.rc }}. Full log at
+      {{ so_manager_setup_log }} on {{ inventory_hostname }}.
+  when:
+    - not so_setup_can_skip
+    - so_setup_result.rc | default(1) != 0
+
+# so-setup's exit code is NOT trustworthy. Verified 2026-07-28 on the
+# sensor: it logged "WARNING: Errors detected during setup" with a fatal
+# error and still exited 0. SO writes its own signals instead — a
+# /root/failure marker and /root/errors.log. Check those; they are
+# authoritative where rc is not. (so_search and so_sensor got this on
+# 2026-07-28; this role was missed until the 2026-07-29 audit.)
+- name: Check SO's own failure marker
+  ansible.builtin.stat:
+    path: /root/failure
+  register: so_failure_marker
+  when: not so_setup_can_skip
+
+- name: Read SO's errors.log (for the failure message)
+  ansible.builtin.slurp:
+    src: /root/errors.log
+  register: so_errors_log
+  failed_when: false
+  when: not so_setup_can_skip
+
+# /root/failure is NOT sufficient on its own to fail the deploy. Learned
+# 2026-07-29 on the first fresh-range build: the SimSpace Ubuntu image
+# pre-bakes SO remnants, so so-setup ALWAYS takes its "Old setup detected"
+# reinstall path, and that path's elastic-agent uninstall tries to notify a
+# Fleet server that is not running yet:
+#   notify Fleet: ... dial tcp 172.16.5.10:8220: connect: no route to host
+#   notify Fleet: failed
+# SO captures that into errors.log and writes /root/failure — then setup
+# completes successfully anyway. Failing hard here would break EVERY fresh
+# deploy on this image.
+#
+# So: surface it loudly as a warning, and let the positive-proof checks
+# below (Salt installed) plus the so-status gate further down be the hard
+# failures. An outcome check cannot false-positive on cleanup noise.
+- name: Report SO's failure marker + errors.log (warning, not fatal)
+  ansible.builtin.debug:
+    msg: |
+      NOTE: SO wrote /root/failure on {{ inventory_hostname }} (so-setup
+      still exited {{ so_setup_result.rc | default('?') }}). This is often
+      benign on this image — the reinstall cleanup path logs an
+      elastic-agent "notify Fleet: failed" because Fleet is not up yet.
+      Judge success by the Salt + so-status checks that follow, not by this.
+
+      /root/errors.log:
+      {{ (so_errors_log.content | b64decode) if so_errors_log.content is defined
+         else '<errors.log unreadable>' }}
+  when:
+    - not so_setup_can_skip
+    - so_failure_marker.stat.exists
+
+# Second net — and now the FIRST hard gate. NOTE /etc/salt/minion_id is NOT
+# a valid probe — this SO version never writes it, setting `id:` inside
+# /etc/salt/minion instead (UPSTREAM_FIXES 2026-07-28 later 8b).
+- name: Confirm Salt was actually installed
+  ansible.builtin.stat:
+    path: /etc/salt/minion
+  register: salt_minion_after
+  when: not so_setup_can_skip
+
+- name: Fail if so-setup exited 0 but never installed Salt
+  ansible.builtin.fail:
+    msg: |
+      so-setup exited 0 on {{ inventory_hostname }} but Salt was never
+      installed — /etc/salt/minion does not exist. The exit code lied.
+      Check {{ so_manager_setup_log }}; if that file is missing entirely,
+      so-setup never actually ran.
+  when:
+    - not so_setup_can_skip
+    - not salt_minion_after.stat.exists
+
+# Record that SO-SETUP ITSELF is done, as early as it is safe to — right
+# after Salt is confirmed, BEFORE the reboot and the 5-15 min so-status
+# wait. Any failure downstream of here then costs a re-verify, not a
+# 45-90 minute reinstall. This is the marker the skip decision at the top
+# reads; the `installed` marker further down still gates the whole role.
+- name: Mark so-setup as completed (short-circuits so-setup on re-runs)
+  ansible.builtin.file:
+    path: "{{ so_manager_setup_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+  when: not so_setup_can_skip
+
+# --- Post-install reboot + wait ------------------------------------------
+
+# This reboot exists solely to complete the reboot so-setup deferred via
+# SKIP_REBOOT=1 in the answer file. If so-setup was skipped there is nothing
+# deferred, and rebooting a healthy 14-container manager just to re-verify
+# it would be gratuitous — so gate it on the same condition.
+- name: Reboot the manager (SKIP_REBOOT=1 in answer file deferred it)
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 60
+    post_reboot_delay: 30
+  when: not so_setup_can_skip
+
+# --- Verify -------------------------------------------------------------
+
+- name: Verify so-status green (post-reboot Salt highstate takes 5-15 min)
+  ansible.builtin.command: sudo so-status
+  register: so_status
+  changed_when: false
+  # Post-reboot, salt-minion needs to apply the full highstate before
+  # so-status stops reporting "System appears to be starting. No
+  # highstate has completed since the system was restarted." Empirically
+  # this takes 5-15 min on the manager. 60 retries × 20s = 20 min ceiling.
+  retries: 60
+  delay: 20
+  until: so_status.rc == 0
+
+- name: Assert so-status actually reports a healthy grid (rc alone is not proof)
+  ansible.builtin.assert:
+    that:
+      - "'adversaries cry' in so_status.stdout or 'STATUS: OK' in so_status.stdout"
+    fail_msg: |
+      so-status exited 0 on {{ inventory_hostname }} but did not report a
+      healthy grid. An exit code is not proof — so-setup already taught us
+      that (UPSTREAM_FIXES 2026-07-28 later 6). Last lines:
+      {{ so_status.stdout_lines[-15:] | join('\n') }}
+    success_msg: "so-status reports a healthy grid"
+    quiet: true
+
+- name: Report manager status
+  ansible.builtin.debug:
+    msg: "{{ so_status.stdout_lines[-15:] }}"
+
+# The `installed` marker is written HERE — after so-status is green and the
+# health banner has been asserted — not before the reboot where it used to
+# sit. It gates the whole role via `meta: end_host` at the top, so writing
+# it ahead of verification would bless a manager whose containers never came
+# up and skip it on every future run. Matches so_search / so_sensor, which
+# have always written theirs post-verify.
+#
+# so-setup does NOT write this file itself (verified 2026-07-23 — a
+# completed run left it absent), so we own it. The separate
+# `setup-completed` marker above is what prevents a re-run from redoing
+# so-setup; this one prevents redoing the whole role.
+- name: Write installed marker for idempotent re-runs (only after so-status green)
+  ansible.builtin.file:
+    path: "{{ so_manager_installed_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+
+# --- SOC detection content — airgap mode --------------------------------
+# Fresh-install pass. /opt/so, salt-call and soc.json do not exist until
+# so-setup has run, so the copy above the end_host probe was skipped on this
+# host. Now that SO is up, put it into airgap mode and stage local content.
+- name: Airgap — put SO into airgap mode and stage local detection content
+  ansible.builtin.include_tasks: airgap_mode.yml
+  when: so_airgap_mode | bool

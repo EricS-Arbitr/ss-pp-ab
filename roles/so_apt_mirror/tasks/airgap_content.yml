@@ -1,0 +1,76 @@
+---
+# =========================================================================
+# airgap_content.yml — stage SO's airgap detection content on the mirror
+# =========================================================================
+# In airgap mode SO reads its detection content from LOCAL paths rather than
+# github (see so_manager/tasks/airgap_mode.yml for the pillar switch and the
+# full rationale). Normally that content arrives on the SO airgap ISO, which
+# does not exist for Ubuntu — so we assemble it ourselves.
+#
+# This runs on the ANSIBLE CONTROLLER, which is the only host with
+# mgmt-plane egress (`so_upstream_proxy`). The in-game plane is airgapped in
+# the target IS-INET ranges, so the SO nodes can never fetch these directly.
+# We clone here, tar, and publish on the same nginx that already serves the
+# pinned SO source; so_manager pulls them over the in-range mirror URL.
+#
+# Full clones on purpose — NOT `--depth 1`. SOC clones these repos again
+# from the `file://` path we stage them at, and a shallow repo is not
+# reliably cloneable as a source.
+#
+# Idempotent via `creates:` on the tarball. Delete the tarball on the
+# controller to force a refresh — that is the deliberate act that updates
+# detection content in an airgapped range.
+# =========================================================================
+
+- name: Airgap content — working directory for clones
+  ansible.builtin.file:
+    path: "{{ so_airgap_build_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Airgap content — clone each SO content repo (via mgmt-plane proxy)
+  ansible.builtin.shell: |
+    set -e
+    rm -rf "{{ so_airgap_build_dir }}/{{ item.name }}"
+    git clone "{{ item.url }}" "{{ so_airgap_build_dir }}/{{ item.name }}"
+  args:
+    executable: /bin/bash
+    creates: "{{ so_mirror_root }}/so-source/{{ item.name }}.tar.gz"
+  environment:
+    http_proxy: "{{ so_upstream_proxy }}"
+    https_proxy: "{{ so_upstream_proxy }}"
+    HTTP_PROXY: "{{ so_upstream_proxy }}"
+    HTTPS_PROXY: "{{ so_upstream_proxy }}"
+  loop: "{{ so_airgap_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: airgap_clone
+
+- name: Airgap content — tar each repo into the mirror (keeps .git)
+  ansible.builtin.shell: |
+    set -e
+    cd "{{ so_airgap_build_dir }}"
+    tar -czf "{{ so_mirror_root }}/so-source/{{ item.name }}.tar.gz" "{{ item.name }}"
+    chown www-data:www-data "{{ so_mirror_root }}/so-source/{{ item.name }}.tar.gz"
+  args:
+    executable: /bin/bash
+    creates: "{{ so_mirror_root }}/so-source/{{ item.name }}.tar.gz"
+  loop: "{{ so_airgap_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Airgap content — smoke test each tarball is served over HTTP
+  ansible.builtin.uri:
+    url: "{{ so_mirror_url }}/so-source/{{ item.name }}.tar.gz"
+    method: HEAD
+    status_code: 200
+  loop: "{{ so_airgap_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Airgap content — report
+  ansible.builtin.debug:
+    msg: >-
+      Airgap detection content staged on {{ so_mirror_url }}/so-source/ :
+      {{ so_airgap_repos | map(attribute='name') | join(', ') }}
+      (+ {{ so_bundled_rules_filename }} for ETOPEN)

@@ -1,0 +1,43 @@
+---
+# =========================================================================
+# site.yml — full PowerPlant deploy: range baseline, then Security Onion
+# =========================================================================
+# Phase 0 is the existing range playbook. Phases 10-60 are the Security
+# Onion stack, ported from so-ansible where they were validated end to end
+# on a fresh range (2026-07-29/30).
+#
+# WHY arbitr_pp_playbook.yaml IS PHASE ZERO, AND WHY 00-setup.yml IS ABSENT
+# ------------------------------------------------------------------------
+# so-ansible's series opens with 00-setup.yml, which runs `init` + `common`
+# to baseline Windows and Linux hosts. arbitr_pp_playbook.yaml ALREADY does
+# that for this whole range, including the five SO nodes (they are in
+# [ubuntu22] and [linux]). Importing both would run two NetworkManager /
+# netplan passes over the same hosts, and `common` reboots when netplan
+# changes — so you would risk two reboot cycles per host for no gain.
+#
+# ORDERING IS LOAD-BEARING
+# ------------------------
+#   10  mirror must exist before any SO node fetches the pinned SO source
+#   20  the GRE tunnel + tc rules must exist before a sensor can receive
+#   30  so_base stages the SO source on every node
+#   40  the MANAGER must fully complete before 50 — search and sensor join
+#       it, and grid-join fails against a manager that is not yet green
+#   50  search + sensor
+#   60  verification
+#
+# ITERATING
+# ---------
+# Re-running phase 0 across ~30 hosts to test an SO change is slow. During
+# development run a single phase directly:
+#     ansible-playbook playbooks/40-manager.yml
+# deploy.sh runs this file end to end.
+# =========================================================================
+
+- import_playbook: arbitr_pp_playbook.yaml
+
+- import_playbook: playbooks/10-mirror.yml
+- import_playbook: playbooks/20-vyos.yml
+- import_playbook: playbooks/30-prereqs.yml
+- import_playbook: playbooks/40-manager.yml
+- import_playbook: playbooks/50-nodes.yml
+- import_playbook: playbooks/60-verify.yml

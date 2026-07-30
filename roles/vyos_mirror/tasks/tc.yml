@@ -1,0 +1,65 @@
+---
+# =========================================================================
+# vyos_mirror/tc.yml — deploy + run the tc mirror script (SSH)
+# =========================================================================
+# Runs under `connection: ssh` in the calling play. VyOS's underlying
+# Debian shell + Python are available via SSH; ansible.builtin.* modules
+# work. Can't be mixed with vyos_config in the same play — modules are
+# connection-specific.
+
+# /config/scripts/ is where VyOS's post-config bootup hook lives, but the
+# dir isn't created by default on a fresh RC-VyOS-Router:1.1.0 image.
+# `template` fails with "Destination directory does not exist" if we
+# don't create it first.
+#
+# NOTE on ownership: legacy VyOS docs recommend group=vyattacfg but that
+# group doesn't exist on RC-VyOS-Router:1.1.0 (chgrp fails "failed to
+# look up group vyattacfg"). Root-owned + 0755 is sufficient for the
+# post-config script to execute at boot.
+- name: Ensure /config/scripts/ exists
+  ansible.builtin.file:
+    path: "{{ vyos_mirror_script_path | dirname }}"
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Deploy tc-mirror script to VyOS postconfig hook
+  ansible.builtin.template:
+    src: tc-mirror.sh.j2
+    dest: "{{ vyos_mirror_script_path }}"
+    mode: '0755'
+  become: true
+  register: tc_script
+
+- name: Run tc-mirror script now (would otherwise wait for reboot)
+  # /bin/vbash doesn't exist on RC-VyOS-Router:1.1.0 (was a legacy VyOS
+  # shell wrapper). Regular bash is fine — the tc commands are plain
+  # kernel calls, no VyOS-CLI machinery needed.
+  ansible.builtin.command: "/bin/bash {{ vyos_mirror_script_path }}"
+  become: true
+  register: tc_run
+  changed_when: "'tc rules applied' in tc_run.stdout"
+  failed_when: false   # we surface the diagnostic below on any FAIL
+
+- name: Show tc-mirror script output (last 40 lines — has ip link show + failures)
+  ansible.builtin.debug:
+    msg: "{{ tc_run.stdout_lines[-40:] | default(['(no stdout)']) }}"
+
+- name: Fail loudly if the tc script reported failures
+  ansible.builtin.fail:
+    msg: "tc-mirror script failed. See stdout above and /tmp/so-mirror-tc.log on router-0."
+  when: tc_run.rc != 0 or 'FAILED:' in tc_run.stdout
+
+- name: Verify tc mirror filters exist on first source interface
+  ansible.builtin.command: "tc filter show dev {{ vyos_mirror_source_interfaces[0] }} ingress"
+  become: true
+  register: tc_verify
+  changed_when: false
+  failed_when: "'mirred' not in tc_verify.stdout"
+
+- name: Report mirror state
+  ansible.builtin.debug:
+    msg: |
+      vyos_mirror OK:
+        Tunnel {{ vyos_gre_tunnel_iface }}: {{ vyos_gre_source_ip }} -> {{ vyos_gre_remote_ip }}
+        Mirroring {{ vyos_mirror_source_interfaces | length }} interfaces: {{ vyos_mirror_source_interfaces | join(', ') }}

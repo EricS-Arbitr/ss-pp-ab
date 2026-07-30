@@ -1,0 +1,93 @@
+#!/bin/bash
+# ============================================================
+# so-mirror tc rules — mirror source interfaces into GRE tun0.
+# Managed by so-ansible/roles/vyos_mirror. Do not hand-edit.
+# ============================================================
+# VyOS declarative CLI doesn't support "mirror ethX -> tunN" so we drop
+# to raw tc. Invoked from vyatta-postconfig-bootup.script; safe to run
+# repeatedly.
+#
+# Sources fingerprint: {{ (vyos_mirror_source_interfaces + [vyos_gre_tunnel_iface] + (vyos_mirror_exclude_cidrs | default([]))) | join(',') }}
+
+LOG=/tmp/so-mirror-tc.log
+exec > >(tee -a "$LOG") 2>&1
+echo "[so-mirror] === run at $(date -Iseconds) ==="
+
+FAIL=0
+run() {
+  "$@"
+  local rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "[so-mirror] FAIL rc=$rc: $*"
+    FAIL=$((FAIL+1))
+  fi
+}
+
+TUN="{{ vyos_gre_tunnel_iface }}"
+
+# Diagnostic — dump all interfaces + existing qdiscs so we can see what
+# we're working with when things go sideways.
+echo "[so-mirror] ip link show:"
+ip -brief link show | sed 's/^/  /'
+echo "[so-mirror] existing tc qdisc:"
+tc qdisc show | sed 's/^/  /'
+
+# Ensure the tunnel interface is UP before adding tc rules against it.
+if ! ip link show "$TUN" >/dev/null 2>&1; then
+  echo "[so-mirror] ERROR: $TUN not present. Aborting."
+  exit 1
+fi
+ip link set "$TUN" up
+
+{% set excl = vyos_mirror_exclude_cidrs | default([]) %}
+{% if excl %}
+# Exclusions: {{ excl | join(', ') }}
+#
+# On several platforms the mgmt IP SHARES a data-plane interface (e.g.
+# PowerPlant's pp-corp-router carries 10.255.240.199 on the same eth0 as the
+# PP-Services gateway). A bare `matchall` mirror there would copy every
+# Ansible SSH/WinRM session into the sensor — out-of-band traffic that is
+# invisible in-scenario and would pollute detections.
+#
+# tc evaluates filters in priority order and `action pass` terminates the
+# chain, so a low-numbered pass rule per excluded CIDR short-circuits the
+# mirror before the catch-all is reached. src and dst are both matched
+# because a mirrored flow can have the excluded prefix on either end.
+{% endif %}
+{% for iface in vyos_mirror_source_interfaces %}
+# --- {{ iface }} ---
+if ! ip link show {{ iface }} >/dev/null 2>&1; then
+  echo "[so-mirror] SKIP: {{ iface }} not present on this router"
+else
+  # Ingress mirror
+  tc qdisc del dev {{ iface }} ingress 2>/dev/null
+  run tc qdisc add dev {{ iface }} handle ffff: ingress
+{% set ns = namespace(prio=1) %}
+{% for cidr in excl %}
+  run tc filter add dev {{ iface }} parent ffff: prio {{ ns.prio }} protocol ip u32 match ip src {{ cidr }} action pass
+{% set ns.prio = ns.prio + 1 %}
+  run tc filter add dev {{ iface }} parent ffff: prio {{ ns.prio }} protocol ip u32 match ip dst {{ cidr }} action pass
+{% set ns.prio = ns.prio + 1 %}
+{% endfor %}
+  run tc filter add dev {{ iface }} parent ffff: prio {{ ns.prio }} matchall action mirred egress mirror dev $TUN
+
+  # Egress mirror
+  tc qdisc del dev {{ iface }} root 2>/dev/null
+  run tc qdisc add dev {{ iface }} handle 1: root prio
+{% set ns2 = namespace(prio=1) %}
+{% for cidr in excl %}
+  run tc filter add dev {{ iface }} parent 1: prio {{ ns2.prio }} protocol ip u32 match ip src {{ cidr }} action pass
+{% set ns2.prio = ns2.prio + 1 %}
+  run tc filter add dev {{ iface }} parent 1: prio {{ ns2.prio }} protocol ip u32 match ip dst {{ cidr }} action pass
+{% set ns2.prio = ns2.prio + 1 %}
+{% endfor %}
+  run tc filter add dev {{ iface }} parent 1: prio {{ ns2.prio }} matchall action mirred egress mirror dev $TUN
+fi
+
+{% endfor %}
+
+if [ $FAIL -gt 0 ]; then
+  echo "[so-mirror] FAILED: $FAIL tc commands returned non-zero (see log)"
+  exit 1
+fi
+echo "[so-mirror] tc rules applied for {{ vyos_mirror_source_interfaces | length }} interfaces -> $TUN"

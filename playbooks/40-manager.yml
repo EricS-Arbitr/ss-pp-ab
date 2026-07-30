@@ -1,0 +1,25 @@
+---
+# =========================================================================
+# 40-manager.yml — install SO Manager first
+# =========================================================================
+# Renders distributed-airgap-manager answer file from host_vars + group_vars,
+# copies to /root/answers/manager, symlinks into securityonion/setup/automation/,
+# runs `sudo ~onion/SecurityOnion/setup/so-setup iso <filename>`, waits for
+# reboot, verifies so-status green.
+#
+# CRITICAL: manager MUST complete + reach `so-status` OK before 50-nodes.yml
+# fires; search/sensor join via SOREMOTEPASS-authenticated SSH to manager
+# and salt-key -y -a is run remotely by the joining nodes themselves.
+#
+# Per research 2026-07-20: no explicit so-firewall-minion step needed here.
+# The joining-node flow handles firewall+salt-key in one shot. If we hit
+# the "Pending Members" issue anyway, add a fallback step post-manager to
+# pre-approve minion IDs via `salt-key -y -a <minion_id>`.
+# =========================================================================
+
+- name: SO Manager install (distributed-airgap-manager)
+  hosts: so_manager
+  become: true
+  gather_facts: true
+  roles:
+    - so_manager

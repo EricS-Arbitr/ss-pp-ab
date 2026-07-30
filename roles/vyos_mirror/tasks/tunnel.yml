@@ -1,0 +1,32 @@
+---
+# =========================================================================
+# vyos_mirror/tunnel.yml — GRE tunnel via vyos_config (network_cli)
+# =========================================================================
+# Runs under `connection: network_cli` in the calling play. Modules used
+# here (vyos_config, vyos_command) require network_cli; they can't be
+# mixed with ansible.builtin.* module calls in the same connection (see
+# tc.yml which is invoked from a separate play).
+
+- name: Configure GRE tunnel {{ vyos_gre_tunnel_iface }} -> so-sensor-1
+  vyos.vyos.vyos_config:
+    lines:
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} encapsulation gre"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} source-address {{ vyos_gre_source_ip }}"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} remote {{ vyos_gre_remote_ip }}"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} address {{ vyos_gre_local_addr }}/{{ vyos_gre_tunnel_prefix }}"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} description 'so-mirror to sensor'"
+    save: yes
+
+# `run` prefix is ONLY valid in configure mode; at the op-mode prompt
+# vyos_command uses, it's an invalid command. Just call the op-mode
+# command directly.
+- name: Verify GRE tunnel is present in VyOS interface list
+  vyos.vyos.vyos_command:
+    commands:
+      - "show interfaces tunnel {{ vyos_gre_tunnel_iface }}"
+  register: gre_status
+  changed_when: false
+
+- name: Report GRE tunnel state
+  ansible.builtin.debug:
+    msg: "{{ gre_status.stdout_lines[0][:5] }}"

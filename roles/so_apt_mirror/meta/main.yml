@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: so_apt_mirror
+  author: eric@arbitrsecurity.com
+  description: >
+    Ansible-controller-hosted nginx serving SO ISO + source snapshot at
+    pinned master SHA. Downstream SO nodes fetch install artifacts from
+    http://{{ so_mirror_host }}:{{ so_mirror_port }}/ .
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+
+dependencies: []

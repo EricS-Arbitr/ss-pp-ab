@@ -1,0 +1,13 @@
+---
+# =========================================================================
+# vyos_mirror/main.yml — orchestration entry point.
+# =========================================================================
+# Included via `roles: [vyos_mirror]` runs BOTH task files, which only
+# works if the play's connection is compatible with BOTH modules.
+# For real deploys, the 20-vyos.yml playbook uses two plays with
+# different connection profiles + `tasks_from: tunnel` / `tasks_from: tc`
+# to pick the right file per connection. This main.yml is here for
+# consistency / discoverability only.
+
+- ansible.builtin.include_tasks: tunnel.yml
+- ansible.builtin.include_tasks: tc.yml

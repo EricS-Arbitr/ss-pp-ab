@@ -1,0 +1,21 @@
+---
+# vyos_mirror defaults
+
+# Path where we install the tc-mirror boot script. VyOS runs this on every
+# boot after config load (canonical hook).
+vyos_mirror_script_path: "/config/scripts/vyatta-postconfig-bootup.script"
+
+# Where the current tc mirror config gets fingerprinted so re-runs are cheap.
+vyos_mirror_marker: "/config/scripts/.so-mirror-fingerprint"
+
+# Tunnel interface name (must not collide with existing tun0 use on router).
+vyos_gre_tunnel_iface: "tun0"
+
+# CIDRs to EXCLUDE from mirroring. Rendered as tc `action pass` filters at a
+# lower priority than the catch-all, matching both src and dst.
+#
+# Empty by default — in the so-ansible dev range mgmt is a separate NIC that
+# is simply not in vyos_mirror_source_interfaces, so nothing needs excluding.
+# Set it where the mgmt IP SHARES a mirrored data interface, which is the case
+# on PowerPlant's routers (see ss-pp-ab host_vars/pp-*-router.yml).
+vyos_mirror_exclude_cidrs: []

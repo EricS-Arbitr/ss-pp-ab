@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: so_base
+  author: eric@arbitrsecurity.com
+  description: >
+    Cross-cutting SO Linux node prep before so-setup. Installs baseline
+    packages, wires corp proxy for upstream package fetches, fetches the
+    pinned SO source tarball from the ansible-hosted mirror, populates
+    /etc/hosts for peer resolution, disables UFW.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+
+dependencies: []

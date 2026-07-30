@@ -45,6 +45,56 @@ Custom roles currently in `roles/` (those not in the base repo, or that override
 | `network_discovery` | Suppresses the Win10/11 "Public / Private network" Pop-up + enables network discovery. |
 | `splunk-es` | Overlay of base splunk-es role with custom indices and app installation. |
 
+## Deploy structure (changed 2026-07-30)
+
+`site.yml` is now the entry point, not `arbitr_pp_playbook.yaml`:
+
+```yaml
+- import_playbook: arbitr_pp_playbook.yaml   # phase 0 — the range baseline
+- import_playbook: playbooks/10-mirror.yml   # SO source + airgap content mirror
+- import_playbook: playbooks/20-vyos.yml     # GRE tunnels + tc mirror rules
+- import_playbook: playbooks/30-prereqs.yml  # so_base on all SO nodes
+- import_playbook: playbooks/40-manager.yml  # MUST complete before 50
+- import_playbook: playbooks/50-nodes.yml    # search + sensor grid-join
+- import_playbook: playbooks/60-verify.yml
+```
+
+Ported from `so-ansible`, where the phases were validated end to end on a
+fresh range. **so-ansible's `00-setup.yml` is deliberately NOT imported** —
+`arbitr_pp_playbook.yaml` already runs `init` + `common` across this range,
+including the five SO nodes, and running both would do two NetworkManager /
+netplan passes with a reboot each.
+
+`deploy.sh` runs `site.yml`. During development run one phase directly
+(`ansible-playbook playbooks/40-manager.yml`) rather than re-running ~30
+plays across ~30 hosts.
+
+Three tooling changes were needed to support this, all easy to regress:
+- `build_tarball.sh` scans **every** playbook under `playbooks/`, not just
+  `$PLAYBOOK`, and its role extractor now understands `import_role`/
+  `include_role` as well as `roles:` blocks. `vyos_mirror` is referenced only
+  via `import_role` + `tasks_from`, so without that it was silently never
+  bundled.
+- `TAR_PATHS` gained `site.yml`, `playbooks`, `ansible.cfg`.
+- `verify_vars.py` learned to recurse into `group_vars/all/`, treat `vault_*`
+  as defined, parse FQCN `ansible.builtin.set_fact`, and read play-level
+  `vars:` blocks at their own indent. Expected warning count is still 3
+  (`billing_secret_key`, `nat`, `pfsense_stale_gateways`).
+
+## Secrets — ansible-vault (added 2026-07-30)
+
+Every credential lives in `group_vars/all/vault.yml`, password `simspace1`.
+`group_vars/all.yml` became `group_vars/all/main.yml` so the vault can sit
+beside it. `ansible.cfg` (new) points `vault_password_file` at
+`/home/simspace/.vault_pass`, which **does not persist across range
+spin-ups** — `deploy.sh` fails closed with the recreate command if it is
+missing.
+
+```bash
+ansible-vault view group_vars/all/vault.yml --vault-password-file .vault_pass
+ansible-vault edit group_vars/all/vault.yml --vault-password-file .vault_pass
+```
+
 ## Build and deploy workflow
 
 ```bash

@@ -1,0 +1,14 @@
+# Netplan GRE tunnel for so-mirror (sensor side).
+# Managed by so-ansible/roles/so_sensor. Do not hand-edit.
+# Mirrors traffic from router-0 (see roles/vyos_mirror). Suricata + Zeek
+# bind to {{ so_monitor_interface }} via BNICS in the SO answer file.
+network:
+  version: 2
+  tunnels:
+    {{ so_monitor_interface }}:
+      mode: gre
+      local: {{ so_prod_ip }}
+      remote: 172.16.5.1
+      addresses:
+        - {{ so_gre_tunnel_local }}/{{ so_gre_tunnel_prefix }}
+      mtu: 1476   # 1500 - 24 (IP + GRE headers)

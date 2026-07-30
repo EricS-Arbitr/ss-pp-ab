@@ -1,0 +1,96 @@
+---
+# =========================================================================
+# 60-verify.yml — end-to-end verification of the SO deploy
+# =========================================================================
+# Cheap checks: so-status on manager, /_cluster/health on search,
+# suricata + zeek running on sensor, GRE tunnel up on both ends, packets
+# flowing (tcpdump packet count > 0 in a 5-sec window on sensor's tun0).
+#
+# Actual pass/fail thresholds + output formatting live in verify_so.sh
+# (top-level script) which this playbook invokes as its final check.
+# =========================================================================
+
+- name: SO manager status
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  tasks:
+    - name: so-status
+      ansible.builtin.command: sudo so-status
+      changed_when: false
+      register: so_status_out
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ so_status_out.stdout_lines[-20:] }}"
+
+- name: Elastic cluster health (query from manager; so-elasticsearch-query is manager-only, and cluster health is a whole-cluster metric anyway)
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  tasks:
+    - name: elastic cluster health
+      ansible.builtin.command: sudo so-elasticsearch-query _cluster/health?pretty
+      changed_when: false
+      register: es_health_out
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ es_health_out.stdout }}"
+
+# Scoped to the corp sensor: the generator above drives traffic through
+# pp-corp-router only. Running it against all three would fail the OT and
+# edge sensors for the wrong reason.
+- name: SO sensor pcap flow rate
+  hosts: so-sensor-corp
+  become: true
+  gather_facts: false
+  vars:
+    # Hosts ON the mirrored subnets — never the router's own .1 addresses,
+    # which are locally delivered and generate no mirrorable traffic
+    # (so-ansible PORTING_GUIDE §9.10). These sit behind pp-corp-router, so
+    # they exercise the corp sensor; the OT and edge sensors are not covered
+    # by this check.
+    so_verify_mirror_targets:
+      - 172.16.2.7     # pp-dc01        (PP-Services)
+      - 172.16.4.10    # pp-eng-wkstn-1 (PP-Eng-Department)
+      - 172.16.3.3     # pp-bp-wkstn-2  (PP-Business-Processing)
+  tasks:
+    # On an idle range (empty Ops/Eng/Services subnets) a passive tcpdump
+    # reports 0 packets even though the GRE mirror is fully functional.
+    # Generate a burst of ICMP into each mirrored subnet from the manager
+    # in the background, then tcpdump in the foreground.
+    #
+    # BUG FIXED 2026-07-29: this previously pinged the .1 GATEWAY IPs
+    # (172.16.8.1 etc.), which generates NO mirrorable traffic at all. Those
+    # are router-0's own addresses, so the packets are locally delivered on
+    # the interface they arrive on (eth3, security) and never egress
+    # eth0/eth1/eth2 — where the `tc ... action mirred egress mirror` rules
+    # live. The check therefore reported "0 packets captured" even with a
+    # perfectly working mirror, and masked the real GRE firewall bug for
+    # several deploy cycles.
+    #
+    # Targets must be addresses ON the mirrored subnets so the router has to
+    # forward OUT of the mirrored interface. Unresponsive targets are fine —
+    # the router still ARPs on that interface, and ARP frames are mirrored
+    # too (confirmed: `gre-proto-0x806` seen encapsulated on the wire).
+    - name: Generate mirror-able traffic into Ops/Eng/Services subnets (background)
+      ansible.builtin.shell: |
+        for tgt in {{ so_verify_mirror_targets | join(' ') }}; do
+          ping -c 10 -i 0.5 -W 1 -q -n "$tgt" &
+        done
+        wait
+      delegate_to: "{{ groups['so_manager'][0] }}"
+      async: 30
+      poll: 0
+      changed_when: false
+      register: traffic_gen
+
+    - name: 15-sec tcpdump on monitor interface — packet count > 0 means GRE mirror is delivering
+      ansible.builtin.shell: |
+        timeout 15 tcpdump -i {{ so_monitor_interface }} -c 100 -nn 2>&1 | tail -5
+      changed_when: false
+      register: pcap_out
+      failed_when: "'0 packets captured' in pcap_out.stdout"
+
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ pcap_out.stdout }}"

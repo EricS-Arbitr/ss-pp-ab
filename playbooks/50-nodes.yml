@@ -1,0 +1,26 @@
+---
+# =========================================================================
+# 50-nodes.yml — install SO Search + Sensor nodes (join manager)
+# =========================================================================
+# Runs in parallel across so_search + so_sensor. Each node renders its
+# own answer file from the shipped distributed-airgap-{search,sensor}
+# template, populated from host_vars. Answer file sets MSRV + MSRVIP +
+# SOREMOTEPASS so the joining node auto-registers with the manager.
+#
+# Sensor also configures monitor interface (tun0 from the GRE tunnel set
+# up in 20-vyos.yml) via so_sensor role's BNICS handling.
+# =========================================================================
+
+- name: SO Search install
+  hosts: so_search
+  become: true
+  gather_facts: true
+  roles:
+    - so_search
+
+- name: SO Sensor install
+  hosts: so_sensor
+  become: true
+  gather_facts: true
+  roles:
+    - so_sensor

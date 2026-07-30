@@ -1,0 +1,19 @@
+---
+# so_apt_mirror defaults — overridden by group_vars/all.yml where appropriate.
+
+so_mirror_root: /var/www/so-mirror
+so_mirror_port: 80
+
+# HTTP proxy for git clone of SO source from GitHub (mgmt-plane proxy).
+so_mirror_proxy: "http://10.255.240.1:3128"
+
+# Bundled detection rulesets — pre-downloaded on developer Mac (has
+# internet), shipped in the so-ansible tarball's rules/ dir, served by
+# this mirror at http://{{ so_mirror_host }}/so-source/<filename>.
+# Currently just the ETOPEN emerging.rules for suricata; sigma / AI
+# repos may follow.
+so_bundled_rules_src: "/etc/ansible/rules/emerging.rules.tar.gz"
+# so_bundled_rules_filename MOVED to group_vars/all/main.yml 2026-07-29 —
+# so_manager needs it too (to patch soc.json) and role defaults are
+# role-scoped, so it was undefined there. Left as a comment rather than a
+# duplicate definition so there is one source of truth.

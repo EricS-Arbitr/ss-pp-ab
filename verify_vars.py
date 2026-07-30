@@ -12,6 +12,7 @@ include_vars, vars files outside group_vars, dynamic facts, etc.). Treat
 output as "review these," not "build is broken."
 """
 import re
+import textwrap
 import sys
 from pathlib import Path
 from collections import defaultdict
@@ -49,7 +50,11 @@ TOP_KEY_RE = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:", re.MULTILINE)
 REGISTER_RE = re.compile(r"^\s*register:\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*$", re.MULTILINE)
 LOOP_VAR_RE = re.compile(r"^\s*loop_var:\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*$", re.MULTILINE)
 SET_FACT_BLOCK_RE = re.compile(
-    r"^\s*set_fact:\s*\n((?:[ \t]+\S.*\n)+)",
+    # Optional FQCN prefix: so-ansible's roles write ansible.builtin.set_fact,
+    # which the bare-name pattern missed entirely — every computed var it
+    # produced (so_prod_nic, so_prod_netmask, so_global_pillar_merged) was
+    # reported as undefined. Added 2026-07-30 during the Security Onion port.
+    r"^\s*(?:ansible\.builtin\.)?set_fact:\s*\n((?:[ \t]+\S.*\n)+)",
     re.MULTILINE,
 )
 SF_KEY_RE = re.compile(r"^[ \t]+([a-zA-Z_][a-zA-Z0-9_]*)\s*:")
@@ -108,6 +113,30 @@ def collect_defined(stage):
                 var_files.append(f)
     for f in var_files:
         defined.update(TOP_KEY_RE.findall(read_text(f)))
+
+    # play-level and block-level `vars:` blocks.
+    #
+    # Keys are taken at the block's OWN indent level. A naive dedent does not
+    # work: the greedy body match runs on past the vars section into the
+    # sibling `tasks:` key, so the common prefix collapses to the play indent
+    # and the actual var keys stay indented (and therefore unmatched), while
+    # `tasks` gets picked up as a variable. Match on measured indent instead.
+    PLAY_VARS_RE = re.compile(r"^([ \t]*)vars:[ \t]*\n((?:[ \t]+\S.*\n|[ \t]*\n)+)", re.M)
+    for f in relevant_files(stage):
+        for indent, blk in PLAY_VARS_RE.findall(read_text(f)):
+            key_indent = None
+            for line in blk.splitlines():
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                cur = len(line) - len(line.lstrip())
+                if cur <= len(indent):
+                    break                      # dedented out of the vars block
+                if key_indent is None:
+                    key_indent = cur
+                if cur == key_indent:
+                    m = re.match(r"[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)\s*:", line)
+                    if m:
+                        defined.add(m.group(1))
 
     # registered task vars + loop_var: + set_fact keys + Jinja for/set vars (anywhere)
     for f in relevant_files(stage):
