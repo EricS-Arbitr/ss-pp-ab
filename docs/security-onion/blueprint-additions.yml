@@ -1,0 +1,178 @@
+# =========================================================================
+# Security Onion — blueprint additions for ARBITR_PP_1328
+# =========================================================================
+# Paste these entries into the `resources:` list of the PowerPlant
+# blueprint. Format matches the existing `pp-splunk` entry (the closest
+# analog: an Ubuntu appliance on pp-security with explicit sizing).
+#
+# IP ALLOCATIONS — verified against ARBITR_PP_1328.yml 2026-07-30
+#   pp-security (172.16.9.0/24) in use: .1 pp-internal-router,
+#                                       .11 win-hunt-1, .20 pp-splunk
+#   mgmt 10.255.240.x: 57 addresses in use between .101 and .208;
+#                      .134-.139 is a contiguous free block
+# Re-verify before applying if the blueprint has changed since.
+#
+# DESIGN (agreed 2026-07-30): 3 sensors, one per VyOS router that fronts a
+# distinct zone. pp-security is deliberately NOT mirrored — mirroring the
+# SOC's own subnet is noise and creates a feedback path.
+# =========================================================================
+
+# --- Manager -------------------------------------------------------------
+# Salt master + Elasticsearch + Kibana + SOC + kratos + Fleet. Sized to
+# match pp-splunk; this is the heaviest node in the stack.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "so-manager"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 16
+    memory: "32768"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.30"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.134"
+      position: "FIRST"
+
+# --- Search node ---------------------------------------------------------
+# Elasticsearch data node. Storage-bound rather than CPU-bound; size for
+# retention.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "so-search"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 16
+    memory: "32768"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.35"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.135"
+      position: "FIRST"
+
+# --- Sensor 1: corporate -------------------------------------------------
+# GRE mirror from pp-corp-router. Covers PP-Services, PP-Business-
+# Processing, PP-Eng, PP-LS, PP-IS — every corporate workstation, both DCs,
+# SQL, file, mail, syslog, proxy. Densest source of exercise traffic.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "so-sensor-corp"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 8
+    memory: "16384"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.40"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.136"
+      position: "FIRST"
+
+# --- Sensor 2: OT --------------------------------------------------------
+# GRE mirror from pp-ot-router. Covers Gas-Turbine (PLC, engineer wkstn,
+# gas-sim), Gas-Turbine-Sim, PP-OT-Services (historian, vibration sensor)
+# and subnet-0 (DCS controller + 4 control workstations).
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "so-sensor-ot"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 8
+    memory: "16384"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.41"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.137"
+      position: "FIRST"
+
+# --- Sensor 3: edge / attack path ---------------------------------------
+# GRE mirror from pp-isp-router. Covers Internet (200.200.200.0/24) and
+# red-net (210.210.210.0/24 — Red-1 Kali, Activity-Emulation). Sees inbound
+# attack traffic and Internet<->DMZ before the external firewall, which is
+# the one blind spot the corp + OT sensors cannot cover.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "so-sensor-edge"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 8
+    memory: "16384"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.42"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.138"
+      position: "FIRST"
+
+# =========================================================================
+# SIZING NOTE
+# =========================================================================
+# Manager/search match pp-splunk (16 vCPU / 32 GB). Sensors are proposed at
+# 8 vCPU / 16 GB rather than the dev range's 16/32, to keep the total
+# addition to 56 vCPU / 112 GB across five VMs.
+#
+# Suricata + Zeek + Stenographer are CPU-hungry and EVERY MIRRORED PACKET
+# ARRIVES TWICE (ingress and egress tc rules both fire — confirmed in the
+# dev range). If `so-status` shows Suricata drops, raise the sensor that is
+# dropping rather than all three; the corp sensor carries five subnets and
+# will be the first to feel it.
+#
+# =========================================================================
+# PREREQUISITE THAT IS NOT IN THIS FILE — pfSense must pass GRE
+# =========================================================================
+# Each sensor terminates a GRE tunnel (IP protocol 47) from its router.
+# Trace the paths from the blueprint's transit switches:
+#
+#   corp : pp-corp-router (172.16.0.42, switch-10)
+#          -> pp-internal-router -> pp-security          NO FIREWALL
+#
+#   ot   : pp-ot-router (192.168.200.202, switch-8)
+#          -> pp-ot-firewall -> pp-internal-router -> pp-security
+#                                                        1 pfSense
+#
+#   edge : pp-isp-router (75.21.1.2, switch-0)
+#          -> pp-external-firewall -> site-edge-router
+#          -> pp-internal-firewall -> pp-internal-router -> pp-security
+#                                                        2 pfSense
+#
+# The corp sensor will work with no firewall changes. The OT and edge
+# sensors will NOT receive traffic until pp-ot-firewall, and both
+# pp-external-firewall and pp-internal-firewall respectively, permit proto
+# 47 between the router source IP and the sensor IP. Our vyos_mirror role
+# cannot do this — pfSense is configured by the `pfsense_firewall` role.
+#
+# Symptom if missed: tunnel shows UP on both ends, router TX counter
+# increments, sensor RX stays at zero. That is a full session of debugging
+# in the dev range; see so-ansible UPSTREAM_FIXES 2026-07-28/29.
+#
+# =========================================================================
+# ANSIBLE-SIDE VALUES (not blueprint — recorded here so they stay together)
+# =========================================================================
+# GRE tunnel /30s, one per router-sensor pair (arbitrary, must be unused):
+#   pp-corp-router 10.100.1.1  <-> so-sensor-corp 10.100.1.2
+#   pp-ot-router   10.100.2.1  <-> so-sensor-ot   10.100.2.2
+#   pp-isp-router  10.100.3.1  <-> so-sensor-edge 10.100.3.2
+#
+# Tunnel SOURCE addresses (the router IP that routes to pp-security):
+#   pp-corp-router 172.16.0.42      (switch-10)
+#   pp-ot-router   192.168.200.202  (switch-8)
+#   pp-isp-router  75.21.1.2        (switch-0)
+#
+# Mirrored interfaces — set per router from `show interfaces` on the LIVE
+# device, NOT from blueprint NIC order. In the dev range the blueprint order
+# did not match VyOS ethN numbering and the mirror silently watched the
+# wrong interfaces (so-ansible PORTING_GUIDE 9.9).
+#   pp-corp-router : the 5 department NICs; EXCLUDE switch-10 (transit)
+#   pp-ot-router   : Gas-Turbine, Gas-Turbine-Sim, PP-OT-Services,
+#                    subnet-0; EXCLUDE switch-8 (transit)
+#   pp-isp-router  : Internet, red-net; EXCLUDE switch-0 (transit)
+#
+# KNOWN PORTING GAP — so_sensor's GRE firewall rule:
+#   so-ansible's so_gre_rule_block hardcodes the allowed GRE source as
+#   `so_prod_gateway`. That was correct in the dev range, where the
+#   mirroring router WAS the sensor's gateway. Here the routers are remote
+#   (172.16.0.42 etc.) while every sensor's gateway is 172.16.9.1, so the
+#   rule as written would drop the mirror. This needs parameterising to a
+#   per-sensor `so_gre_allowed_source` before the port will work.
