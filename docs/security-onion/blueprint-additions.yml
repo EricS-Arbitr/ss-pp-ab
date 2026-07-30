@@ -146,11 +146,15 @@
 #          -> pp-internal-firewall -> pp-internal-router -> pp-security
 #                                                        2 pfSense
 #
-# The corp sensor will work with no firewall changes. The OT and edge
-# sensors will NOT receive traffic until pp-ot-firewall, and both
-# pp-external-firewall and pp-internal-firewall respectively, permit proto
-# 47 between the router source IP and the sensor IP. Our vyos_mirror role
-# cannot do this — pfSense is configured by the `pfsense_firewall` role.
+# RESOLVED 2026-07-30: all three firewalls already pass GRE. Each runs
+# lab-mode permit-any on every interface, with blockpriv/blockbogons off on
+# the WAN-facing ones. No change was required.
+#
+# Explicit narrow GRE rules were still added to pp-ot-firewall (OT_TRANSIT),
+# pp-external-firewall (WAN_ISP) and pp-internal-firewall (WAN_EDGE) — they
+# are redundant today, but the pfsense_firewall role's own comment invites
+# tightening the permit-any rules later, and this makes the dependency
+# visible in config rather than implicit.
 #
 # Symptom if missed: tunnel shows UP on both ends, router TX counter
 # increments, sensor RX stays at zero. That is a full session of debugging

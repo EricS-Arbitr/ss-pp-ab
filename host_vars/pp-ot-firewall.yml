@@ -79,6 +79,16 @@ pfsense_routes:
     descr: "OT control subnet (pp-dc03 + pp-dcs-ctrl + pp-ctl-wks-01..04) via pp-ot-router"
 
 pfsense_rules:
+  # Security Onion GRE mirror: pp-ot-router -> so-sensor-ot.
+  # Currently REDUNDANT — the lab-mode permit-any rule on OT_TRANSIT already
+  # passes proto 47. Stated explicitly so the dependency is visible in config
+  # and survives tightening; without GRE the sensor shows a healthy tunnel and
+  # zero received packets, which is a genuinely slow thing to diagnose.
+  - name: "Allow GRE mirror pp-ot-router -> so-sensor-ot"
+    interface: "OT_TRANSIT"
+    protocol: "gre"
+    source: "192.168.200.202"
+    destination: "172.16.9.41"
   - name: "Allow any on WAN_INTERNAL (lab)"
     interface: "WAN_INTERNAL"
   - name: "Allow any on OT_TRANSIT (lab)"

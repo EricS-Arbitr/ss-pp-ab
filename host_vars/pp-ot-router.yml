@@ -56,15 +56,13 @@ bgp: []
 # Mirrors the four OT interfaces into a GRE tunnel terminating on
 # so-sensor-ot (172.16.9.41). eth0 (switch-8 transit, shares mgmt) excluded.
 #
-# ⚠ TWO BLOCKERS, both must be cleared before this sensor sees traffic:
+# GRE path: pp-ot-router → pp-ot-firewall → pp-internal-router → pp-security.
+# pp-ot-firewall ALREADY passes this — it runs lab-mode permit-any on every
+# interface with blockpriv/blockbogons off (verified 2026-07-30). An explicit
+# narrow GRE rule was added to its host_vars anyway so the dependency survives
+# a future tightening pass; see host_vars/pp-ot-firewall.yml.
 #
-# 1. pp-ot-firewall must PERMIT IP PROTOCOL 47 (GRE) from 192.168.200.202
-#    to 172.16.9.41. The tunnel path is
-#    pp-ot-router → pp-ot-firewall → pp-internal-router → pp-security.
-#    Symptom if missed: tunnel UP both ends, router TX incrementing, sensor
-#    RX flat at zero. Configure via the pfsense_firewall role.
-#
-# 2. This host is in [vyos_routes_only], NOT [vyos] — its RC_NG_OT_Router
+# ⚠ REMAINING BLOCKER: this host is in [vyos_routes_only], NOT [vyos] — its RC_NG_OT_Router
 #    image rejects the vyos role's interface commands and accepts only raw
 #    static routes via vyos_config. vyos_mirror does two things: a tunnel
 #    interface via vyos_config (probably fine) and a tc script pushed over
@@ -82,3 +80,10 @@ vyos_gre_remote_ip: "172.16.9.41"      # so-sensor-ot
 vyos_gre_local_addr: "10.100.2.1"
 vyos_gre_remote_addr: "10.100.2.2"
 vyos_gre_tunnel_prefix: 30
+
+# Do NOT mirror management-plane traffic. eth0 on this router shares the mgmt
+# IP with a data-plane gateway, so a bare matchall mirror would copy every
+# Ansible SSH/WinRM session into the sensor. Rendered by vyos_mirror as tc
+# `action pass` filters ahead of the catch-all, matching src and dst.
+vyos_mirror_exclude_cidrs:
+  - "10.255.240.0/20"

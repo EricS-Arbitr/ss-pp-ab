@@ -63,6 +63,16 @@ pfsense_routes:
     descr: "OT umbrella via site-edge-router (ESP boundary)"
 
 pfsense_rules:
+  # Security Onion GRE mirror: pp-isp-router -> so-sensor-edge.
+  # Currently REDUNDANT — the lab-mode permit-any rule on WAN_ISP already
+  # passes proto 47. Stated explicitly so the dependency is visible in config
+  # and survives tightening; without GRE the sensor shows a healthy tunnel and
+  # zero received packets, which is a genuinely slow thing to diagnose.
+  - name: "Allow GRE mirror pp-isp-router -> so-sensor-edge"
+    interface: "WAN_ISP"
+    protocol: "gre"
+    source: "75.21.1.2"
+    destination: "172.16.9.42"
   - name: "Allow any on WAN_ISP (lab)"
     interface: "WAN_ISP"
   - name: "Allow any on DMZ (lab)"
