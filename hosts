@@ -375,6 +375,22 @@ is-inet
 Red-1
 Activity-Emulation
 
+# ------------------------------------------------------------
+# The Ansible controller, on its own.
+# ------------------------------------------------------------
+# Added 2026-08-03. playbooks/10-mirror.yml originally targeted
+# [infrastructure] on the assumption that it meant "the controller" — it
+# does not. It also holds is-inet, Red-1 and Activity-Emulation, so the
+# mirror role ran against the simulated-internet host and two red-team
+# boxes. Nothing else in arbitr_pp_playbook.yaml targets [infrastructure],
+# which is why the mistake was invisible until the SO phases ran.
+#
+# connection=local because this IS the box Ansible runs on: it sidesteps
+# SSH entirely (the host carries no ansible_user, so it was authenticating
+# as root and being refused) and matches so-ansible's [ansible_controller].
+[ansible_controller]
+ansible ansible_connection=local
+
 [proxy]
 pp-proxy
 

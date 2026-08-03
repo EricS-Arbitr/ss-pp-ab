@@ -9,12 +9,11 @@
 # =========================================================================
 
 - name: SO local mirror — nginx serving SO source tarball on ansible controller
-  # ss-pp-ab names the controller group [infrastructure], not
-  # [ansible_controller] as so-ansible does. Note it also connects over SSH
-  # here (host_vars/ansible.yml sets ansible_host) rather than
-  # ansible_connection=local, so so_apt_mirror runs remotely — functionally
-  # the same, just not a local action.
-  hosts: infrastructure
+  # [ansible_controller] holds ONLY the controller. Do not use
+  # [infrastructure] — that group also contains is-inet, Red-1 and
+  # Activity-Emulation, and pointing the mirror role at it ran so_apt_mirror
+  # against the simulated-internet host (2026-08-03).
+  hosts: ansible_controller
   become: true
   gather_facts: true
   roles:
