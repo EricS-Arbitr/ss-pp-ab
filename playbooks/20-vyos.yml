@@ -38,8 +38,22 @@
   # commands) but IS a mirror source.
   hosts: so_mirror_routers
   gather_facts: false
-  connection: ssh
   vars:
+    # ansible_connection MUST be set as a play VAR, not via the play's
+    # `connection:` keyword.
+    #
+    # An ansible_connection variable from inventory outranks the play
+    # keyword, and BOTH [vyos] (customer repo) and [vyos_routes_only] set
+    # `ansible_connection: ansible.netcommon.network_cli`. With the keyword
+    # form, this play silently kept network_cli and its shell/file tasks
+    # executed on the CONTROLLER instead of the routers — all three hosts
+    # reported the controller's own `ip link show` (identical MACs, eth0/
+    # eth1/docker0) and aborted on "tun0 not present" (2026-08-03).
+    #
+    # Play vars beat inventory group_vars and host_vars, so this form wins.
+    # so-ansible's dev range never hit it: [net_vyos] had no group_vars
+    # setting ansible_connection at all.
+    ansible_connection: ssh
     # SSH into VyOS's underlying Debian; explicit interpreter because
     # VyOS's /usr/bin/python doesn't always exist.
     ansible_python_interpreter: /usr/bin/python3
