@@ -1,5 +1,18 @@
 # =========================================================================
-# group_vars/so_all.yml — Security Onion 2.4.x settings (PowerPlant)
+# group_vars/all/security_onion.yml — Security Onion 2.4.x (PowerPlant)
+# =========================================================================
+# MUST live under group_vars/all/, not group_vars/so_all.yml.
+#
+# It was in so_all.yml first, which scopes every variable to the [so_all]
+# group — so `so_apt_mirror`, which runs on the ANSIBLE CONTROLLER, could
+# not see so_git_ref and the phase-10 play died with "'so_git_ref' is
+# undefined" (2026-08-03). The controller, the mirror routers and the SO
+# nodes all consume these, and they are all in different groups.
+#
+# Same shape as so-ansible's so_bundled_rules_filename bug (UPSTREAM_FIXES
+# 2026-07-29 fresh-range 3): a variable placed in a scope narrower than its
+# consumers. Everything here is so_*-prefixed, so a global scope collides
+# with nothing.
 # =========================================================================
 # Ported from so-ansible's group_vars (all/main.yml + so_all.yml), which was
 # validated end-to-end on a fresh range 2026-07-29/30. Values here are the
