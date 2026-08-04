@@ -50,3 +50,12 @@ so_monitor_interface: "tun0"
 # mirroring routers are elsewhere entirely, so it must be stated explicitly.
 # There is deliberately NO default -- so_sensor fails loudly if it is unset.
 so_gre_remote_underlay: "172.16.0.42"   # pp-corp-router vyos_gre_source_ip
+
+# --- 60-verify traffic targets ---
+# Hosts ON pp-corp-router's mirrored subnets -- never the router's own .1
+# addresses, which are locally delivered and generate no mirrorable traffic
+# (so-ansible PORTING_GUIDE 9.10). These exercise eth0/eth1/eth2.
+so_verify_mirror_targets:
+  - "172.16.2.7"     # pp-dc01         PP-Services            (eth0)
+  - "172.16.4.10"    # pp-eng-wkstn-1  PP-Eng-Department      (eth2)
+  - "172.16.3.3"     # pp-bp-wkstn-2   PP-Business-Processing (eth1)

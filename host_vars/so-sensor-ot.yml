@@ -50,3 +50,16 @@ so_monitor_interface: "tun0"
 # mirroring routers are elsewhere entirely, so it must be stated explicitly.
 # There is deliberately NO default -- so_sensor fails loudly if it is unset.
 so_gre_remote_underlay: "192.168.200.202"   # pp-ot-router vyos_gre_source_ip
+
+# --- 60-verify traffic targets ---
+# Hosts ON pp-ot-router's mirrored subnets. 192.168.95.2 is the OT address
+# CLAUDE.md's own L3 verification recipe uses (`tracert -d 192.168.95.2` from a
+# corp workstation), so corp->OT is a supported path.
+#
+# NOTE: traffic is generated from so-manager, so it crosses pp-ot-firewall
+# (default-deny, ESP boundary). If this check fails with 0 packets, confirm
+# ICMP corp->OT is permitted there BEFORE suspecting the mirror -- a firewall
+# drop and a broken mirror look identical from the sensor.
+so_verify_mirror_targets:
+  - "192.168.95.2"     # Gas-Turbine          (eth1)
+  - "192.168.100.5"    # pp-dc03  PP-OT-Ctrl  (eth4)
