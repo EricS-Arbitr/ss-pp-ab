@@ -288,16 +288,21 @@
     - "'already exists' not in fw_add.stderr"
 
 - name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
-  ansible.builtin.command: sudo salt-call state.apply firewall
+  ansible.builtin.command: sudo salt-call state.apply firewall queue=True
   delegate_to: "{{ groups['so_manager'][0] }}"
   become: true
   register: fw_apply
   changed_when: fw_apply.rc == 0
-  # The highstate scheduler on manager fires every 15 min. If it's mid-run
-  # when our state.apply fires, salt refuses with 'The function state.highstate
-  # is running as PID X'. Highstates take ~5-8 min. Retry 20×30s = 10 min ceiling.
+  # `queue=True` is the fix for the highstate collision, not the retries.
+  # Without it salt refuses outright -- "The function state.highstate is
+  # running as PID X" -- and the retry loop just burns its budget failing in
+  # 7 seconds a time. On PowerPlant 2026-08-04 that emptied all 20 retries in
+  # ~12 min while the highstate was still going. queue=True makes salt hold
+  # the job until the running state finishes, so this call BLOCKS (possibly
+  # 20+ min) rather than failing. Retries are now only for a genuinely
+  # unreachable master. See UPSTREAM_FIXES 2026-08-04 (highstate lock).
   until: fw_apply.rc == 0
-  retries: 20
+  retries: 40
   delay: 30
 
 - name: Grid join — preflight, confirm salt-key is invokable on manager

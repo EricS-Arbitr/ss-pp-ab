@@ -150,13 +150,20 @@
 # --- 3. Apply and PROVE it took --------------------------------------------
 
 - name: Airgap — apply the soc state so soc.json re-renders from the pillar
-  ansible.builtin.command: salt-call state.apply soc
+  ansible.builtin.command: salt-call state.apply soc queue=True
   become: true
   register: airgap_apply
   changed_when: airgap_apply.rc == 0
-  # Same 15-min highstate scheduler collision as everywhere else.
+  # `queue=True` is the fix for the highstate collision, not the retries.
+  # Without it salt refuses outright -- "The function state.highstate is
+  # running as PID X" -- and the retry loop just burns its budget failing in
+  # 7 seconds a time. On PowerPlant 2026-08-04 that emptied all 20 retries in
+  # ~12 min while the highstate was still going. queue=True makes salt hold
+  # the job until the running state finishes, so this call BLOCKS (possibly
+  # 20+ min) rather than failing. Retries are now only for a genuinely
+  # unreachable master. See UPSTREAM_FIXES 2026-08-04 (highstate lock).
   until: airgap_apply.rc == 0
-  retries: 20
+  retries: 40
   delay: 30
 
 # Positive proof, not an exit code — the standing rule in this repo.

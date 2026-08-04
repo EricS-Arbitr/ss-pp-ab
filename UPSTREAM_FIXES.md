@@ -11,6 +11,29 @@ Severity key:
 
 
 
+## 2026-08-04 (later) · bug · Phase 40 retry loop cannot outlast a highstate — `state.apply` needs `queue=True`
+
+**Symptom.** With the IPv6 grain fix in place, `Airgap — apply the soc state`
+still failed all 20 retries, but each attempt now took 7 seconds instead of
+3m11s:
+
+```
+The function "state.highstate" is running as PID 1318939
+```
+
+**Root cause.** Salt refuses a concurrent `state.apply` *instantly*, so
+`retries: 20, delay: 30` is not a 10-minute wait — it is twenty instant
+failures spread across ~12 minutes of sleep. This range's highstate runs
+longer than that, so the loop always ran out. The retry numbers were measured
+on the so-ansible dev range and do not transfer.
+
+**Fix.** `queue=True` makes salt hold the job until the running state
+finishes. Ported from so-ansible `20051e4`; applied to all four `state.apply`
+call sites (so_manager airgap, so_search firewall, so_sensor firewall ×2).
+The task now blocks — possibly 20+ minutes — instead of failing.
+
+**Status: PROPOSED** — verify on the next phase 40 run.
+
 ## 2026-08-04 · platform · Salt master saturated by 10-second IPv6 DNS timeouts — phase 40 pillar compilation dies
 
 **Symptom.** `playbooks/40-manager.yml`, task `so_manager : Airgap — apply the

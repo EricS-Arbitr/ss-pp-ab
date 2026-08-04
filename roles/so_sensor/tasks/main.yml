@@ -72,14 +72,14 @@
   register: so_grid_member
 
 - name: GRE firewall — apply firewall state on this sensor
-  ansible.builtin.command: "sudo salt-call state.apply firewall"
+  ansible.builtin.command: "sudo salt-call state.apply firewall queue=True"
   become: true
   when: so_grid_member.stat.exists
   register: gre_fw_apply
   changed_when: gre_fw_apply.rc == 0
   # Same highstate-scheduler collision as the grid-join firewall apply.
   until: gre_fw_apply.rc == 0
-  retries: 20
+  retries: 40
   delay: 30
 
 # firewall/init.sls guards its restore with `onlyif: iptables-restore
@@ -446,14 +446,14 @@
     - "'already exists' not in fw_add.stderr"
 
 - name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
-  ansible.builtin.command: sudo salt-call state.apply firewall
+  ansible.builtin.command: sudo salt-call state.apply firewall queue=True
   delegate_to: "{{ groups['so_manager'][0] }}"
   become: true
   register: fw_apply
   changed_when: fw_apply.rc == 0
   # Highstate scheduler retry logic (see so_search for full rationale).
   until: fw_apply.rc == 0
-  retries: 20
+  retries: 40
   delay: 30
 
 - name: Grid join — preflight, confirm salt-key is invokable on manager
