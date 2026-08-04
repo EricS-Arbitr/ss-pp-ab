@@ -81,21 +81,28 @@
 # same delivery path they already use.
 - name: Stage the Elastic Agent installers on the controller mirror
   hosts: ansible_controller
-  become: true
+  # NO become. Nothing here needs root: so_apt_mirror creates the agents dir
+  # owned by the ansible user, `fetch` writes as that user regardless, and
+  # chmod on a file you own needs no privilege. This play previously carried
+  # become: true and died on "sudo: a password is required" at the chmod --
+  # asking for privilege it never needed.
   gather_facts: false
   tasks:
-    # Owned by the ANSIBLE USER, not www-data. `fetch` writes its local copy
-    # as the ansible user -- `become` escalates on the REMOTE side (the manager
-    # being read from), never for the local write. A www-data directory
-    # therefore gives PermissionError on the controller. nginx only needs to
-    # READ these, which 0755 + 0644 provides.
-    - name: Mirror directory for agent installers
-      ansible.builtin.file:
+    # so_apt_mirror (phase 10) owns creating this, with the ownership that
+    # lets an unprivileged fetch write into it. Fail clearly rather than
+    # trying to create it here without privilege.
+    - name: The agents mirror directory must exist
+      ansible.builtin.stat:
         path: "{{ so_mirror_root }}/agents"
-        state: directory
-        owner: "{{ ansible_user | default('simspace') }}"
-        group: www-data
-        mode: '0755'
+      register: agents_dir
+
+    - name: Fail if phase 10 has not run
+      ansible.builtin.fail:
+        msg: >-
+          {{ so_mirror_root }}/agents does not exist. so_apt_mirror creates it,
+          owned by the ansible user so `fetch` can write into it — run
+          playbooks/10-mirror.yml first.
+      when: not agents_dir.stat.exists
 
     - name: Which installers are already staged?
       ansible.builtin.stat:
@@ -118,9 +125,9 @@
         label: "{{ item.item }}"
       when: not item.stat.exists
 
-    # Mode only -- deliberately NOT chown'ing to www-data. If these became
-    # www-data-owned, deleting one to force a refresh would hit the same
-    # PermissionError on the next fetch. Readable is all nginx needs.
+    # Mode only, unprivileged -- the ansible user owns these files. NOT
+    # chown'ing to www-data: that needs root, and would break the next fetch
+    # after deleting one to force a refresh. Readable is all nginx needs.
     - name: Readable by nginx
       ansible.builtin.file:
         path: "{{ so_mirror_root }}/agents/{{ item }}"

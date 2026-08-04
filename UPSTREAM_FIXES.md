@@ -11,10 +11,9 @@ Severity key:
 
 
 
-## 2026-08-04 (later 9) · bug · `fetch` writes its local copy as the ansible user, not root — `become` does not apply to the controller side
+## 2026-08-04 (later 9) · bug · Two `become` mistakes staging the agent installers — one asked for too little privilege, one for too much
 
-**Symptom.** `75-endpoint.yml`, pulling the agent installers from the manager
-to the controller's mirror:
+**9a — `fetch` writes its local copy as the ansible user.**
 
 ```
 PermissionError: [Errno 13] Permission denied:
@@ -22,22 +21,41 @@ PermissionError: [Errno 13] Permission denied:
 failed: [ansible -> so-manager]
 ```
 
-**Cause.** The play carries `become: true`, which is easy to read as "this
-whole task runs as root". It does not. For `fetch`, escalation applies to the
-REMOTE read (on so-manager); the local write happens as the ansible user,
-`simspace`. The directory had been created `owner: www-data`, so simspace
-could not write into it.
+`become: true` reads as "this task runs as root", but for `fetch` the
+escalation applies to the REMOTE read (on so-manager); the local write happens
+as the ansible user. The directory was `www-data`-owned, so simspace could not
+write into it. The `[ansible -> so-manager]` in the failure line is the tell —
+a delegated task with different privilege at each end.
 
-The `[ansible -> so-manager]` in the failure line is the tell: the task is
-delegated, and the two ends have different privilege.
+**9b — and then the chmod asked for privilege it did not need.**
 
-**Fix.** The staging directory is now owned by the ansible user with group
-`www-data`, mode 0755, and the follow-up task sets mode 0644 WITHOUT chowning
-to www-data. nginx only needs to read these files; making them www-data-owned
-would reintroduce the same failure the next time one is deleted to force a
-refresh.
+```
+sudo: a password is required
+failed: [ansible] (item=so-elastic-agent_windows_amd64)
+```
 
-**Status: PROPOSED** — verify by re-running `75-endpoint.yml` past staging.
+Having fixed 9a by making the directory ansible-user-owned, the follow-up
+`file` task still inherited the play's `become: true` — and passwordless sudo
+is not available to that account in this context. It was escalating in order
+to chmod files it already owned.
+
+**Fix.** Create `{{ so_mirror_root }}/agents` in `so_apt_mirror` (phase 10),
+which already runs privileged, owned by the ansible user with group www-data.
+`75-endpoint.yml`'s staging play then carries **no `become` at all**: it stats,
+fetches and chmods as the ansible user, and asserts the directory exists
+rather than trying to create it. nginx only needs read access — 0755 on the
+directory, 0644 on the files. Nothing is chowned to www-data, deliberately:
+that would need root and would break the next fetch after deleting a file to
+force a refresh.
+
+**The pattern.** `become: true` at PLAY level is a blunt instrument. It applies
+to tasks that cannot use it (the local half of a `fetch`) and to tasks that do
+not need it (chmod on your own file), and the second kind only surfaces on a
+host where passwordless sudo happens not to be configured. Escalate per task,
+where the need is real.
+
+**Status: PROPOSED** — verify by re-running `10-mirror.yml` then
+`75-endpoint.yml`.
 
 ## 2026-08-04 (later 8) · bug · Role-scoped variables referenced from a play that does not include the role — third instance
 

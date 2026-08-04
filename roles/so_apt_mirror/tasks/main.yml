@@ -59,6 +59,19 @@
     - "{{ so_mirror_root }}"
     - "{{ so_mirror_root }}/so-source"
 
+# Owned by the ANSIBLE USER, not www-data, because 75-endpoint.yml `fetch`es
+# the Elastic Agent installers into it, and fetch writes its local copy as the
+# ansible user -- `become` escalates the REMOTE side of a fetch only. Created
+# here rather than there so the one task needing root happens in this role,
+# which already runs privileged. nginx only needs to read: 0755 + 0644.
+- name: Mirror subdir for Elastic Agent installers (written by the ansible user)
+  ansible.builtin.file:
+    path: "{{ so_mirror_root }}/agents"
+    state: directory
+    owner: "{{ ansible_user | default('simspace') }}"
+    group: www-data
+    mode: '0755'
+
 # --- SO source tarball at pinned SHA -------------------------------------
 
 - name: Check if SO source snapshot already exists
