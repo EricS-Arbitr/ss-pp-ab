@@ -11,6 +11,58 @@ Severity key:
 
 
 
+## 2026-08-04 (later 5) · platform · SOC login loops on win-hunt-1 — the Windows clock fix was left behind when 00-setup was excluded
+
+**Symptom.** `https://172.16.9.30` from win-hunt-1 renders
+"This login form has expired. Restart the login process to continue." and
+loops on every retry. No server-side error anywhere.
+
+**Root cause.** Not new — this is so-ansible UPSTREAM_FIXES 2026-07-29
+(later 14) reappearing. The platform sets each VM's RTC to UTC. Linux reads
+the RTC as UTC and is correct; Windows reads it as LOCAL time and runs ahead
+by the timezone offset. SOC authenticates through kratos, which mints a login
+flow with an `expires_at` and compares it against the BROWSER's clock. Flows
+live 60 minutes, so a client ~4h fast sees every fresh flow as ~3h expired.
+
+**Why it came back.** The fix lived in so-ansible's `playbooks/00-setup.yml`,
+which ss-pp-ab deliberately does NOT import — `arbitr_pp_playbook.yaml`
+already runs `init` + `common`, and importing both would do two
+NetworkManager/netplan passes with a reboot each. That decision was correct
+for its own reasons, but it silently dropped an unrelated fix riding in the
+same file. Nothing in the port surfaced the loss; it only appeared when a
+human tried to log in.
+
+**Not a firewall problem, which is worth recording.** so-setup seeded
+`ALLOW_CIDR={{ so_subnet_security }}` (172.16.9.0/24) from the manager answer
+file, so the `analyst` hostgroup already covers every host on pp-security.
+`so-firewall listhostgroup analyst` shows the CIDR and win-hunt-1 reports
+`TcpTestSucceeded: True` on 443. No firewall change was needed or made.
+
+**Fix.** New `playbooks/70-analyst.yml`, imported from `site.yml`, scoped to
+`[hunt]`:
+- `RealTimeIsUniversal=1` — fixes the cause, effective next boot.
+- An explicit `Set-Date` when drift > 60s — fixes the current session so no
+  reboot is needed.
+- A verification step that re-reads the clock afterwards and fails above 120s
+  of residual drift, rather than trusting that the set "ran".
+
+**Scope, and why it is [hunt] and not [windows].** Correcting one domain
+member in isolation would push it outside Kerberos's 5-minute skew tolerance
+from pp-dc01 and break domain auth on that host — every Windows host in the
+range shares the same offset, which keeps AD internally consistent. win-hunt-1
+is in `win10`/`security`/`hunt` and NOT under `[voltgrid:children]`, so it is
+standalone and safe to correct alone. The play asserts this at runtime via
+`Win32_ComputerSystem.PartOfDomain` and refuses with an explanation rather
+than trusting the inventory, since a host joined out-of-band would look
+identical from here.
+
+**Known remaining wrongness, deliberately not fixed.** Every domain-joined
+Windows host in PowerPlant still runs ahead of real UTC, so their event
+timestamps are skewed in Splunk and in SO. Correcting that is a range-wide,
+DC-first operation and a separate decision from analyst access.
+
+**Status: PROPOSED** — verify by running phase 70 and completing a SOC login.
+
 ## 2026-08-04 (later 4) · bug · The pcap check failed because the mirror WORKED — `'0 packets captured' in stdout` is a substring test
 
 **Symptom.** With the GRE fixes in, phase 60 still failed on all three

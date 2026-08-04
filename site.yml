@@ -41,3 +41,8 @@
 - import_playbook: playbooks/40-manager.yml
 - import_playbook: playbooks/50-nodes.yml
 - import_playbook: playbooks/60-verify.yml
+
+# Analyst-side enablement: the hunt workstations must be able to LOG IN to
+# SOC, which the grid phases above do not cover. Separate phase because it
+# targets Windows analyst boxes, not the SO grid.
+- import_playbook: playbooks/70-analyst.yml
