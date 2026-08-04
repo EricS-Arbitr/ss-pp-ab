@@ -11,6 +11,80 @@ Severity key:
 
 
 
+## 2026-08-04 (later 3) · bug · Sensors captured nothing: hardcoded GRE remote in the netplan template + last-writer-wins firewall override
+
+**Symptom.** PowerPlant phase 60, all three sensors:
+
+```
+0 packets captured / 0 packets received by filter
+```
+
+Uniform across corp, OT and edge — including corp, whose GRE path crosses no
+firewall at all. That uniformity is what ruled out per-router and firewall
+explanations.
+
+**Evidence.** The mirror was never the problem. On `pp-corp-router`:
+
+```
+filter protocol all pref 3 matchall  (rule hit 2041627)
+  action order 1: mirred (Egress Mirror to device tun0)
+  Sent 881394835 bytes 2041627 pkt
+tun0  TX: 1279445785 bytes  8561963 packets
+```
+
+and on `so-sensor-corp`, GRE was arriving with real corp traffic inside it:
+
+```
+eth1 In IP 172.16.0.42 > 172.16.9.40: GREv0, length 60: IP 172.16.5.10.53938 > 172.16.9.20.9997
+```
+
+But the sensor's tunnel read:
+
+```
+tun0: link/gre 172.16.9.40 peer 172.16.5.1     <-- packets arriving from 172.16.0.42
+      RX: 0 packets
+iptables: -A INPUT -s 75.21.1.2/32 -p gre -j ACCEPT   <-- that is EDGE's router
+```
+
+**Root cause 1 — hardcoded IP in a template.**
+`roles/so_sensor/templates/60-so-mirror-tun.yaml.j2` contained
+`remote: 172.16.5.1` as a literal. The kernel will not decapsulate a GRE
+packet whose source does not match the tunnel's remote, so `tun0` stayed at
+zero forever while looking perfectly healthy — UP, PROMISC, valid /30.
+
+**Root cause 2 — one shared file, three writers.**
+`so_gre_rule_block` rendered a single ACCEPT from the *current* host's
+`so_gre_allowed_source`, and the derived override is written to ONE path on
+the manager (`local/salt/firewall/iptables.jinja`), re-derived from the stock
+template each time so it never accumulates. Three sensors each rewrote it in
+turn; only the last one's rule survived, grid-wide. Edge ran last, so corp and
+OT were left permitting edge's `75.21.1.2`.
+
+**Why the dev range never caught either.** In so-ansible's range the mirroring
+router WAS the sensor's gateway, so `so_prod_gateway`, the hardcoded
+`172.16.5.1`, and the router's real GRE source were all the same address.
+Three independent things agreed by coincidence. PowerPlant puts sensors on
+`pp-security` (gw 172.16.9.1) with the mirroring routers elsewhere, and the
+coincidence breaks. Only one sensor also meant last-writer-wins could never
+appear.
+
+**Fix.**
+- New per-sensor variable `so_gre_remote_underlay` — the mirroring router's
+  `vyos_gre_source_ip` — drives BOTH the tunnel `remote:` and the firewall
+  ACCEPT. One fact, stated once.
+- **No default.** Defaulting to `so_prod_gateway` would silently rebuild the
+  same coincidence. A preflight task fails loudly when it is unset, placed
+  before the `meta: end_host` probe so an installed sensor can still reach it.
+- `so_gre_rule_block` now emits one ACCEPT per sensor, deduplicated and
+  sorted, so the rendered override is byte-identical no matter which sensor
+  writes it. Slightly over-permissive — every node accepts GRE from every
+  mirroring router — which is the correct trade against silent breakage.
+- Added `Verify the tunnel bound the CORRECT remote endpoint`, asserting on
+  `ip -d link show` output. The old check tested only for "UP", which was true
+  throughout this entire failure.
+
+**Status: PROPOSED** — verify with phase 60 showing packets on all three.
+
 ## 2026-08-04 (later 2) · bug · so_search / so_sensor install timeout was 20 min — ansible KILLED so-setup mid-install
 
 **Symptom.** PowerPlant phase 50, `so-search`:

@@ -37,21 +37,16 @@ so_gre_tunnel_remote: "10.100.1.1"
 so_gre_tunnel_prefix: 30
 so_monitor_interface: "tun0"
 
-# PORTING FIX — so-ansible hardcoded the permitted GRE source as
-# `so_prod_gateway`, which was correct in the dev range because the mirroring
-# router WAS the sensor's gateway. Here every sensor's gateway is 172.16.9.1
-# while the mirroring routers are remote, so the sensor's SO firewall rule
-# must permit the ROUTER's tunnel source instead or the mirror is dropped.
-# so_sensor's so_gre_rule_block has to consume this variable.
-so_gre_allowed_source: "172.16.0.42"
-
-# Which router feeds this sensor (documentation + play targeting).
-so_mirror_router: "pp-corp-router"
-
-# Traffic targets for 60-verify. Hosts ON pp-corp-router's mirrored subnets --
-# never the router's own .1 addresses (PORTING_GUIDE 9.10). These exercise
-# eth0 (PP-Services), eth2 (Engineering) and eth1 (BP).
-so_verify_mirror_targets:
-  - 172.16.2.7     # pp-dc01        PP-Services      (eth0)
-  - 172.16.4.10    # pp-eng-wkstn-1 PP-Eng-Department (eth2)
-  - 172.16.3.3     # pp-bp-wkstn-2  PP-Business-Processing (eth1)
+# The mirroring router's GRE endpoint -- the UNDERLAY remote, i.e. the source
+# address the encapsulated packets actually arrive from. Drives two things:
+#   * the netplan tunnel's `remote:` (kernel will not decapsulate unless this
+#     matches the sender exactly)
+#   * the sensor's SO firewall ACCEPT for proto 47
+#
+# PORTING TRAP: in the so-ansible dev range this value happened to EQUAL the
+# sensor's so_prod_gateway, because the mirroring router was also the sensor's
+# gateway. Both the firewall rule and the netplan template were written against
+# that coincidence. Here every sensor's gateway is 172.16.9.1 while the
+# mirroring routers are elsewhere entirely, so it must be stated explicitly.
+# There is deliberately NO default -- so_sensor fails loudly if it is unset.
+so_gre_remote_underlay: "172.16.0.42"   # pp-corp-router vyos_gre_source_ip

@@ -59,9 +59,25 @@ so_gre_anchor: "-A INPUT -j LOGGING"
 # pp-security behind pp-internal-router (172.16.9.1) while the mirroring
 # routers are remote (172.16.0.42, 192.168.200.202, 75.21.1.2), so the rule
 # would drop every mirrored packet. Override per sensor in host_vars.
-so_gre_allowed_source: "{{ so_prod_gateway }}"
+# Same address as the tunnel remote -- one fact, stated once, per sensor.
+so_gre_allowed_source: "{{ so_gre_remote_underlay }}"
 
-so_gre_rule_block: "-A INPUT -s {{ so_gre_allowed_source }} -p gre -j ACCEPT\n"
+# The derived override lives at ONE path on the manager
+# (local/salt/firewall/iptables.jinja) and is re-derived from the STOCK
+# template on every write, so it does not accumulate. With a per-host rule,
+# three sensors each rewrote it in turn and only the LAST sensor's ACCEPT
+# survived -- grid-wide. PowerPlant 2026-08-04: so-sensor-corp ran with
+# edge's 75.21.1.2 and dropped every mirrored packet.
+#
+# The block therefore has to be identical no matter which sensor renders it:
+# emit one ACCEPT per sensor, deduplicated and sorted.
+so_gre_sources: >-
+  {{ groups['so_sensor'] | default([])
+     | map('extract', hostvars, 'so_gre_remote_underlay')
+     | select('defined') | reject('equalto', '') | unique | sort | list }}
+so_gre_rule_block: "{% for s in so_gre_sources %}-A INPUT -s {{ s }} -p gre -j ACCEPT\n{% endfor %}"
+
+
 
 # Create /etc/SOCLOUD so so-setup takes its "cloud" interface path, which
 # is the only path that honors BNICS as the monitor interface instead of

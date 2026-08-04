@@ -1,4 +1,23 @@
 ---
+# LIFETIME INVARIANT — must precede the `meta: end_host` probe below, or an
+# already-installed sensor can never reach it (the recurring trap in this repo).
+- name: Preflight — so_gre_remote_underlay must be set for this sensor
+  ansible.builtin.fail:
+    msg: |
+      {{ inventory_hostname }} has no so_gre_remote_underlay.
+
+      It is the mirroring router's vyos_gre_source_ip -- the address the
+      encapsulated packets actually arrive FROM. It drives both the netplan
+      tunnel's `remote:` and the SO firewall's proto-47 ACCEPT.
+
+      There is deliberately no default. so-ansible's dev range worked only
+      because that address happened to equal the sensor's so_prod_gateway;
+      defaulting to the gateway again would silently rebuild that trap.
+
+      Set it in host_vars/{{ inventory_hostname }}.yml to match the router's
+      vyos_gre_source_ip exactly.
+  when: so_gre_remote_underlay is not defined or (so_gre_remote_underlay | trim) == ''
+
 # =========================================================================
 # so_sensor — GRE tunnel + SENSOR install joining manager
 # =========================================================================
@@ -159,6 +178,16 @@
   register: tun_state
   changed_when: false
   failed_when: "'UP' not in tun_state.stdout"
+
+# "UP" is not proof. PowerPlant 2026-08-04: tun0 was UP, PROMISC and carried a
+# valid /30 while RX sat at 0 packets, because the tunnel's remote pointed at
+# the wrong router and the kernel declined to decapsulate. Assert the endpoint
+# the tunnel actually bound, not merely that an interface exists.
+- name: Verify the tunnel bound the CORRECT remote endpoint
+  ansible.builtin.command: "ip -d link show {{ so_monitor_interface }}"
+  register: tun_remote
+  changed_when: false
+  failed_when: "'remote ' ~ so_gre_remote_underlay not in tun_remote.stdout"
 
 - name: Report tunnel state
   ansible.builtin.debug:
