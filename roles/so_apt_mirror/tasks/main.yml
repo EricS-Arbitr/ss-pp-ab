@@ -124,6 +124,46 @@
     remote_src: yes
   when: bundled_rules.stat.exists
 
+# Fallback when no bundled copy shipped. so-ansible commits the tarball at
+# rules/emerging.rules.tar.gz, but a range that ports these roles without
+# duplicating a 5.5 MB binary (ss-pp-ab does not carry one) has nothing to
+# copy — and the 404 only surfaces much later, when so_manager tries to stage
+# it for airgap mode. Fetch it here instead, through the mgmt-plane proxy,
+# the same way the airgap content repos are cloned.
+#
+# get_url defaults to force: no, so this is a no-op once the file exists.
+- name: Download ETOPEN rules from upstream (no bundled copy shipped)
+  ansible.builtin.get_url:
+    url: "{{ so_etopen_upstream_url }}"
+    dest: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+    timeout: 120
+  environment:
+    http_proxy: "{{ so_upstream_proxy }}"
+    https_proxy: "{{ so_upstream_proxy }}"
+    HTTP_PROXY: "{{ so_upstream_proxy }}"
+    HTTPS_PROXY: "{{ so_upstream_proxy }}"
+  when: not bundled_rules.stat.exists
+
+# Positive proof the ruleset is actually on the mirror by one route or the
+# other. Without this, a missing tarball stays silent until so_manager 404s
+# staging it for airgap mode, which is a long way from the cause.
+- name: Confirm the ETOPEN tarball is present on the mirror
+  ansible.builtin.stat:
+    path: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}"
+  register: etopen_present
+
+- name: Fail if the ETOPEN tarball reached the mirror by neither route
+  ansible.builtin.fail:
+    msg: |
+      {{ so_bundled_rules_filename }} is not on the mirror.
+      Neither a bundled copy at {{ so_bundled_rules_src }} nor a download
+      from {{ so_etopen_upstream_url }} produced it. Airgap mode needs this
+      to populate {{ so_airgap_etopen_dest | default('/nsm/rules/suricata/etopen') }}.
+  when: not etopen_present.stat.exists
+
 - name: Compute md5 sibling for bundled ETOPEN rules (SOC verifies via .md5)
   ansible.builtin.shell: |
     set -e
@@ -133,7 +173,9 @@
     chmod 644 "{{ so_bundled_rules_filename }}.md5"
   args:
     creates: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}.md5"
-  when: bundled_rules.stat.exists
+  # Keyed on presence, NOT on bundled_rules: the upstream-download path also
+  # needs the .md5 sibling, which SOC verifies against.
+  when: etopen_present.stat.exists
 
 # --- nginx config --------------------------------------------------------
 
@@ -202,7 +244,7 @@
     - "{{ so_bundled_rules_filename }}"
     - "{{ so_bundled_rules_filename }}.md5"
   changed_when: false
-  when: bundled_rules.stat.exists
+  when: etopen_present.stat.exists
 
 # SO's airgap mode reads sigma / yara / playbook content from local file://
 # repos instead of github. Clone + publish them here — the controller is the
@@ -217,5 +259,5 @@
     msg: |
       so-mirror OK on http://{{ so_mirror_host }}:{{ so_mirror_port }}/
         SO source: /so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
-      {% if bundled_rules.stat.exists %}  ETOPEN rules: /so-source/{{ so_bundled_rules_filename }}
+      {% if etopen_present.stat.exists %}  ETOPEN rules: /so-source/{{ so_bundled_rules_filename }}
       {% endif %}{% if so_airgap_mode %}  Airgap content: {{ so_airgap_repos | map(attribute='name') | join(', ') }}{% endif %}

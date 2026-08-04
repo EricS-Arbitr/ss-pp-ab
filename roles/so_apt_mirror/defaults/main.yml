@@ -17,3 +17,7 @@ so_bundled_rules_src: "/etc/ansible/rules/emerging.rules.tar.gz"
 # so_manager needs it too (to patch soc.json) and role defaults are
 # role-scoped, so it was undefined there. Left as a comment rather than a
 # duplicate definition so there is one source of truth.
+
+# Upstream ETOPEN ruleset, used only when no bundled copy shipped with the
+# tarball. Matches the sourcePath SOC uses in its non-airgap config.
+so_etopen_upstream_url: "https://rules.emergingthreats.net/open/suricata-7.0.3/emerging.rules.tar.gz"
