@@ -1,4 +1,9 @@
 ---
+# Linux needs privilege where Windows does not: WinRM already runs elevated,
+# but here /opt is root-owned, the installer writes system paths and systemctl
+# needs root. `become` is set PER TASK rather than on the play, so nothing
+# escalates that does not need to -- see UPSTREAM_FIXES 2026-08-04 (later 9),
+# where a play-level become: true broke a chmod that needed no privilege.
 - name: Is the Elastic Agent service already active?
   ansible.builtin.command: "systemctl is-active {{ so_agent_linux_service }}"
   register: agent_active_before
@@ -6,6 +11,7 @@
   failed_when: false
 
 - name: Staging directory
+  become: true
   ansible.builtin.file:
     path: "{{ so_agent_linux_dir }}"
     state: directory
@@ -13,6 +19,7 @@
   when: agent_active_before.stdout | trim != 'active'
 
 - name: Download SO's Elastic Agent installer
+  become: true
   ansible.builtin.get_url:
     url: "{{ so_agent_mirror_url }}/{{ so_agent_installer_linux }}"
     dest: "{{ so_agent_linux_dir }}/{{ so_agent_installer_linux }}"
@@ -21,6 +28,7 @@
   when: agent_active_before.stdout | trim != 'active'
 
 - name: Run the installer (enrolls into Fleet using the embedded token)
+  become: true
   ansible.builtin.command: >-
     {{ so_agent_linux_dir }}/{{ so_agent_installer_linux }} {{ so_agent_install_args }}
   register: agent_install
@@ -29,6 +37,7 @@
   failed_when: false
 
 - name: Wait for the Elastic Agent service to become active
+  become: true
   ansible.builtin.command: "systemctl is-active {{ so_agent_linux_service }}"
   register: agent_active_after
   until: agent_active_after.stdout | trim == 'active'

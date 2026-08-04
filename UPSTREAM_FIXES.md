@@ -11,6 +11,38 @@ Severity key:
 
 
 
+## 2026-08-04 (later 10) · bug · Linux agent install had no privilege — Windows hid the gap because WinRM already runs elevated
+
+**Symptom.** All 40 Windows hosts enrolled cleanly; the four Linux hosts failed
+identically:
+
+```
+fatal: [pp-syslog]: FAILED! => "There was an issue creating /opt/so-agent as
+  requested: [Errno 13] Permission denied: b'/opt/so-agent'"
+```
+
+**Cause.** The enrollment play carries no `become` — correctly, after the
+lesson in (later 9) about play-level escalation. But Windows and Linux differ:
+WinRM connects as an already-elevated account, so the Windows path never needed
+it, while on Linux `/opt` is root-owned, the installer writes system paths, and
+`systemctl` needs root. A shared role with two OS branches hid the asymmetry:
+the Windows branch passing said nothing about the Linux branch.
+
+**Fix.** `become: true` on the four Linux tasks that genuinely need it —
+staging directory, download, installer, service wait. Not on the play, and not
+on the `is-active` probe or the fail/report tasks, which do not.
+
+**Worth noting against my own prediction.** I expected the six hosts on
+192.168.100.0/24 (pp-dc03, pp-dcs-ctrl, pp-ctl-wks-01..04) to fail their Fleet
+preflight, on the grounds that pp-ot-firewall is default-deny with no rule
+permitting OT to reach pp-security on 8220. They all passed and enrolled. The
+lab-mode rules on that firewall are more permissive than its host_vars comment
+("ESP boundary; default-deny, static-only") implies. No posture change was
+needed, and none was made.
+
+**Status: PROPOSED** — verify by re-running `75-endpoint.yml` and seeing the
+four Linux hosts enroll, then a Fleet count of 49.
+
 ## 2026-08-04 (later 9) · bug · Two `become` mistakes staging the agent installers — one asked for too little privilege, one for too much
 
 **9a — `fetch` writes its local copy as the ansible user.**
