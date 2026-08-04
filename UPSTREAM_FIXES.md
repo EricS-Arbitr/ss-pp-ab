@@ -11,6 +11,49 @@ Severity key:
 
 
 
+## 2026-08-04 (later 4) · bug · The pcap check failed because the mirror WORKED — `'0 packets captured' in stdout` is a substring test
+
+**Symptom.** With the GRE fixes in, phase 60 still failed on all three
+sensors — but the captures were full of real range traffic:
+
+```
+so-sensor-corp: IP 172.16.2.20.35015 > 8.8.8.8.53: PTR? 7.4.16.172.in-addr.arpa.
+so-sensor-ot:   IP 192.168.90.101.38819 > 192.168.104.201.53: A? cloud....
+so-sensor-edge: IP 172.16.2.7.60220 > 8.8.8.8.53: A? update.googleapis.com.
+100 packets captured   (all three)
+```
+
+**Root cause.** The condition was
+
+```yaml
+failed_when: "'0 packets captured' in pcap_out.stdout"
+```
+
+`tcpdump -c 100` stops at 100 and prints `100 packets captured`, and the
+string `"100 packets captured"` **contains** `"0 packets captured"`. The check
+therefore fired exactly when the mirror was working, and would have stayed
+silent at 10, 20 or 50 packets. It was an inverted check, not a loose one.
+
+**Fix.** `failed_when: "'0 packets captured' in pcap_out.stdout_lines"` —
+membership in `stdout_lines` is an equality test per line, so `100 packets
+captured` no longer matches. Same one-word change in both repos.
+
+**Second instance found while fixing it.** `verify_so.sh`'s traffic-flow smoke
+test — commented in the file as "the money-shot check" — expected the pattern
+`packets captured|packets received`. tcpdump prints both of those on every run
+including a zero capture, so the single check that proves the whole mirror
+chain could never fail. Now `[1-9][0-9]* packets captured`.
+
+**Pattern.** That is four in this family now (PORTING_GUIDE 9.15). Worth
+stating the rule directly: a check whose expected string is a *substring* of,
+or a *prefix* of, the failure output is not a check. Assert on parsed values or
+exact lines, never on `in` against free-form command output.
+
+**Status: VERIFIED** for the underlying mirror — corp, OT and edge each
+captured 100 packets of genuine range traffic through the GRE tunnel, which is
+end-to-end proof of tc mirred -> GRE encap -> route -> SO firewall -> kernel
+decap -> tun0. The check itself is **PROPOSED** until phase 60 reports green.
+
 ## 2026-08-04 (later 3) · bug · Sensors captured nothing: hardcoded GRE remote in the netplan template + last-writer-wins firewall override
 
 **Symptom.** PowerPlant phase 60, all three sensors:

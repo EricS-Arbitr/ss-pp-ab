@@ -91,7 +91,13 @@
         timeout 15 tcpdump -i {{ so_monitor_interface }} -c 100 -nn 2>&1 | tail -5
       changed_when: false
       register: pcap_out
-      failed_when: "'0 packets captured' in pcap_out.stdout"
+      # EXACT LINE match, never a substring. tcpdump prints "100 packets
+      # captured", and `'0 packets captured' in stdout` is TRUE for that
+      # string -- so the substring form failed precisely when the mirror was
+      # WORKING (PowerPlant 2026-08-04, all three sensors at 100 packets).
+      # stdout_lines membership is an equality test per line and cannot do
+      # that. See UPSTREAM_FIXES 2026-08-04 (later 4).
+      failed_when: "'0 packets captured' in pcap_out.stdout_lines"
 
     - name: report
       ansible.builtin.debug:
