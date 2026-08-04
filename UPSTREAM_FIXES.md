@@ -49,10 +49,20 @@ stating the rule directly: a check whose expected string is a *substring* of,
 or a *prefix* of, the failure output is not a check. Assert on parsed values or
 exact lines, never on `in` against free-form command output.
 
-**Status: VERIFIED** for the underlying mirror — corp, OT and edge each
-captured 100 packets of genuine range traffic through the GRE tunnel, which is
-end-to-end proof of tc mirred -> GRE encap -> route -> SO firewall -> kernel
-decap -> tun0. The check itself is **PROPOSED** until phase 60 reports green.
+**Status: VERIFIED** — PowerPlant phase 60 green on 2026-08-04, all four
+hosts `failed=0`. Each sensor captured 100 packets of genuine range traffic
+off `tun0`:
+
+```
+so-sensor-corp  172.16.2.20.8080 > 172.16.6.4.54990  HTTP
+so-sensor-ot    192.168.90.107.57070 > 192.168.95.2.4840   (OPC-UA)
+so-sensor-edge  172.16.2.7.64604 > 8.8.4.4.53  A? www.msftconnecttest.com
+```
+
+End-to-end proof of tc mirred -> GRE encap -> route -> SO firewall -> kernel
+decap -> tun0, on all three routers including the RC_NG_OT_Router image whose
+tc-over-SSH path had never been exercised. Elasticsearch green, 243 active
+shards at 100%, 2 data nodes.
 
 ## 2026-08-04 (later 3) · bug · Sensors captured nothing: hardcoded GRE remote in the netplan template + last-writer-wins firewall override
 
@@ -134,7 +144,20 @@ The whole GRE tunnel block now sits above the probe, alongside the firewall
 block, because a tunnel definition is a lifetime invariant that must be
 re-asserted on every run rather than only at first install.
 
-**Status: PROPOSED** — verify with phase 60 showing packets on all three.
+**Status: VERIFIED** — PowerPlant phase 60 green on 2026-08-04, all four
+hosts `failed=0`. Each sensor captured 100 packets of genuine range traffic
+off `tun0`:
+
+```
+so-sensor-corp  172.16.2.20.8080 > 172.16.6.4.54990  HTTP
+so-sensor-ot    192.168.90.107.57070 > 192.168.95.2.4840   (OPC-UA)
+so-sensor-edge  172.16.2.7.64604 > 8.8.4.4.53  A? www.msftconnecttest.com
+```
+
+End-to-end proof of tc mirred -> GRE encap -> route -> SO firewall -> kernel
+decap -> tun0, on all three routers including the RC_NG_OT_Router image whose
+tc-over-SSH path had never been exercised. Elasticsearch green, 243 active
+shards at 100%, 2 data nodes.
 
 ## 2026-08-04 (later 2) · bug · so_search / so_sensor install timeout was 20 min — ansible KILLED so-setup mid-install
 
@@ -174,7 +197,20 @@ before salt was installed re-runs so-setup in full rather than skipping into a
 broken state. Confirm no `so-setup` process is still alive before re-running —
 two concurrent so-setups on one host is the one thing that makes it worse.
 
-**Status: PROPOSED** — verify by re-running phase 50 to completion.
+**Status: VERIFIED** — PowerPlant phase 60 green on 2026-08-04, all four
+hosts `failed=0`. Each sensor captured 100 packets of genuine range traffic
+off `tun0`:
+
+```
+so-sensor-corp  172.16.2.20.8080 > 172.16.6.4.54990  HTTP
+so-sensor-ot    192.168.90.107.57070 > 192.168.95.2.4840   (OPC-UA)
+so-sensor-edge  172.16.2.7.64604 > 8.8.4.4.53  A? www.msftconnecttest.com
+```
+
+End-to-end proof of tc mirred -> GRE encap -> route -> SO firewall -> kernel
+decap -> tun0, on all three routers including the RC_NG_OT_Router image whose
+tc-over-SSH path had never been exercised. Elasticsearch green, 243 active
+shards at 100%, 2 data nodes.
 
 ## 2026-08-04 (later) · bug · Phase 40 retry loop cannot outlast a highstate — `state.apply` needs `queue=True`
 
@@ -197,11 +233,20 @@ finishes. Ported from so-ansible `20051e4`; applied to all four `state.apply`
 call sites (so_manager airgap, so_search firewall, so_sensor firewall ×2).
 The task now blocks — possibly 20+ minutes — instead of failing.
 
-**Status: VERIFIED** — PowerPlant phase 40 completed clean on 2026-08-04:
-`ok=34 changed=3 failed=0`. The airgap tasks passed their positive-proof
-checks (`salt-call pillar.get global:airgap` returned True, and `soc.json`
-grep found `/nsm/rules/suricata/etopen`), which is only reachable if pillar
-compilation and `state.apply` both worked.
+**Status: VERIFIED** — PowerPlant phase 60 green on 2026-08-04, all four
+hosts `failed=0`. Each sensor captured 100 packets of genuine range traffic
+off `tun0`:
+
+```
+so-sensor-corp  172.16.2.20.8080 > 172.16.6.4.54990  HTTP
+so-sensor-ot    192.168.90.107.57070 > 192.168.95.2.4840   (OPC-UA)
+so-sensor-edge  172.16.2.7.64604 > 8.8.4.4.53  A? www.msftconnecttest.com
+```
+
+End-to-end proof of tc mirred -> GRE encap -> route -> SO firewall -> kernel
+decap -> tun0, on all three routers including the RC_NG_OT_Router image whose
+tc-over-SSH path had never been exercised. Elasticsearch green, 243 active
+shards at 100%, 2 data nodes.
 
 ## 2026-08-04 · platform · Salt master saturated by 10-second IPv6 DNS timeouts — phase 40 pillar compilation dies
 
@@ -243,11 +288,20 @@ still showed `::1 ip6-localhost ip6-loopback so-manager` and the last 200 lines
 of the master log contained zero IPv6 warnings. `so_base`'s template is the sole
 owner of that file; no derived override is required.
 
-**Status: VERIFIED** — PowerPlant phase 40 completed clean on 2026-08-04:
-`ok=34 changed=3 failed=0`. The airgap tasks passed their positive-proof
-checks (`salt-call pillar.get global:airgap` returned True, and `soc.json`
-grep found `/nsm/rules/suricata/etopen`), which is only reachable if pillar
-compilation and `state.apply` both worked.
+**Status: VERIFIED** — PowerPlant phase 60 green on 2026-08-04, all four
+hosts `failed=0`. Each sensor captured 100 packets of genuine range traffic
+off `tun0`:
+
+```
+so-sensor-corp  172.16.2.20.8080 > 172.16.6.4.54990  HTTP
+so-sensor-ot    192.168.90.107.57070 > 192.168.95.2.4840   (OPC-UA)
+so-sensor-edge  172.16.2.7.64604 > 8.8.4.4.53  A? www.msftconnecttest.com
+```
+
+End-to-end proof of tc mirred -> GRE encap -> route -> SO firewall -> kernel
+decap -> tun0, on all three routers including the RC_NG_OT_Router image whose
+tc-over-SSH path had never been exercised. Elasticsearch green, 243 active
+shards at 100%, 2 data nodes.
 
 ## 2026-08-03 · enhancement · ETOPEN ruleset now bundled in the tarball; no deploy-time internet fetches
 
