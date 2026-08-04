@@ -10,6 +10,43 @@ Severity key:
 ---
 
 
+
+## 2026-08-04 · platform · Salt master saturated by 10-second IPv6 DNS timeouts — phase 40 pillar compilation dies
+
+**Symptom.** `playbooks/40-manager.yml`, task `so_manager : Airgap — apply the
+soc state`, failed all 20 retries over ~70 minutes with
+`Pillar timed out after 180 seconds`. The stack itself was healthy:
+`so-status` 14/14 up 16 hours, load 0.45, 12 GB free.
+
+**Root cause.** `/opt/so/log/salt/master` repeating every few seconds on every
+worker PID:
+
+```
+Unable to find IPv6 record for "so-manager" causing a 0:00:10.010872 second
+timeout when rendering grains. Set the dns or /etc/hosts for IPv6 to clear this.
+```
+
+Salt's `ip_fqdn()` grain calls `getaddrinfo(<own fqdn>, AF_INET6)` on every
+grains render. `/etc/hosts` carried only IPv4 entries for `so-manager`, so the
+lookup fell through to DNS — and **this range's resolver does not answer AAAA
+at all**, so each render burned the full 10s resolver timeout. Master workers
+were permanently blocked, pillar compilation exceeded 180s, and the minion
+could not authenticate.
+
+The IPv4 path never touches DNS because `/etc/hosts` answers it, which is why
+nothing else in the deploy complained.
+
+**Fix.** `roles/so_base/templates/hosts.j2` puts the node's own hostname on the
+`::1` line. Only its own — peers on `::1` would resolve grid traffic to
+loopback. Ported from so-ansible `b9da608`.
+
+**Worth following up separately:** a resolver that silently drops AAAA rather
+than answering NXDOMAIN is a range-DNS characteristic that may bite other
+services. Not chased here because the hosts entry removes the dependency.
+
+**Status: PROPOSED** — verify by re-running phase 40 and confirming the master
+log stops emitting the warning.
+
 ## 2026-08-03 · enhancement · ETOPEN ruleset now bundled in the tarball; no deploy-time internet fetches
 
 **Symptom.** Phase 10 (`so_apt_mirror`) appeared to succeed on this repo but
