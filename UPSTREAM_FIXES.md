@@ -9,6 +9,36 @@ Severity key:
 
 ---
 
+
+## 2026-08-03 · enhancement · ETOPEN ruleset now bundled in the tarball; no deploy-time internet fetches
+
+**Symptom.** Phase 10 (`so_apt_mirror`) appeared to succeed on this repo but
+the ETOPEN ruleset never reached the mirror. `rules/emerging.rules.tar.gz`
+existed in `so-ansible` and was never copied here, so the copy task's
+`when: bundled_rules.stat.exists` gate skipped silently. Phase 40 then 404'd
+staging it for airgap mode — two phases downstream of the cause.
+
+**Fix.**
+- Added `rules/emerging.rules.tar.gz` (5.5 MB) to this repo.
+- `build_tarball.sh` stages `rules/` and lists it in `TAR_PATHS`.
+  Confirmed inside `ab_pp.tgz` via `tar -tzf`; archive is now 5.6 MB.
+- Re-copied `roles/so_apt_mirror` from so-ansible `bd87195`, which fails at
+  phase 10 with a message naming the bundling requirement when the ruleset
+  is absent.
+
+**Constraint this encodes** (owner, 2026-08-03): these ranges will deploy to
+platforms with **no external access, not even a proxy**. Tarballs and repos
+move to an on-prem in-platform solution such as Nexus. Nothing may be fetched
+from the internet at deploy time. `inet_proxy_addr` in `group_vars/all/main.yml`
+is a convenience of the current range, not a design assumption.
+
+**Not yet compliant — deferred by owner** until SO is working here and in
+airfield: the SO source git-clone, the three airgap content repo clones, and
+`so-setup`'s own package fetches all still require egress.
+
+**Status: VERIFIED** for the ruleset (present in `ab_pp.tgz`); the three
+above are **OPEN**.
+
 ## 2026-07-06 · gap · roles/syslog_server/templates — pfSense sources land in IP-named dirs, not hostname-named
 
 **Symptom.** `verify_deployment.sh` Section 6 flagged the 3 pfSense firewalls as not forwarding syslog. Investigation confirmed they ARE forwarding (packets caught via tcpdump on pp-syslog; matching per-source directories exist under `/var/log/remote/`) — but the directories are named by **source IP**, not hostname:
