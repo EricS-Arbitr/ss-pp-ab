@@ -130,26 +130,12 @@
          if so_grid_member.stat.exists
          else 'Fresh node — manager-side override written; first highstate will apply it.' }}
 
-- name: Idempotency probe
-  ansible.builtin.stat:
-    path: "{{ so_sensor_installed_marker }}"
-  register: so_installed
-
-- name: End play early if SO is already installed
-  ansible.builtin.meta: end_host
-  when: so_installed.stat.exists
-
-- name: Precondition — SO source must be at {{ so_source_dest }}
-  ansible.builtin.stat:
-    path: "{{ so_source_dest }}/setup/so-setup"
-  register: so_setup_present
-
-- name: Fail loudly if so_base didn't stage the source
-  ansible.builtin.fail:
-    msg: "SO source missing at {{ so_source_dest }}/setup/so-setup. Re-run 30-prereqs."
-  when: not so_setup_present.stat.exists
-
-# --- Bring up GRE tunnel BEFORE so-setup validates BNICS=tun0 -----------
+# --- GRE tunnel — LIFETIME INVARIANT, must precede the end_host probe ----
+# Moved above the idempotency probe 2026-08-04. It was below it, so an
+# already-installed sensor could never receive a tunnel correction -- the
+# exact "guard blocks its own remediation" trap this repo keeps rebuilding
+# (PORTING_GUIDE 9.4). The tunnel definition must be re-asserted on every
+# run, not only on first install.
 
 - name: Deploy netplan drop-in for GRE tunnel {{ so_monitor_interface }}
   ansible.builtin.template:
@@ -192,6 +178,25 @@
 - name: Report tunnel state
   ansible.builtin.debug:
     msg: "{{ so_monitor_interface }}: {{ tun_state.stdout }}"
+
+- name: Idempotency probe
+  ansible.builtin.stat:
+    path: "{{ so_sensor_installed_marker }}"
+  register: so_installed
+
+- name: End play early if SO is already installed
+  ansible.builtin.meta: end_host
+  when: so_installed.stat.exists
+
+- name: Precondition — SO source must be at {{ so_source_dest }}
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/setup/so-setup"
+  register: so_setup_present
+
+- name: Fail loudly if so_base didn't stage the source
+  ansible.builtin.fail:
+    msg: "SO source missing at {{ so_source_dest }}/setup/so-setup. Re-run 30-prereqs."
+  when: not so_setup_present.stat.exists
 
 # --- Compute prod NIC + netmask -----------------------------------------
 

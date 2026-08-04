@@ -83,6 +83,14 @@ appear.
   `ip -d link show` output. The old check tested only for "UP", which was true
   throughout this entire failure.
 
+**Follow-on: the tunnel tasks were BELOW the `meta: end_host` probe.** Fixing
+the template alone would have changed nothing on this range — all three
+sensors already carry `/opt/so/state/installed`, so the play ends before ever
+reaching the netplan task. Instance seven of the same trap (PORTING_GUIDE 9.4).
+The whole GRE tunnel block now sits above the probe, alongside the firewall
+block, because a tunnel definition is a lifetime invariant that must be
+re-asserted on every run rather than only at first install.
+
 **Status: PROPOSED** — verify with phase 60 showing packets on all three.
 
 ## 2026-08-04 (later 2) · bug · so_search / so_sensor install timeout was 20 min — ansible KILLED so-setup mid-install
