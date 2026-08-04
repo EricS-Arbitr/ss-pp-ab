@@ -32,7 +32,11 @@ finishes. Ported from so-ansible `20051e4`; applied to all four `state.apply`
 call sites (so_manager airgap, so_search firewall, so_sensor firewall ×2).
 The task now blocks — possibly 20+ minutes — instead of failing.
 
-**Status: PROPOSED** — verify on the next phase 40 run.
+**Status: VERIFIED** — PowerPlant phase 40 completed clean on 2026-08-04:
+`ok=34 changed=3 failed=0`. The airgap tasks passed their positive-proof
+checks (`salt-call pillar.get global:airgap` returned True, and `soc.json`
+grep found `/nsm/rules/suricata/etopen`), which is only reachable if pillar
+compilation and `state.apply` both worked.
 
 ## 2026-08-04 · platform · Salt master saturated by 10-second IPv6 DNS timeouts — phase 40 pillar compilation dies
 
@@ -67,8 +71,11 @@ loopback. Ported from so-ansible `b9da608`.
 than answering NXDOMAIN is a range-DNS characteristic that may bite other
 services. Not chased here because the hosts entry removes the dependency.
 
-**Status: PROPOSED** — verify by re-running phase 40 and confirming the master
-log stops emitting the warning.
+**Status: VERIFIED** — PowerPlant phase 40 completed clean on 2026-08-04:
+`ok=34 changed=3 failed=0`. The airgap tasks passed their positive-proof
+checks (`salt-call pillar.get global:airgap` returned True, and `soc.json`
+grep found `/nsm/rules/suricata/etopen`), which is only reachable if pillar
+compilation and `state.apply` both worked.
 
 ## 2026-08-03 · enhancement · ETOPEN ruleset now bundled in the tarball; no deploy-time internet fetches
 
