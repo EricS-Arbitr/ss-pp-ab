@@ -11,6 +11,62 @@ Severity key:
 
 
 
+## 2026-08-04 (later 7) · bug · Two `win_powershell` output bugs of my own — one check that could never pass, one that could never fail
+
+Both were written this week, in the same playbooks that carry the rule about
+checks that cannot fail. Recording them because the *shapes* recur.
+
+### 7a — `Write-Output $svc.Status` returns a DICT, so the check could never pass
+
+**Symptom.** `75-endpoint.yml`'s Sysmon verification failed on all 40 Windows
+hosts, with output that plainly showed success:
+
+```
+fatal: [pp-bp-wkstn-4]: FAILED! => {"failed_when_result": true,
+  "output": [{"String": "Running", "Type": "System.ServiceProcess.ServiceControllerStatus", "Value": 4}]}
+```
+
+**Cause.** `$svc.Status` is a `ServiceControllerStatus` **enum**, not a string.
+`win_powershell` serializes it as an object, so `output[0]` is a dict and
+`output[0] != 'Running'` is always true.
+
+**Fix.** `Write-Output ([string]$svc.Status)`. Applied in `75-endpoint.yml` and
+both sites in `roles/elastic_agent/tasks/windows.yml`, where the identical
+pattern would have failed all 44 agent installs the same way.
+
+### 7b — `Write-Output [Math]::Abs(...)` returns a LITERAL STRING, so the check could never fail
+
+**Cause.** PowerShell parses `Write-Output [Math]::Abs(...)` in ARGUMENT mode
+and emits the literal text `[Math]::Abs(...)`. Jinja's `| float` silently
+converts that to `0.0`, so `failed_when: drift > 120` was never true.
+
+**What it cost.** Nothing yet, which is the point — it hid rather than broke.
+The clock drift checks in `05-time.yml` and `70-analyst.yml` both reported
+`clock 0s from range UTC` on every host **without measuring anything**. The
+clocks are probably correct (`Set-Date` reported `changed` on 39 of 40 hosts),
+but that was never verified.
+
+**Fix.** `Write-Output ([Math]::Abs(...).ToString())`. Parentheses force
+expression mode; `.ToString()` keeps it a scalar rather than a serialized
+object, i.e. avoids 7a.
+
+### The general rule
+
+`win_powershell`'s `output` is a list of **serialized .NET objects**, not
+strings. Anything but a string, number or bool arrives as a dict. Two
+consequences, and both bit here:
+- Emit an explicit `[string]` / `.ToString()` for anything compared in Jinja.
+- Wrap any expression in parentheses; a bare `[Type]::Method(...)` after a
+  cmdlet is a string literal, not a call.
+
+A `| float` on unparsable text yielding `0.0` rather than erroring is what
+turned 7b from a visible bug into an invisible one. Fifth instance in the
+can-this-check-actually-fail family (PORTING_GUIDE 9.15, 9.15b).
+
+**Status: PROPOSED** — verify by re-running `05-time.yml` and `75-endpoint.yml`
+and confirming the drift check reports a real number and the Sysmon check
+passes on hosts where the service is genuinely running.
+
 ## 2026-08-04 (later 6) · enhancement · Elastic Agent endpoint telemetry into SO — Sysmon + eventlogs from all 44 managed hosts
 
 **Why.** SO had wire visibility only: Zeek and Suricata parsing mirrored

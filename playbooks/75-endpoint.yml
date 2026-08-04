@@ -51,7 +51,11 @@
         script: |
           $Ansible.Changed = $false
           $svc = Get-Service -Name Sysmon64 -ErrorAction SilentlyContinue
-          if ($svc) { Write-Output $svc.Status } else { Write-Output "ABSENT" }
+          # [string] cast is required: $svc.Status is a ServiceControllerStatus
+          # ENUM, which win_powershell serializes as
+          # {"String":"Running","Type":...,"Value":4} -- a dict, never equal to
+          # the string 'Running'. Every host failed a check it had passed.
+          if ($svc) { Write-Output ([string]$svc.Status) } else { Write-Output "ABSENT" }
       register: sysmon_svc
       changed_when: false
       failed_when: sysmon_svc.output[0] | default('ABSENT') != 'Running'

@@ -8,7 +8,11 @@
     script: |
       $Ansible.Changed = $false
       $svc = Get-Service -Name '{{ so_agent_windows_service }}' -ErrorAction SilentlyContinue
-      if ($svc) { Write-Output $svc.Status } else { Write-Output "ABSENT" }
+      # [string] cast is required: $svc.Status is a ServiceControllerStatus
+      # ENUM. win_powershell serializes it as
+      # {"String":"Running","Type":...,"Value":4} -- a dict, never equal to the
+      # string 'Running'. UPSTREAM_FIXES 2026-08-04 (later 7).
+      if ($svc) { Write-Output ([string]$svc.Status) } else { Write-Output "ABSENT" }
   register: agent_svc_before
   changed_when: false
 
@@ -50,7 +54,7 @@
         if ($svc -and $svc.Status -eq 'Running') { Write-Output 'Running'; exit }
         Start-Sleep -Seconds 5
       } while ((Get-Date) -lt $deadline)
-      if ($svc) { Write-Output $svc.Status } else { Write-Output 'ABSENT' }
+      if ($svc) { Write-Output ([string]$svc.Status) } else { Write-Output 'ABSENT' }
   register: agent_svc_after
   changed_when: false
 

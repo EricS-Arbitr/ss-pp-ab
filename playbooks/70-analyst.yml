@@ -54,7 +54,12 @@
             [Globalization.CultureInfo]::InvariantCulture,
             [Globalization.DateTimeStyles]::AssumeUniversal -bor
             [Globalization.DateTimeStyles]::AdjustToUniversal)
-          Write-Output [Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds)
+          # Parentheses are load-bearing. `Write-Output [Math]::Abs(...)` parses in
+          # ARGUMENT mode and emits the literal string "[Math]::Abs(...)", which
+          # Jinja's `| float` silently turns into 0.0 -- so the drift check could
+          # never fail. .ToString() keeps it a plain scalar rather than a
+          # serialized object. See UPSTREAM_FIXES 2026-08-04 (later 7).
+          Write-Output ([Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds).ToString())
       register: drift
       changed_when: false
       failed_when: (drift.output[0] | float) > 120
