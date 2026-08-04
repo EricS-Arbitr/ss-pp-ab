@@ -234,6 +234,12 @@ cp    "$SS_PP_AB/hosts"                   "$STAGE/"
 cp    "$SS_PP_AB/arbitr_pp_playbook.yaml" "$STAGE/"
 cp    "$SS_PP_AB/deploy.sh"               "$STAGE/"
 cp    "$SS_PP_AB/ansible.cfg"            "$STAGE/"   # vault_password_file lives here
+# Detection rulesets that MUST ship inside the tarball. These ranges target
+# platforms with no external access -- not even a proxy -- so nothing may be
+# fetched from the internet at deploy time.
+if [ -d "$SS_PP_AB/rules" ]; then
+  cp -R "$SS_PP_AB/rules" "$STAGE/"
+fi
 chmod +x "$STAGE/deploy.sh"
 # Read-only post-deploy verification script (optional but very useful).
 if [ -f "$SS_PP_AB/verify_deployment.sh" ]; then
@@ -263,7 +269,7 @@ fi
 # --- Pack ------------------------------------------------------------------
 
 cd "$STAGE"
-TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml site.yml playbooks deploy.sh ansible.cfg)
+TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml site.yml playbooks deploy.sh ansible.cfg rules)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)

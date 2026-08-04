@@ -124,29 +124,6 @@
     remote_src: yes
   when: bundled_rules.stat.exists
 
-# Fallback when no bundled copy shipped. so-ansible commits the tarball at
-# rules/emerging.rules.tar.gz, but a range that ports these roles without
-# duplicating a 5.5 MB binary (ss-pp-ab does not carry one) has nothing to
-# copy — and the 404 only surfaces much later, when so_manager tries to stage
-# it for airgap mode. Fetch it here instead, through the mgmt-plane proxy,
-# the same way the airgap content repos are cloned.
-#
-# get_url defaults to force: no, so this is a no-op once the file exists.
-- name: Download ETOPEN rules from upstream (no bundled copy shipped)
-  ansible.builtin.get_url:
-    url: "{{ so_etopen_upstream_url }}"
-    dest: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}"
-    owner: www-data
-    group: www-data
-    mode: '0644'
-    timeout: 120
-  environment:
-    http_proxy: "{{ so_upstream_proxy }}"
-    https_proxy: "{{ so_upstream_proxy }}"
-    HTTP_PROXY: "{{ so_upstream_proxy }}"
-    HTTPS_PROXY: "{{ so_upstream_proxy }}"
-  when: not bundled_rules.stat.exists
-
 # Positive proof the ruleset is actually on the mirror by one route or the
 # other. Without this, a missing tarball stays silent until so_manager 404s
 # staging it for airgap mode, which is a long way from the cause.
@@ -155,13 +132,19 @@
     path: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}"
   register: etopen_present
 
-- name: Fail if the ETOPEN tarball reached the mirror by neither route
+- name: Fail if the ETOPEN ruleset was not bundled with the tarball
   ansible.builtin.fail:
     msg: |
-      {{ so_bundled_rules_filename }} is not on the mirror.
-      Neither a bundled copy at {{ so_bundled_rules_src }} nor a download
-      from {{ so_etopen_upstream_url }} produced it. Airgap mode needs this
-      to populate {{ so_airgap_etopen_dest | default('/nsm/rules/suricata/etopen') }}.
+      {{ so_bundled_rules_filename }} is missing from the mirror because it
+      was not bundled at {{ so_bundled_rules_src }}.
+
+      It MUST ship inside the deployment tarball. These ranges target
+      platforms with NO external access — not even a proxy — so downloading
+      it at deploy time is not an option. Add the file to the repo's rules/
+      directory and make sure build_tarball.sh ships it.
+
+      Airgap mode needs it to populate
+      {{ so_airgap_etopen_dest | default('/nsm/rules/suricata/etopen') }}.
   when: not etopen_present.stat.exists
 
 - name: Compute md5 sibling for bundled ETOPEN rules (SOC verifies via .md5)
