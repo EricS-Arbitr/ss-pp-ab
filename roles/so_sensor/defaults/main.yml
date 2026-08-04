@@ -1,6 +1,10 @@
 ---
 so_sensor_answer_name: "so-ansible-sensor"
-so_sensor_install_timeout: 1200   # 20 min (similar to search)
+# 90 min, matching so_manager and so_search. See the so_search note: the
+# original "similar to search" 20-minute value was a guess inherited from
+# another guess. A timeout that is too short does not just fail the task, it
+# kills so-setup partway through.
+so_sensor_install_timeout: 5400
 so_sensor_poll_interval: 30
 so_sensor_setup_log: "/root/so-setup.log"
 so_sensor_installed_marker: "/opt/so/state/installed"

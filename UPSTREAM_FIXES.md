@@ -11,6 +11,46 @@ Severity key:
 
 
 
+## 2026-08-04 (later 2) · bug · so_search / so_sensor install timeout was 20 min — ansible KILLED so-setup mid-install
+
+**Symptom.** PowerPlant phase 50, `so-search`:
+
+```
+FAILED! => {"attempts": 41, "finished": 1, "msg": "Timeout exceeded", ...}
+so-search : ok=30 changed=3 unreachable=0 failed=1
+```
+
+`salt-key -L` on the manager showed only `so-manager_manager` accepted — no
+key from so-search at all, Denied or otherwise.
+
+**Root cause.** `so_search_install_timeout` was `1200` (20 min) with
+`so_search_poll_interval: 30`, giving exactly the 40 retries observed.
+`so_manager_install_timeout` had already been raised to `5400` with the note
+*"was 45 — real installs seen at 45+ min in dev"*, but that measurement was
+never propagated: `so_sensor` carried `# 20 min (similar to search)` and
+`so_search` carried no justification at all. A guess citing a guess.
+
+`so-setup` on a search node does substantially the same work as on a manager
+— docker, image pulls, elastic — so 20 minutes was never plausible.
+
+**The damage is worse than a failed task.** Ansible's async wrapper does not
+merely stop polling at `async: N`; it TERMINATES the job. so-setup was killed
+partway through, leaving a half-configured node that had not yet reached salt
+key submission. A too-short timeout is destructive, not just impatient.
+
+**Fix.** `so_search_install_timeout` and `so_sensor_install_timeout` both
+raised to `5400`, matching `so_manager`. Overshooting costs nothing — the
+`async_status` poll returns as soon as the job finishes. Undershooting
+destroys the install. Comments in both files now say so.
+
+**Recovery on an already-killed node.** The role's skip logic is
+positive-proof (marker AND `/etc/salt/minion` AND the unit), so a node killed
+before salt was installed re-runs so-setup in full rather than skipping into a
+broken state. Confirm no `so-setup` process is still alive before re-running —
+two concurrent so-setups on one host is the one thing that makes it worse.
+
+**Status: PROPOSED** — verify by re-running phase 50 to completion.
+
 ## 2026-08-04 (later) · bug · Phase 40 retry loop cannot outlast a highstate — `state.apply` needs `queue=True`
 
 **Symptom.** With the IPv6 grain fix in place, `Airgap — apply the soc state`
