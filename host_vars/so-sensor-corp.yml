@@ -47,3 +47,11 @@ so_gre_allowed_source: "172.16.0.42"
 
 # Which router feeds this sensor (documentation + play targeting).
 so_mirror_router: "pp-corp-router"
+
+# Traffic targets for 60-verify. Hosts ON pp-corp-router's mirrored subnets --
+# never the router's own .1 addresses (PORTING_GUIDE 9.10). These exercise
+# eth0 (PP-Services), eth2 (Engineering) and eth1 (BP).
+so_verify_mirror_targets:
+  - 172.16.2.7     # pp-dc01        PP-Services      (eth0)
+  - 172.16.4.10    # pp-eng-wkstn-1 PP-Eng-Department (eth2)
+  - 172.16.3.3     # pp-bp-wkstn-2  PP-Business-Processing (eth1)

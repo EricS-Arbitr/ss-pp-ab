@@ -36,43 +36,45 @@
       ansible.builtin.debug:
         msg: "{{ es_health_out.stdout }}"
 
-# Scoped to the corp sensor: the generator above drives traffic through
-# pp-corp-router only. Running it against all three would fail the OT and
-# edge sensors for the wrong reason.
-- name: SO sensor pcap flow rate
-  hosts: so-sensor-corp
+# Every sensor gets its own end-to-end proof. Traffic targets live in each
+# sensor's host_vars as `so_verify_mirror_targets`, because which addresses
+# force a router to forward out a MIRRORED interface is a per-router fact.
+#
+# Coverage is deliberately partial and that is fine: each sensor's targets
+# exercise one or two of its router's mirrored interfaces, which is enough to
+# prove the whole chain (tc mirred -> GRE encap -> route to sensor -> firewall
+# -> kernel decap -> tun0). It does NOT prove every mirrored interface on
+# every router. Do not read a pass as full coverage.
+- name: SO sensor pcap flow rate — all three sensors
+  hosts: so_sensor
   become: true
   gather_facts: false
-  vars:
-    # Hosts ON the mirrored subnets — never the router's own .1 addresses,
-    # which are locally delivered and generate no mirrorable traffic
-    # (so-ansible PORTING_GUIDE §9.10). These sit behind pp-corp-router, so
-    # they exercise the corp sensor; the OT and edge sensors are not covered
-    # by this check.
-    so_verify_mirror_targets:
-      - 172.16.2.7     # pp-dc01        (PP-Services)
-      - 172.16.4.10    # pp-eng-wkstn-1 (PP-Eng-Department)
-      - 172.16.3.3     # pp-bp-wkstn-2  (PP-Business-Processing)
   tasks:
-    # On an idle range (empty Ops/Eng/Services subnets) a passive tcpdump
-    # reports 0 packets even though the GRE mirror is fully functional.
-    # Generate a burst of ICMP into each mirrored subnet from the manager
-    # in the background, then tcpdump in the foreground.
+    # On an idle range a passive tcpdump reports 0 packets even though the
+    # GRE mirror is fully functional -- which is exactly what so_sensor's
+    # inline check reports at install time. Generate a burst of ICMP first.
     #
-    # BUG FIXED 2026-07-29: this previously pinged the .1 GATEWAY IPs
-    # (172.16.8.1 etc.), which generates NO mirrorable traffic at all. Those
-    # are router-0's own addresses, so the packets are locally delivered on
-    # the interface they arrive on (eth3, security) and never egress
-    # eth0/eth1/eth2 — where the `tc ... action mirred egress mirror` rules
-    # live. The check therefore reported "0 packets captured" even with a
-    # perfectly working mirror, and masked the real GRE firewall bug for
-    # several deploy cycles.
+    # BUG FIXED 2026-07-29: this previously pinged the .1 GATEWAY IPs, which
+    # generates NO mirrorable traffic at all. Those are the router's own
+    # addresses, so packets are locally delivered on the interface they
+    # arrive on and never egress a mirrored interface, where the
+    # `tc ... action mirred egress mirror` rules live. The check reported
+    # "0 packets captured" against a perfectly working mirror and masked a
+    # real GRE firewall bug for several deploy cycles. See PORTING_GUIDE 9.10.
     #
-    # Targets must be addresses ON the mirrored subnets so the router has to
-    # forward OUT of the mirrored interface. Unresponsive targets are fine —
-    # the router still ARPs on that interface, and ARP frames are mirrored
-    # too (confirmed: `gre-proto-0x806` seen encapsulated on the wire).
-    - name: Generate mirror-able traffic into Ops/Eng/Services subnets (background)
+    # Targets must be addresses ON a mirrored subnet. Unresponsive targets are
+    # fine -- the router still ARPs out that interface and ARP frames are
+    # mirrored too (confirmed: gre-proto-0x806 seen encapsulated on the wire).
+    - name: Fail early if this sensor has no mirror targets defined
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} has no so_verify_mirror_targets in host_vars.
+          Without targets the tcpdump below would report 0 packets and fail for
+          the wrong reason. Add addresses that sit ON one of this sensor's
+          mirrored subnets -- never a router's own .1 address.
+      when: so_verify_mirror_targets | default([]) | length == 0
+
+    - name: Generate mirror-able traffic toward this sensor's subnets (background)
       ansible.builtin.shell: |
         for tgt in {{ so_verify_mirror_targets | join(' ') }}; do
           ping -c 10 -i 0.5 -W 1 -q -n "$tgt" &
@@ -93,4 +95,4 @@
 
     - name: report
       ansible.builtin.debug:
-        msg: "{{ pcap_out.stdout }}"
+        msg: "{{ inventory_hostname }} via {{ so_verify_mirror_targets | join(', ') }}: {{ pcap_out.stdout }}"

@@ -47,3 +47,16 @@ so_gre_allowed_source: "192.168.200.202"
 
 # Which router feeds this sensor (documentation + play targeting).
 so_mirror_router: "pp-ot-router"
+
+# Traffic targets for 60-verify. Hosts ON pp-ot-router's mirrored subnets.
+# 192.168.95.2 is the OT address CLAUDE.md's own L3 verification recipe uses
+# (`tracert -d 192.168.95.2` from a corp workstation), so corp->OT is a
+# supported path. 192.168.100.5 is pp-dc03 on the OT-Ctrl subnet.
+#
+# NOTE: traffic is generated from so-manager, so it crosses pp-ot-firewall
+# (default-deny, ESP boundary). If this check fails with 0 packets, confirm
+# ICMP corp->OT is permitted there BEFORE suspecting the mirror -- a firewall
+# drop and a broken mirror look identical from the sensor.
+so_verify_mirror_targets:
+  - 192.168.95.2     # Gas-Turbine    (eth1)
+  - 192.168.100.5    # pp-dc03        PP-OT-Ctrl (eth4)

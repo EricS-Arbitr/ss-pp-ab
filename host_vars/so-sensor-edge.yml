@@ -47,3 +47,12 @@ so_gre_allowed_source: "75.21.1.2"
 
 # Which router feeds this sensor (documentation + play targeting).
 so_mirror_router: "pp-isp-router"
+
+# Traffic targets for 60-verify. Hosts ON pp-isp-router's mirrored eth2
+# (200.200.200.0/24). Every range host defaults toward is-inet, so this path
+# is exercised constantly and is the most reliable of the three.
+# Do NOT use 210.210.210.1 or 200.200.200.1 -- those are the router's own
+# interface addresses and generate no mirrorable traffic (PORTING_GUIDE 9.10).
+so_verify_mirror_targets:
+  - 200.200.200.2    # is-inet (eth2)
+  - 200.200.200.205  # elgg    (eth2)
