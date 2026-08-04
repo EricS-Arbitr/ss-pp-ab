@@ -1,7 +1,10 @@
 ---
 # so_apt_mirror defaults — overridden by group_vars/all.yml where appropriate.
 
-so_mirror_root: /var/www/so-mirror
+# so_mirror_root MOVED to group_vars/all/security_onion.yml 2026-08-04 --
+# 75-endpoint.yml stages agent installers into the mirror without including
+# this role, and role defaults are role-scoped. Left as a comment rather than
+# a duplicate so there is one source of truth.
 so_mirror_port: 80
 
 # HTTP proxy for git clone of SO source from GitHub (mgmt-plane proxy).

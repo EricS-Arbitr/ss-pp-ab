@@ -11,6 +11,44 @@ Severity key:
 
 
 
+## 2026-08-04 (later 8) · bug · Role-scoped variables referenced from a play that does not include the role — third instance
+
+**Symptom.** `75-endpoint.yml` staging play, on the controller:
+
+```
+fatal: [ansible]: FAILED! => "'so_mirror_root' is undefined"
+```
+
+**Cause.** `so_mirror_root` lives in `roles/so_apt_mirror/defaults/main.yml`,
+and `so_agent_installer_windows` / `_linux` in
+`roles/elastic_agent/defaults/main.yml`. Role defaults are **role-scoped**. The
+staging play includes neither role — it only copies files into the mirror
+directory — so none of the three resolved.
+
+**Third instance of this exact trap.** `so_bundled_rules_filename` was the
+first (2026-07-29 fresh-range 3). The shape is always the same: a value that
+"belongs" to a role conceptually, but is read by a play that does not run it.
+
+**Fix.** All three promoted to `group_vars/all/security_onion.yml`, with
+comments left in the role defaults pointing at the new home rather than
+duplicate definitions, so there is one source of truth. `so_mirror_host` was
+already correctly all-scoped.
+
+**Why verify_vars.py does not catch this, and cannot as written.** It treats
+any `roles/*/defaults/main.yml` entry as globally defined, so a scope error
+resolves cleanly at build time and fails at run time. Its warning count is
+unchanged at 3. Documented as a known limitation in CLAUDE.md — the rule to
+apply by hand is that a variable read by more than one role, or by any bare
+play, belongs in `group_vars/all/`.
+
+**Unrelated bookkeeping.** The expected-warning membership changed: `nat` is no
+longer referenced anywhere in the repo, and `unlisted` is now flagged — a false
+positive, since it is a task-level `vars:` entry and verify_vars.py parses only
+play-level `vars:`.
+
+**Status: PROPOSED** — verify by re-running `75-endpoint.yml` past the staging
+play.
+
 ## 2026-08-04 (later 7) · bug · Two `win_powershell` output bugs of my own — one check that could never pass, one that could never fail
 
 Both were written this week, in the same playbooks that carry the rule about

@@ -10,8 +10,10 @@ so_fleet_host: "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
 
 so_agent_mirror_url: "http://{{ so_mirror_host }}/agents"
 
-so_agent_installer_windows: "so-elastic-agent_windows_amd64"
-so_agent_installer_linux: "so-elastic-agent_linux_amd64"
+# so_agent_installer_windows / _linux MOVED to
+# group_vars/all/security_onion.yml 2026-08-04 -- 75-endpoint.yml's staging
+# play references them without including this role, and role defaults are
+# role-scoped. One source of truth; do not redefine here.
 
 # SO generates these installers per-grid with the Fleet URL and enrollment
 # token already embedded, so there is no token to carry in vault and normally

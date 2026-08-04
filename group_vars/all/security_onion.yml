@@ -152,3 +152,16 @@ so_agent_endpoint_subnets:
 # /opt/so/saltstack/default/salt/firewall/defaults.yaml on 2026-08-04, mapping
 # to portgroups elastic_agent_control (8220), _data and _update.
 so_agent_firewall_hostgroup: "elastic_agent_endpoint"
+
+# --- Variables that MUST be all-scoped, not role-scoped -------------------
+# Role defaults are ROLE-scoped: a play that does not include the role cannot
+# see them. playbooks/75-endpoint.yml stages installers onto the mirror
+# without including either so_apt_mirror or elastic_agent, so these have to
+# live here. Third instance of this trap -- see so_bundled_rules_filename,
+# UPSTREAM_FIXES 2026-07-29 (fresh-range 3).
+#
+# verify_vars.py cannot catch it: it treats any role default as globally
+# defined, so scope errors resolve fine at build time and fail at run time.
+so_mirror_root: /var/www/so-mirror
+so_agent_installer_windows: "so-elastic-agent_windows_amd64"
+so_agent_installer_linux: "so-elastic-agent_linux_amd64"
