@@ -84,11 +84,16 @@
   become: true
   gather_facts: false
   tasks:
+    # Owned by the ANSIBLE USER, not www-data. `fetch` writes its local copy
+    # as the ansible user -- `become` escalates on the REMOTE side (the manager
+    # being read from), never for the local write. A www-data directory
+    # therefore gives PermissionError on the controller. nginx only needs to
+    # READ these, which 0755 + 0644 provides.
     - name: Mirror directory for agent installers
       ansible.builtin.file:
         path: "{{ so_mirror_root }}/agents"
         state: directory
-        owner: www-data
+        owner: "{{ ansible_user | default('simspace') }}"
         group: www-data
         mode: '0755'
 
@@ -113,11 +118,12 @@
         label: "{{ item.item }}"
       when: not item.stat.exists
 
-    - name: Ownership so nginx can serve them
+    # Mode only -- deliberately NOT chown'ing to www-data. If these became
+    # www-data-owned, deleting one to force a refresh would hit the same
+    # PermissionError on the next fetch. Readable is all nginx needs.
+    - name: Readable by nginx
       ansible.builtin.file:
         path: "{{ so_mirror_root }}/agents/{{ item }}"
-        owner: www-data
-        group: www-data
         mode: '0644'
       loop:
         - "{{ so_agent_installer_windows }}"

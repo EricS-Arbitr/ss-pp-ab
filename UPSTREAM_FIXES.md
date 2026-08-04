@@ -11,6 +11,34 @@ Severity key:
 
 
 
+## 2026-08-04 (later 9) · bug · `fetch` writes its local copy as the ansible user, not root — `become` does not apply to the controller side
+
+**Symptom.** `75-endpoint.yml`, pulling the agent installers from the manager
+to the controller's mirror:
+
+```
+PermissionError: [Errno 13] Permission denied:
+  b'/var/www/so-mirror/agents/so-elastic-agent_windows_amd64'
+failed: [ansible -> so-manager]
+```
+
+**Cause.** The play carries `become: true`, which is easy to read as "this
+whole task runs as root". It does not. For `fetch`, escalation applies to the
+REMOTE read (on so-manager); the local write happens as the ansible user,
+`simspace`. The directory had been created `owner: www-data`, so simspace
+could not write into it.
+
+The `[ansible -> so-manager]` in the failure line is the tell: the task is
+delegated, and the two ends have different privilege.
+
+**Fix.** The staging directory is now owned by the ansible user with group
+`www-data`, mode 0755, and the follow-up task sets mode 0644 WITHOUT chowning
+to www-data. nginx only needs to read these files; making them www-data-owned
+would reintroduce the same failure the next time one is deleted to force a
+refresh.
+
+**Status: PROPOSED** — verify by re-running `75-endpoint.yml` past staging.
+
 ## 2026-08-04 (later 8) · bug · Role-scoped variables referenced from a play that does not include the role — third instance
 
 **Symptom.** `75-endpoint.yml` staging play, on the controller:
