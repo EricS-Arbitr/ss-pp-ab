@@ -1,0 +1,26 @@
+---
+# elastic_agent — enroll a host into Security Onion's Fleet.
+
+# Where the installers are served from. so_apt_mirror already runs nginx on
+# the controller; 75-endpoint.yml stages SO's installers into it. Endpoints
+# fetch over the mgmt plane, exactly as they already fetch Chrome, Sysmon and
+# the Splunk forwarder from the in-platform Nexus.
+# The manager, which is where Fleet listens.
+so_fleet_host: "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
+
+so_agent_mirror_url: "http://{{ so_mirror_host }}/agents"
+
+so_agent_installer_windows: "so-elastic-agent_windows_amd64"
+so_agent_installer_linux: "so-elastic-agent_linux_amd64"
+
+# SO generates these installers per-grid with the Fleet URL and enrollment
+# token already embedded, so there is no token to carry in vault and normally
+# no arguments to pass. Overridable in case a grid needs --force.
+so_agent_install_args: ""
+
+so_agent_windows_dir: 'C:\Windows\Temp\so-agent'
+so_agent_linux_dir: "/opt/so-agent"
+
+# Proof of enrollment, not proof the installer exited 0.
+so_agent_windows_service: "Elastic Agent"
+so_agent_linux_service: "elastic-agent"

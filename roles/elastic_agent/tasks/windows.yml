@@ -1,0 +1,76 @@
+---
+# Idempotency is by SERVICE STATE, not by a marker file we wrote ourselves.
+# A marker proves only that we once got this far; the service running proves
+# the agent is actually installed. Same reasoning as so_manager's setup
+# marker (UPSTREAM_FIXES 2026-07-29 fresh-range 2).
+- name: Is the Elastic Agent service already present and running?
+  ansible.windows.win_powershell:
+    script: |
+      $Ansible.Changed = $false
+      $svc = Get-Service -Name '{{ so_agent_windows_service }}' -ErrorAction SilentlyContinue
+      if ($svc) { Write-Output $svc.Status } else { Write-Output "ABSENT" }
+  register: agent_svc_before
+  changed_when: false
+
+- name: Staging directory
+  ansible.windows.win_file:
+    path: "{{ so_agent_windows_dir }}"
+    state: directory
+  when: agent_svc_before.output[0] != 'Running'
+
+# ~213 MB per host. Pulled from the controller's mirror over the mgmt plane,
+# not from the manager: the manager is simultaneously ingesting from three
+# sensors, and its /packages/ path returns 503 on this grid anyway.
+- name: Download SO's Elastic Agent installer
+  ansible.windows.win_get_url:
+    url: "{{ so_agent_mirror_url }}/{{ so_agent_installer_windows }}"
+    dest: "{{ so_agent_windows_dir }}\\{{ so_agent_installer_windows }}.exe"
+    timeout: 900
+    validate_certs: no
+  when: agent_svc_before.output[0] != 'Running'
+
+- name: Run the installer (enrolls into Fleet using the embedded token)
+  ansible.windows.win_command: >-
+    {{ so_agent_windows_dir }}\{{ so_agent_installer_windows }}.exe {{ so_agent_install_args }}
+  register: agent_install
+  when: agent_svc_before.output[0] != 'Running'
+  changed_when: agent_install.rc == 0
+  failed_when: false          # exit code is checked below, with the log
+
+# The installer's exit code is not trusted on its own -- the same lesson as
+# so-setup, which exits 0 having failed. Assert on the service instead, and
+# surface the installer output only when that assertion fails.
+- name: Wait for the Elastic Agent service to come up
+  ansible.windows.win_powershell:
+    script: |
+      $Ansible.Changed = $false
+      $deadline = (Get-Date).AddSeconds(180)
+      do {
+        $svc = Get-Service -Name '{{ so_agent_windows_service }}' -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq 'Running') { Write-Output 'Running'; exit }
+        Start-Sleep -Seconds 5
+      } while ((Get-Date) -lt $deadline)
+      if ($svc) { Write-Output $svc.Status } else { Write-Output 'ABSENT' }
+  register: agent_svc_after
+  changed_when: false
+
+- name: Fail with the installer output if the agent never started
+  ansible.builtin.fail:
+    msg: |
+      Elastic Agent is not running on {{ inventory_hostname }}
+      (service state: {{ agent_svc_after.output[0] }}).
+
+      Installer rc={{ agent_install.rc | default('n/a') }}
+      stdout: {{ agent_install.stdout | default('') | trim }}
+      stderr: {{ agent_install.stderr | default('') | trim }}
+
+      The usual cause is the elastic_agent_endpoint firewall hostgroup not
+      covering this host's subnet, so enrollment to 8220 on the manager times
+      out. Check `so-firewall` state on {{ groups['so_manager'][0] }}.
+  when: agent_svc_after.output[0] != 'Running'
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Elastic Agent {{ agent_svc_after.output[0] }}
+      {{ '(already installed)' if agent_svc_before.output[0] == 'Running' else '(newly enrolled)' }}

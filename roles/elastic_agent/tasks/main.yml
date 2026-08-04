@@ -1,0 +1,68 @@
+---
+# =========================================================================
+# elastic_agent — enroll this host into Security Onion's Fleet
+# =========================================================================
+# SO's own installers are used, staged onto the controller's nginx mirror by
+# 75-endpoint.yml. They embed this grid's Fleet URL and enrollment token, so
+# nothing secret lives in this role and nothing is fetched from the internet.
+#
+# PREREQUISITES, both handled before this role runs:
+#   * playbooks/05-time.yml — a clock hours fast puts endpoint events ahead of
+#     the sensors' data and can break TLS validity windows during enrollment.
+#   * the elastic_agent_endpoint firewall hostgroup on the manager, opening
+#     8220 plus the data and update ports to these subnets.
+#
+# OS branch is by INVENTORY GROUP, not ansible_os_family: these plays run
+# with gather_facts disabled (44 hosts, and facts buy us nothing here), so
+# ansible_os_family is undefined.
+# =========================================================================
+
+# Fail fast and per-host on an unreachable Fleet port. Without this the
+# installer runs, appears to succeed, and the failure surfaces minutes later
+# as a service that never starts -- with the real cause a firewall two hops
+# away. Matters most for the 192.168.100.0/24 OT hosts, which sit behind
+# pp-ot-firewall (default-deny) and may have no path to pp-security at all.
+- name: Preflight — Fleet control port reachable (Windows)
+  ansible.windows.win_powershell:
+    script: |
+      $Ansible.Changed = $false
+      Write-Output (Test-NetConnection -ComputerName '{{ so_fleet_host }}' -Port 8220 -WarningAction SilentlyContinue).TcpTestSucceeded
+  register: fleet_reach_win
+  changed_when: false
+  when: inventory_hostname in groups['windows']
+
+- name: Preflight — Fleet control port reachable (Linux)
+  ansible.builtin.shell: |
+    timeout 5 bash -c '</dev/tcp/{{ so_fleet_host }}/8220' 2>/dev/null && echo True || echo False
+  args:
+    executable: /bin/bash
+  register: fleet_reach_lin
+  changed_when: false
+  when: inventory_hostname in groups['linux']
+
+- name: Fail if this host cannot reach Fleet
+  ansible.builtin.fail:
+    msg: |
+      {{ inventory_hostname }} cannot reach {{ so_fleet_host }}:8220, so an
+      agent installed here could never enroll.
+
+      If this host is on 192.168.100.0/24, the likely cause is pp-ot-firewall,
+      which is default-deny and has no rule permitting the OT segment to reach
+      pp-security on Fleet's ports. That needs a pfsense_rules entry in
+      host_vars/pp-ot-firewall.yml — a deliberate change to the range's
+      security posture, not something this role should make on its own.
+
+      Otherwise check the elastic_agent_endpoint hostgroup on
+      {{ groups['so_manager'][0] }}: `so-firewall` state and `iptables -S`.
+  when: >-
+    (inventory_hostname in groups['windows'] and not (fleet_reach_win.output[0] | default(false) | bool))
+    or
+    (inventory_hostname in groups['linux'] and (fleet_reach_lin.stdout | default('False') | trim) != 'True')
+
+- name: Install and enroll (Windows)
+  ansible.builtin.include_tasks: windows.yml
+  when: inventory_hostname in groups['windows']
+
+- name: Install and enroll (Linux)
+  ansible.builtin.include_tasks: linux.yml
+  when: inventory_hostname in groups['linux']

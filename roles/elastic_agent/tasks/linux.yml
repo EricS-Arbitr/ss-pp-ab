@@ -1,0 +1,58 @@
+---
+- name: Is the Elastic Agent service already active?
+  ansible.builtin.command: "systemctl is-active {{ so_agent_linux_service }}"
+  register: agent_active_before
+  changed_when: false
+  failed_when: false
+
+- name: Staging directory
+  ansible.builtin.file:
+    path: "{{ so_agent_linux_dir }}"
+    state: directory
+    mode: '0755'
+  when: agent_active_before.stdout | trim != 'active'
+
+- name: Download SO's Elastic Agent installer
+  ansible.builtin.get_url:
+    url: "{{ so_agent_mirror_url }}/{{ so_agent_installer_linux }}"
+    dest: "{{ so_agent_linux_dir }}/{{ so_agent_installer_linux }}"
+    mode: '0755'
+    timeout: 900
+  when: agent_active_before.stdout | trim != 'active'
+
+- name: Run the installer (enrolls into Fleet using the embedded token)
+  ansible.builtin.command: >-
+    {{ so_agent_linux_dir }}/{{ so_agent_installer_linux }} {{ so_agent_install_args }}
+  register: agent_install
+  when: agent_active_before.stdout | trim != 'active'
+  changed_when: agent_install.rc == 0
+  failed_when: false
+
+- name: Wait for the Elastic Agent service to become active
+  ansible.builtin.command: "systemctl is-active {{ so_agent_linux_service }}"
+  register: agent_active_after
+  until: agent_active_after.stdout | trim == 'active'
+  retries: 36
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Fail with the installer output if the agent never started
+  ansible.builtin.fail:
+    msg: |
+      Elastic Agent is not active on {{ inventory_hostname }}
+      (systemctl is-active: {{ agent_active_after.stdout | trim }}).
+
+      Installer rc={{ agent_install.rc | default('n/a') }}
+      stdout: {{ agent_install.stdout | default('') | trim }}
+      stderr: {{ agent_install.stderr | default('') | trim }}
+
+      The usual cause is the elastic_agent_endpoint firewall hostgroup not
+      covering this host's subnet, so enrollment to 8220 times out.
+  when: agent_active_after.stdout | trim != 'active'
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Elastic Agent {{ agent_active_after.stdout | trim }}
+      {{ '(already installed)' if agent_active_before.stdout | trim == 'active' else '(newly enrolled)' }}

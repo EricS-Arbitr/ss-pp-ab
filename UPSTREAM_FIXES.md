@@ -11,6 +11,75 @@ Severity key:
 
 
 
+## 2026-08-04 (later 6) · enhancement · Elastic Agent endpoint telemetry into SO — Sysmon + eventlogs from all 44 managed hosts
+
+**Why.** SO had wire visibility only: Zeek and Suricata parsing mirrored
+packets from the three sensors. That stops at the host boundary — you see a
+workstation talk to a DC, not what ran on it. Endpoint telemetry was going to
+Splunk (universal forwarder to pp-splunk) and nowhere else.
+
+**Scope.** 44 hosts: `[windows]` + `[linux]` minus `[unmanaged]` OT devices
+and minus the SO grid, which enrolls itself. 8 subnets. Additive to Splunk —
+nothing is removed from the existing forwarder path.
+
+**What the range already had, which shaped the design.**
+- *Sysmon was already deployed, but only on `[aue]`.* `arbitr_pp_playbook.yaml`
+  installs it in the "apply AUE settings" play, so the workstations had it and
+  pp-dc01/02/03, pp-file, pp-sql, pp-mail had none — exactly where process
+  ancestry matters most. The role is idempotent (`creates_service: Sysmon64`),
+  so extending it to all of `[windows]` is a no-op on the AUE boxes.
+- *An in-platform Nexus is already the convention.* Chrome, Firefox, Sysmon,
+  the Splunk forwarder, CrowdStrike, SentinelOne and Defender all install from
+  `nexus.dev.ng.simspace.lan/repository/ng_raw/installers/`. This answers the
+  bundle-vs-Nexus question deferred on 2026-08-03: the range already has a
+  working in-platform source and needs no bundling.
+
+**Installers.** SO builds per-grid installers at
+`/nsm/elastic-fleet/so_agent-installers/` with the Fleet URL and enrollment
+token already embedded — so no token in vault, and the 1.2 GB
+`elastic-agent_SO-9.0.8.tar.gz` in `/nsm/elastic-fleet/artifacts/` is the
+local component source, which is what makes this work airgapped.
+
+**Delivery — not from the manager.** SO serves the installers at
+`https://<manager>/packages/` (nginx maps
+`/nsm/elastic-fleet/so_agent-installers/` to `/opt/socore/html/packages`), but
+that path returns **503** on this grid. Rather than debug it, the installers
+are staged once onto the controller's existing `so_apt_mirror` nginx and
+endpoints fetch over the mgmt plane — the same path they already use for every
+other installer. This also avoids 44 hosts pulling ~8.5 GB from the manager
+while it is ingesting from three sensors. Enrollment still goes to the manager
+on 8220.
+
+**Firewall.** The hostgroup is `elastic_agent_endpoint`, confirmed in
+`/opt/so/saltstack/default/salt/firewall/defaults.yaml`, mapping to portgroups
+`elastic_agent_control` (8220), `_data` and `_update`. Applied with
+`so-firewall includehost`, which writes the firewall PILLAR — a salt input, so
+it survives the highstate. Editing rendered iptables would not; same lesson as
+`soc.json` and the GRE rule.
+
+**Guards, deliberately.** Each is aimed at a failure that would otherwise
+surface far from its cause:
+- An assert that every agent target's in-scenario prefix appears in
+  `so_agent_endpoint_subnets`. A host on an undeclared subnet would install an
+  agent that can never enroll, and the symptom would be a timeout 200 lines
+  into a 44-host run.
+- A per-host preflight that Fleet's 8220 is reachable BEFORE installing.
+- Idempotency keyed on the agent SERVICE STATE, never a marker file we wrote
+  ourselves.
+- Verification of the firewall against the RUNNING `iptables -S`, not the
+  pillar, and of enrollment against FLEET, not the endpoints' own opinion.
+
+**Known open item.** The six hosts on 192.168.100.0/24 (pp-dc03, pp-dcs-ctrl,
+pp-ctl-wks-01..04) sit behind pp-ot-firewall, which is default-deny with no
+rule permitting OT to reach pp-security on Fleet's ports. The preflight fails
+those hosts individually with a message naming the needed
+`host_vars/pp-ot-firewall.yml` change; the other 38 still enroll. Opening that
+path changes the range's security posture and is a deliberate decision, not
+something this role should make on its own.
+
+**Status: PROPOSED** — not yet run. Verify with `75-endpoint.yml` and a Fleet
+agent count of 49 (44 endpoints + 5 grid nodes).
+
 ## 2026-08-04 (later 5) · platform · SOC login loops on win-hunt-1 — the Windows clock fix was left behind when 00-setup was excluded
 
 **Symptom.** `https://172.16.9.30` from win-hunt-1 renders

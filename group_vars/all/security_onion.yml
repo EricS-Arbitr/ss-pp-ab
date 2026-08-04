@@ -123,3 +123,32 @@ so_airgap_repos:
   - name: securityonion-resources-playbooks
     url: "https://github.com/Security-Onion-Solutions/securityonion-resources-playbooks"
     dest: "/nsm/airgap-resources/playbooks/securityonion-resources-playbooks"
+
+# --- Elastic Agent endpoint telemetry ------------------------------------
+# Subnets that must reach the manager's Fleet ports (8220 control, plus data
+# and update). Fed to `so-firewall includehost elastic_agent_endpoint` by
+# playbooks/75-endpoint.yml.
+#
+# Derived from the inventory on 2026-08-04 — every host in [windows] + [linux]
+# minus [unmanaged] and the SO grid itself, 44 hosts in 8 subnets. Listed
+# explicitly rather than computed at runtime so the permitted set is reviewable,
+# and 75-endpoint.yml ASSERTS that every agent target's in-scenario address
+# falls inside one of these. Add a host on a new subnet and the assert fails
+# loudly instead of that host silently failing to enroll.
+so_agent_endpoint_subnets:
+  - "172.16.2.0/24"       # PP-Services   — pp-dc01/02, pp-file, pp-mail, pp-sql, pp-syslog
+  - "172.16.3.0/24"       # BP            — pp-bp-wkstn-1..6, pp-bp-*
+  - "172.16.4.0/24"       # Engineering   — pp-eng-wkstn-1..
+  - "172.16.5.0/24"       # Legal Staff   — pp-ls-wkstn-1..
+  - "172.16.6.0/24"       # InfoSec       — pp-is-wkstn-1..4, pp-proxy
+  - "172.16.8.0/24"       # DMZ           — pp-dmz-dns, pp-dmz-smtp, pp-www
+  - "172.16.9.0/24"       # pp-security   — pp-splunk, win-hunt-1
+  - "192.168.100.0/24"    # PP-OT-Ctrl    — pp-dc03, pp-dcs-ctrl, pp-ctl-wks-01..04
+                          #   NOTE: sits behind pp-ot-firewall (default-deny).
+                          #   75-endpoint.yml probes reachability before
+                          #   installing rather than assuming the path is open.
+
+# The SO hostgroup that opens Fleet's ports. Confirmed present in
+# /opt/so/saltstack/default/salt/firewall/defaults.yaml on 2026-08-04, mapping
+# to portgroups elastic_agent_control (8220), _data and _update.
+so_agent_firewall_hostgroup: "elastic_agent_endpoint"

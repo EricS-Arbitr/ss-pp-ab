@@ -62,3 +62,208 @@
   tags:
     - sysmon
     - endpoint
+
+# --- Stage SO's agent installers onto the controller's mirror -------------
+# SO builds per-grid installers with the Fleet URL and enrollment token
+# already embedded, so there is no secret to carry and nothing to fetch from
+# the internet. They are ~213 MB each.
+#
+# WHY THE CONTROLLER AND NOT THE MANAGER: SO serves these at
+# https://<manager>/packages/, but that path returns 503 on this grid, and
+# pointing 44 hosts at the manager would have it serving ~8.5 GB while it is
+# also ingesting from three sensors. The controller already runs nginx for
+# so_apt_mirror, and endpoints already fetch Chrome, Sysmon and the Splunk
+# forwarder over the mgmt plane from the in-platform Nexus -- this is the
+# same delivery path they already use.
+- name: Stage the Elastic Agent installers on the controller mirror
+  hosts: ansible_controller
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Mirror directory for agent installers
+      ansible.builtin.file:
+        path: "{{ so_mirror_root }}/agents"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Which installers are already staged?
+      ansible.builtin.stat:
+        path: "{{ so_mirror_root }}/agents/{{ item }}"
+      register: staged
+      loop:
+        - "{{ so_agent_installer_windows }}"
+        - "{{ so_agent_installer_linux }}"
+
+    # fetch pulls manager -> controller over SSH. ~530 MB combined, once.
+    # Guarded on the stat so a re-run does not move it again.
+    - name: Pull the installers from the manager
+      ansible.builtin.fetch:
+        src: "/nsm/elastic-fleet/so_agent-installers/{{ item.item }}"
+        dest: "{{ so_mirror_root }}/agents/{{ item.item }}"
+        flat: true
+      delegate_to: "{{ groups['so_manager'][0] }}"
+      loop: "{{ staged.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.stat.exists
+
+    - name: Ownership so nginx can serve them
+      ansible.builtin.file:
+        path: "{{ so_mirror_root }}/agents/{{ item }}"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      loop:
+        - "{{ so_agent_installer_windows }}"
+        - "{{ so_agent_installer_linux }}"
+
+    # Positive proof: HTTP-reachable, not merely present on disk. A file the
+    # endpoints cannot actually GET is the failure this catches.
+    - name: Smoke test — installers are served over HTTP
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/agents/{{ item }}"
+        method: HEAD
+        status_code: 200
+      loop:
+        - "{{ so_agent_installer_windows }}"
+        - "{{ so_agent_installer_linux }}"
+      changed_when: false
+  tags: [endpoint, agent]
+
+# --- Open Fleet's ports to the endpoint subnets ---------------------------
+# so-firewall writes to the firewall pillar, which is a salt INPUT, so this
+# survives the 15-minute highstate. Editing rendered iptables would not --
+# the same lesson as soc.json and the GRE rule.
+- name: Permit the endpoint subnets to reach Fleet
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  vars:
+    # Every host that will run an agent: windows + linux, minus the OT
+    # devices we cannot manage and minus the SO grid, which enrolls itself.
+    agent_targets: >-
+      {{ ((groups['windows'] | default([])) + (groups['linux'] | default([])))
+         | difference(groups['unmanaged'] | default([]))
+         | difference(groups['so_all'] | default([]))
+         | unique | sort | list }}
+  tasks:
+    # Guard first: a host on a subnet nobody listed would install an agent
+    # that can never enroll, and the only symptom would be a timeout 200
+    # lines into a 44-host run. All declared subnets are /24, so comparing
+    # the first three octets is exact here -- if a /27 or /16 is ever added,
+    # this needs a real CIDR containment check (ansible.utils.ipaddr).
+    - name: Collect each agent target's in-scenario network prefix
+      ansible.builtin.set_fact:
+        target_prefixes: >-
+          {{ target_prefixes | default({}) | combine({ item: prefix }) }}
+      vars:
+        prefix: >-
+          {{ (hostvars[item].network_interfaces | default([]))
+             | map(attribute='ipv4.address') | select('defined')
+             | reject('match', '^10\.255\.')
+             | map('regex_replace', '^(\d+\.\d+\.\d+)\..*$', '\1')
+             | first | default('NO-IN-SCENARIO-IP') }}
+      loop: "{{ agent_targets }}"
+      loop_control:
+        label: "{{ item }}"
+      run_once: true
+
+    - name: Every agent target must sit in a declared endpoint subnet
+      ansible.builtin.assert:
+        that:
+          - unlisted | length == 0
+        fail_msg: |
+          These agent targets are not covered by so_agent_endpoint_subnets:
+            {{ unlisted | join(', ') }}
+          Add their subnet to group_vars/all/security_onion.yml. Without it
+          Fleet's ports stay closed and enrollment times out with no useful
+          error on the endpoint itself.
+        success_msg: "all {{ agent_targets | length }} agent targets are covered"
+      vars:
+        declared: >-
+          {{ so_agent_endpoint_subnets
+             | map('regex_replace', '^(\d+\.\d+\.\d+)\..*$', '\1') | list }}
+        unlisted: >-
+          {{ target_prefixes | dict2items
+             | rejectattr('value', 'in', declared)
+             | map(attribute='key') | list }}
+      run_once: true
+
+    - name: Include each endpoint subnet in the {{ so_agent_firewall_hostgroup }} hostgroup
+      ansible.builtin.command: >-
+        so-firewall includehost {{ so_agent_firewall_hostgroup }} {{ item }}
+      loop: "{{ so_agent_endpoint_subnets }}"
+      register: fw_include
+      changed_when: fw_include.rc == 0
+      run_once: true
+
+    - name: Apply the firewall state
+      ansible.builtin.command: "so-firewall apply"
+      run_once: true
+      register: fw_apply
+      changed_when: fw_apply.rc == 0
+      until: fw_apply.rc == 0
+      retries: 40
+      delay: 30
+
+    # Proof the rules are in the RUNNING ruleset, not just the pillar.
+    - name: Verify every endpoint subnet is now permitted to 8220
+      ansible.builtin.shell: |
+        set -o pipefail
+        iptables -S | grep -E -- "-s {{ item | regex_escape }}" | grep -c 8220 || true
+      args:
+        executable: /bin/bash
+      loop: "{{ so_agent_endpoint_subnets }}"
+      register: fw_proof
+      changed_when: false
+      failed_when: (fw_proof.stdout | trim | int) < 1
+      run_once: true
+  tags: [endpoint, agent, firewall]
+
+# --- Enroll every endpoint ------------------------------------------------
+# serial: 8 deliberately. 44 hosts pulling ~213 MB simultaneously would move
+# ~8.5 GB through one nginx while the manager is also ingesting from three
+# sensors. Batches of 8 keep that bounded; the whole run is slower but does
+# not starve the grid it is feeding.
+- name: Enroll endpoints into Security Onion's Fleet
+  hosts: windows:linux:!unmanaged:!so_all
+  gather_facts: false
+  serial: 8
+  roles:
+    - elastic_agent
+  tags: [endpoint, agent]
+
+# --- Prove it from Fleet's side, not the endpoints' -----------------------
+# Every endpoint reporting "service running" is not the same as Fleet having
+# them enrolled and healthy. Ask the authority.
+- name: Verify enrollment from Fleet
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  vars:
+    expected: >-
+      {{ (((groups['windows'] | default([])) + (groups['linux'] | default([])))
+          | difference(groups['unmanaged'] | default([]))
+          | difference(groups['so_all'] | default([]))
+          | unique | list | length) + (groups['so_all'] | default([]) | length) }}
+  tasks:
+    - name: Count agents Fleet considers healthy
+      ansible.builtin.shell: |
+        set -o pipefail
+        so-elastic-agent-status 2>/dev/null | grep -ci "healthy" || true
+      args:
+        executable: /bin/bash
+      register: fleet_count
+      changed_when: false
+
+    - name: Report enrollment
+      ansible.builtin.debug:
+        msg: >-
+          Fleet reports {{ fleet_count.stdout | trim }} healthy agents;
+          {{ expected }} expected ({{ expected | int - (groups['so_all'] | default([]) | length) }}
+          endpoints + {{ groups['so_all'] | default([]) | length }} SO grid nodes).
+          A shortfall means some hosts installed but did not enroll — check
+          the elastic_agent_endpoint hostgroup covers their subnet.
+  tags: [endpoint, agent]
