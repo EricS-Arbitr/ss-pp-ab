@@ -35,6 +35,12 @@
 
 - import_playbook: arbitr_pp_playbook.yaml
 
+# Windows clocks read the UTC RTC as local time, so every Windows host runs
+# hours fast. Harmless while everything is consistently wrong, fatal once a
+# Windows clock is compared to a Linux one -- SOC logins and endpoint event
+# timestamps both. Runs early and DC-first so Kerberos never sees skew.
+- import_playbook: playbooks/05-time.yml
+
 - import_playbook: playbooks/10-mirror.yml
 - import_playbook: playbooks/20-vyos.yml
 - import_playbook: playbooks/30-prereqs.yml
@@ -46,3 +52,6 @@
 # SOC, which the grid phases above do not cover. Separate phase because it
 # targets Windows analyst boxes, not the SO grid.
 - import_playbook: playbooks/70-analyst.yml
+
+# Endpoint telemetry: Sysmon everywhere, then Elastic Agent into SO's Fleet.
+- import_playbook: playbooks/75-endpoint.yml

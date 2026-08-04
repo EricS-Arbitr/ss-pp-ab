@@ -1,0 +1,64 @@
+---
+# =========================================================================
+# 75-endpoint.yml — endpoint telemetry into Security Onion
+# =========================================================================
+# Phases 10-60 give SO wire visibility via the GRE mirror: Zeek and Suricata
+# parsing mirrored packets. That stops at the host boundary -- you see a
+# workstation talk to a DC, not what ran on it. This phase adds the other
+# half: Sysmon + Windows eventlogs + Linux telemetry, shipped by Elastic
+# Agent into SO's own Fleet.
+#
+# PREREQUISITE: playbooks/05-time.yml. Endpoint events from a clock hours
+# fast land in Elasticsearch ahead of the sensor data and make correlation
+# meaningless. Run the clock fix first; site.yml orders it that way.
+#
+# NOTE ON SPLUNK: these hosts already run the Splunk universal forwarder to
+# pp-splunk. Elastic Agent is additive, not a replacement -- the range keeps
+# endpoint telemetry in both stacks.
+# =========================================================================
+
+# --- Sysmon ---------------------------------------------------------------
+# Sysmon was already deployed by arbitr_pp_playbook.yaml, but ONLY in the
+# "apply AUE settings" play, so it reached the [aue] workstations and nothing
+# else. The DCs and corporate servers -- pp-dc01/02/03, pp-file, pp-sql,
+# pp-mail -- had none, which is precisely where process ancestry matters most
+# for reconstructing an intrusion.
+#
+# The role is idempotent (`creates_service: Sysmon64`), so re-running it
+# against the AUE boxes that already have it is a no-op. Installer comes from
+# the in-platform Nexus already configured in group_vars/windows.yml -- the
+# established convention in this range, and not an egress dependency.
+- name: Sysmon on every Windows host (was AUE-only)
+  hosts: windows
+  gather_facts: false
+  strategy: free          # independent per-host installs; no cross-host sync
+  roles:
+    - sysmon
+  tags:
+    - sysmon
+    - endpoint
+
+# --- Verify Sysmon is actually running ------------------------------------
+# `win_package` reporting success is not proof the service came up. Assert on
+# the service state, per the standing rule in this repo about checks that
+# cannot fail.
+- name: Verify the Sysmon service is running
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Query the Sysmon64 service
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          $svc = Get-Service -Name Sysmon64 -ErrorAction SilentlyContinue
+          if ($svc) { Write-Output $svc.Status } else { Write-Output "ABSENT" }
+      register: sysmon_svc
+      changed_when: false
+      failed_when: sysmon_svc.output[0] | default('ABSENT') != 'Running'
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Sysmon64 {{ sysmon_svc.output[0] }}"
+  tags:
+    - sysmon
+    - endpoint

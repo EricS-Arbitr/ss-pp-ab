@@ -38,28 +38,30 @@ file, so the `analyst` hostgroup already covers every host on pp-security.
 `so-firewall listhostgroup analyst` shows the CIDR and win-hunt-1 reports
 `TcpTestSucceeded: True` on 443. No firewall change was needed or made.
 
-**Fix.** New `playbooks/70-analyst.yml`, imported from `site.yml`, scoped to
-`[hunt]`:
+**Fix (revised same day).** Initially a `[hunt]`-scoped fix in
+`playbooks/70-analyst.yml`. When the decision was taken to add Elastic Agent
+endpoint telemetry, the skew stopped being a login nuisance and became a data
+integrity problem — endpoint events would land in Elasticsearch hours ahead of
+the sensors' Zeek/Suricata data. The fix was promoted to range-wide
+`playbooks/05-time.yml`, DC-first, and 70-analyst reduced to verification
+only. Two playbooks setting the same clock is a race.
+
+The mechanics are unchanged:
 - `RealTimeIsUniversal=1` — fixes the cause, effective next boot.
 - An explicit `Set-Date` when drift > 60s — fixes the current session so no
   reboot is needed.
 - A verification step that re-reads the clock afterwards and fails above 120s
   of residual drift, rather than trusting that the set "ran".
 
-**Scope, and why it is [hunt] and not [windows].** Correcting one domain
-member in isolation would push it outside Kerberos's 5-minute skew tolerance
-from pp-dc01 and break domain auth on that host — every Windows host in the
-range shares the same offset, which keeps AD internally consistent. win-hunt-1
-is in `win10`/`security`/`hunt` and NOT under `[voltgrid:children]`, so it is
-standalone and safe to correct alone. The play asserts this at runtime via
-`Win32_ComputerSystem.PartOfDomain` and refuses with an explanation rather
-than trusting the inventory, since a host joined out-of-band would look
-identical from here.
+**Ordering is the whole design.** Kerberos tolerates 5 minutes of skew.
+Correcting a domain MEMBER while the DCs are still wrong breaks auth on that
+member. `05-time.yml` is therefore two plays, not one with `serial`: all three
+DCs first, then `windows:!domain_controllers`, then a third play that verifies
+the whole estate. Checking each host as it is corrected would miss the case
+that actually matters — a member and a DC disagreeing with each other.
 
-**Known remaining wrongness, deliberately not fixed.** Every domain-joined
-Windows host in PowerPlant still runs ahead of real UTC, so their event
-timestamps are skewed in Splunk and in SO. Correcting that is a range-wide,
-DC-first operation and a separate decision from analyst access.
+**Side effect worth having.** Windows event timestamps in Splunk were skewed
+by the same offset and are now correct too.
 
 **Status: PROPOSED** — verify by running phase 70 and completing a SOC login.
 

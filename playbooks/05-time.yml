@@ -1,0 +1,152 @@
+---
+# =========================================================================
+# 05-time.yml — align every Windows clock with the range's real UTC
+# =========================================================================
+# WHY
+# ---
+# The platform sets each VM's RTC to UTC. Linux reads the RTC as UTC and is
+# correct. Windows reads it as LOCAL time, so every Windows host in the range
+# runs ahead by its timezone offset. Because they are ALL wrong by the same
+# amount, AD and Kerberos stay internally consistent and nothing complains --
+# the skew is invisible until something compares a Windows clock to a Linux
+# one.
+#
+# Two things do exactly that:
+#   1. SO's SOC WebUI. kratos mints a login flow carrying `expires_at` and the
+#      BROWSER compares it against its own clock. A client hours fast sees
+#      every fresh flow as already expired and loops on "This login form has
+#      expired" with no server-side error. (so-ansible UPSTREAM_FIXES
+#      2026-07-29 later 14; recurred here 2026-08-04 on win-hunt-1.)
+#   2. Elastic Agent endpoint telemetry. Events would land in Elasticsearch
+#      hours ahead of the Zeek/Suricata data from the sensors, making
+#      correlation and any time-based hunting wrong.
+#
+# ORDERING IS THE WHOLE DESIGN
+# ----------------------------
+# Kerberos tolerates 5 minutes of skew. Correcting a domain MEMBER while the
+# DCs are still wrong breaks authentication on that member; correcting the
+# DCs first and members second never leaves a member outside tolerance for
+# longer than this playbook takes. Hence two plays, not one with a `serial`.
+#
+# Linux hosts are deliberately absent: they already read the RTC correctly.
+# =========================================================================
+
+- name: Windows clock — domain controllers FIRST (Kerberos reference)
+  hosts: domain_controllers
+  gather_facts: false
+  vars:
+    # Evaluated on the CONTROLLER, whose clock is correct.
+    range_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  tasks:
+    - name: Treat the RTC as UTC from the next boot (fixes the root cause)
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation
+        name: RealTimeIsUniversal
+        data: 1
+        type: dword
+
+    # The registry key only takes effect at boot. Correct the running clock
+    # too, so nothing has to reboot to become usable.
+    - name: Correct the running clock if it has drifted from the range
+      ansible.windows.win_powershell:
+        script: |
+          $target = [DateTime]::ParseExact(
+            '{{ range_utc }}', 'yyyy-MM-ddTHH:mm:ssZ',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal -bor
+            [Globalization.DateTimeStyles]::AdjustToUniversal)
+          $drift = [Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds)
+          if ($drift -gt 60) {
+            Set-Date -Date $target.ToLocalTime() | Out-Null
+            $Ansible.Changed = $true
+            Write-Output ("corrected: was {0:N0}s off" -f $drift)
+          } else {
+            $Ansible.Changed = $false
+            Write-Output ("ok: {0:N0}s from range UTC" -f $drift)
+          }
+      register: dc_clock
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} (DC): {{ dc_clock.output[0] | default('no output') }}"
+  tags: [time]
+
+- name: Windows clock — everything else, once the DCs are the correct reference
+  hosts: windows:!domain_controllers
+  gather_facts: false
+  vars:
+    range_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  tasks:
+    - name: Treat the RTC as UTC from the next boot (fixes the root cause)
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation
+        name: RealTimeIsUniversal
+        data: 1
+        type: dword
+
+    - name: Correct the running clock if it has drifted from the range
+      ansible.windows.win_powershell:
+        script: |
+          $target = [DateTime]::ParseExact(
+            '{{ range_utc }}', 'yyyy-MM-ddTHH:mm:ssZ',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal -bor
+            [Globalization.DateTimeStyles]::AdjustToUniversal)
+          $drift = [Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds)
+          if ($drift -gt 60) {
+            Set-Date -Date $target.ToLocalTime() | Out-Null
+            $Ansible.Changed = $true
+            Write-Output ("corrected: was {0:N0}s off" -f $drift)
+          } else {
+            $Ansible.Changed = $false
+            Write-Output ("ok: {0:N0}s from range UTC" -f $drift)
+          }
+      register: win_clock
+
+    # Domain members re-sync time from the PDC. Nudge it now rather than
+    # waiting for the scheduled interval, so the member and the DC agree
+    # immediately instead of eventually. Non-fatal: a standalone host (the
+    # hunt boxes) has no domain hierarchy to resync against.
+    - name: Resync against the domain hierarchy (best effort)
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          try { w32tm /resync /force 2>&1 | Out-String } catch { "resync skipped: $_" }
+      changed_when: false
+      failed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ win_clock.output[0] | default('no output') }}"
+  tags: [time]
+
+# Positive proof across the whole estate, AFTER both passes. Checking each
+# host as it is corrected would not catch the case that actually matters --
+# a member and a DC disagreeing with each other.
+- name: Windows clock — verify the whole estate is inside Kerberos tolerance
+  hosts: windows
+  gather_facts: false
+  vars:
+    range_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  tasks:
+    - name: Measure residual drift
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          $target = [DateTime]::ParseExact(
+            '{{ range_utc }}', 'yyyy-MM-ddTHH:mm:ssZ',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal -bor
+            [Globalization.DateTimeStyles]::AdjustToUniversal)
+          Write-Output [Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds)
+      register: drift
+      changed_when: false
+      # 120s, well inside Kerberos's 300s tolerance and inside kratos's flow
+      # lifespan. Anything above this and both AD auth and SOC login are at
+      # risk, so fail rather than report.
+      failed_when: (drift.output[0] | float) > 120
+
+    - name: Report residual drift
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ '%.0f' | format(drift.output[0] | float) }}s from range UTC"
+  tags: [time]

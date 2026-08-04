@@ -1,107 +1,51 @@
 ---
 # =========================================================================
-# 70-analyst.yml — make the analyst workstations able to USE Security Onion
+# 70-analyst.yml — verify the analyst workstations can actually USE SO
 # =========================================================================
-# Phases 10-60 build and prove the grid. This one is about the humans: the
-# hunt boxes have to be able to log into the SOC WebUI.
+# Phases 10-60 build and prove the grid. This one is about the humans: can
+# someone sitting at a hunt box log into the SOC WebUI?
 #
-# Network access needs nothing here. so-setup seeded ALLOW_CIDR with
-# so_subnet_security (172.16.9.0/24) via the manager answer file, so the
-# `analyst` hostgroup already covers every host on pp-security. Verified
-# 2026-08-04: `so-firewall listhostgroup analyst` shows 172.16.9.0/24 and
-# win-hunt-1 gets TcpTestSucceeded on 443.
+# Nothing here CHANGES anything. Both prerequisites are handled elsewhere:
 #
-# What DOES break is the clock. See below.
+#   * Network access — nothing to do. so-setup seeded ALLOW_CIDR with
+#     so_subnet_security (172.16.9.0/24) from the manager answer file, so the
+#     `analyst` hostgroup already covers every host on pp-security. Verified
+#     2026-08-04: `so-firewall listhostgroup analyst` shows the CIDR and
+#     win-hunt-1 reports TcpTestSucceeded on 443.
+#
+#   * Clock — fixed range-wide by playbooks/05-time.yml. This originally
+#     carried its own [hunt]-scoped clock fix; that was folded into 05-time
+#     on 2026-08-04 when the decision was made to correct the whole estate,
+#     since two playbooks setting the same clock is a race waiting to happen.
+#
+# What remains is proving the two hold together, because they fail in ways
+# that look nothing alike: a firewall problem gives a connection timeout, a
+# clock problem gives "This login form has expired" with no server-side
+# error at all.
 # =========================================================================
 
-- name: Analyst workstations — align the clock so SOC logins can complete
+- name: Analyst access — prove the hunt boxes can reach and log into SOC
   hosts: hunt
   gather_facts: false
   vars:
-    # Evaluated on the CONTROLLER, whose clock is correct: same UTC RTC,
-    # read correctly because Linux treats the RTC as UTC.
     range_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+    soc_ip: "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
   tasks:
-    # WHY THIS PLAYBOOK EXISTS
-    # ------------------------
-    # SO's SOC WebUI authenticates through kratos, which mints a login flow
-    # carrying an `expires_at` and compares it against the BROWSER's clock.
-    # Flows live 60 minutes, so a client running ~4h fast sees every
-    # freshly-minted flow as already ~3h expired and loops forever on
-    # "This login form has expired. Restart the login process to continue."
-    # There is NO server-side error, which is what makes it expensive to
-    # diagnose. so-ansible UPSTREAM_FIXES 2026-07-29 (later 14).
-    #
-    # Cause: the platform sets the VM's RTC to UTC. Linux reads the RTC as
-    # UTC and is correct; Windows reads it as LOCAL time and is therefore
-    # ahead by the timezone offset.
-    #
-    # ss-pp-ab does not import so-ansible's 00-setup.yml (arbitr_pp_playbook
-    # already runs init + common), so this fix was absent here until
-    # 2026-08-04 and the login loop reappeared on win-hunt-1.
-
-    # SAFETY GATE. Correcting one domain member's clock while the rest of the
-    # domain stays skewed pushes it outside Kerberos's 5-minute tolerance and
-    # breaks domain auth on that host. The hunt boxes are standalone
-    # (win-hunt-1 is in win10/security/hunt, NOT under [voltgrid:children]),
-    # so this is safe -- but assert it rather than trusting the inventory,
-    # because a host joined out-of-band would look identical here.
-    - name: Refuse to touch the clock on a domain-joined host
+    - name: SOC WebUI is reachable on 443
       ansible.windows.win_powershell:
         script: |
           $Ansible.Changed = $false
-          Write-Output (Get-CimInstance Win32_ComputerSystem).PartOfDomain
-      register: domain_check
+          Write-Output (Test-NetConnection -ComputerName '{{ soc_ip }}' -Port 443 -WarningAction SilentlyContinue).TcpTestSucceeded
+      register: soc_reach
       changed_when: false
+      failed_when: not (soc_reach.output[0] | bool)
 
-    - name: Fail if this analyst host turns out to be domain-joined
-      ansible.builtin.fail:
-        msg: |
-          {{ inventory_hostname }} is domain-joined, so its clock must NOT be
-          corrected in isolation. Every Windows host in the range shares the
-          same offset, which keeps Kerberos internally consistent; moving one
-          host puts it outside the 5-minute skew tolerance from pp-dc01 and
-          breaks domain authentication on it.
-
-          If the whole range needs correcting, do it in one pass with the
-          domain controllers first, and re-scope this play from [hunt] to
-          [windows]. That is a much larger change than analyst access and
-          should be a deliberate decision.
-      when: domain_check.output[0] | bool
-
-    # Two parts, both needed. The registry key fixes the CAUSE but only from
-    # the next boot; the explicit set fixes the CURRENT session so nobody has
-    # to reboot to log in.
-    - name: Treat the RTC as UTC from the next boot (fixes the root cause)
-      ansible.windows.win_regedit:
-        path: HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation
-        name: RealTimeIsUniversal
-        data: 1
-        type: dword
-
-    - name: Correct the running clock if it has drifted from the range
-      ansible.windows.win_powershell:
-        script: |
-          $target = [DateTime]::ParseExact(
-            '{{ range_utc }}', 'yyyy-MM-ddTHH:mm:ssZ',
-            [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::AssumeUniversal -bor
-            [Globalization.DateTimeStyles]::AdjustToUniversal)
-          $drift = [Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds)
-          if ($drift -gt 60) {
-            Set-Date -Date $target.ToLocalTime() | Out-Null
-            $Ansible.Changed = $true
-            Write-Output ("corrected: was {0:N0}s off, now " -f $drift) + [DateTime]::UtcNow.ToString('o')
-          } else {
-            $Ansible.Changed = $false
-            Write-Output ("ok: {0:N0}s from range UTC" -f $drift)
-          }
-      register: win_clock
-
-    # Positive proof, not "the task ran". Re-read the clock and assert the
-    # remaining drift is inside kratos's tolerance -- the whole point of the
-    # play is that the SOC login can complete.
-    - name: Verify the corrected clock is within tolerance of range UTC
+    # The clock check is the one that matters. kratos mints a login flow
+    # carrying `expires_at` and the BROWSER compares it against its own
+    # clock; flows live 60 minutes, so a client hours fast sees every fresh
+    # flow as already expired and loops forever. Tolerance here is well
+    # inside that lifespan.
+    - name: Clock is close enough to range UTC for kratos login flows
       ansible.windows.win_powershell:
         script: |
           $Ansible.Changed = $false
@@ -111,15 +55,15 @@
             [Globalization.DateTimeStyles]::AssumeUniversal -bor
             [Globalization.DateTimeStyles]::AdjustToUniversal)
           Write-Output [Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds)
-      register: drift_after
+      register: drift
       changed_when: false
-      failed_when: (drift_after.output[0] | float) > 120
+      failed_when: (drift.output[0] | float) > 120
 
-    - name: Report
+    - name: Report analyst readiness
       ansible.builtin.debug:
         msg: >-
-          {{ inventory_hostname }}: {{ win_clock.output[0] | default('no output') }} —
-          now {{ '%.0f' | format(drift_after.output[0] | float) }}s from range UTC.
-          SOC WebUI: https://{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}
+          {{ inventory_hostname }}: SOC https://{{ soc_ip }} reachable on 443,
+          clock {{ '%.0f' | format(drift.output[0] | float) }}s from range UTC.
+          Log in as {{ so_web_user }}.
   tags:
     - analyst
