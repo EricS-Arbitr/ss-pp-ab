@@ -141,15 +141,23 @@ controller. `/opt/so/saltstack` exists ONLY on the manager — a fact this
 role's own comments state ("the sensor has no /opt/so/saltstack at all"). I
 had the answer in the code I was editing.
 
-**Status: PARTIALLY VERIFIED** — the rule is IN PLACE. Phase 50 on 2026-08-05:
-the anchor guard skipped (anchor found in the template, line 107), and
-`verify the tun0 FORWARD drop is in the running ruleset` returned ok on all
-three sensors — checked against live `iptables -S FORWARD`, not the template.
+**Status: VERIFIED** — phase 60 on 2026-08-05, after phase 50 placed the rule.
+No capture on any sensor contains an ICMP unreachable sourced from
+172.16.9.40/.41/.42. What remains is legitimate mirrored range traffic:
 
-The EFFECT is not yet proven. That requires phase 60 captures showing no
-`ICMP ... unreachable - admin prohibited` lines sourced from 172.16.9.40/.41/.42.
-A rule being present is not the same as the traffic having stopped — the
-distinction this log keeps re-learning.
+```
+corp:  IP 192.168.100.5.55086 > 172.16.2.7.53: A? M.ROOT-SERVERS.NET.
+edge:  IP 200.200.200.2 > 172.16.9.30: ICMP echo reply        (the generator)
+ot:    IP 192.168.95.1 > 192.168.95.2: ICMP host 192.168.90.102 unreachable
+```
+
+The OT line is worth reading closely: source `192.168.95.1` is pp-ot-router's
+Gas-Turbine gateway rejecting something *inside* the range — genuine captured
+traffic, not injection. Distinguishing the two is the whole point.
+
+All three sensors still captured 100 packets, so dropping in FORWARD cost no
+visibility: tcpdump sees frames at the interface before FORWARD is consulted.
+Cluster green throughout, 261 shards, 2 data nodes.
 
 ## 2026-08-05 (structural pass 5/5) · enhancement · Host identities derived from inventory instead of restated
 
