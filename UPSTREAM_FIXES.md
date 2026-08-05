@@ -11,6 +11,48 @@ Severity key:
 
 
 
+## 2026-08-04 (later 11) · bug · `so-firewall includehost` is not idempotent — rc=3 on an existing entry aborted the whole run
+
+**Symptom.** Re-running `75-endpoint.yml` after the subnets were already
+permitted:
+
+```
+failed: [so-manager] (item=172.16.2.0/24) => {"rc": 3,
+  "stderr": "WARNING - IP 172.16.2.0/24 already exists in hostgroup elastic_agent_endpoint"}
+```
+
+All eight subnets, then `PLAY RECAP` with only so-manager and nothing else run.
+
+**Two things went wrong.**
+
+1. *SO's tool is not idempotent.* `so-firewall includehost` exits **rc=3** when
+   the entry already exists, and says so as a `WARNING` on stderr, not an
+   error. The subnet is permitted either way — this is a success for our
+   purposes.
+
+2. *The failure was fatal to the entire playbook.* so-manager was the only host
+   in that play, so every host in the play failed, and Ansible aborts the run
+   at that point rather than continuing to later plays. The four Linux hosts
+   never got their turn even though the play they needed was unrelated.
+
+**Fix.** Tolerate the warning, matching the pattern `so_search` already uses
+for the same command during grid join:
+
+```yaml
+failed_when:
+  - fw_include.rc != 0
+  - "'already exists' not in fw_include.stderr"
+```
+
+**Worth remembering about single-host plays.** A play with one host has no
+partial-failure mode: any failure is a total failure and stops everything
+downstream. Manager-side setup plays are all like this, so a non-idempotent
+command in one of them is far more expensive than the same command in a
+40-host play. Second time this shape has cost a run today — the first was
+`so-firewall`'s sibling behaviour in the highstate lock (later 2).
+
+**Status: PROPOSED** — verify by re-running and reaching the Linux enrollments.
+
 ## 2026-08-04 (later 10) · bug · Linux agent install had no privilege — Windows hid the gap because WinRM already runs elevated
 
 **Symptom.** All 40 Windows hosts enrolled cleanly; the four Linux hosts failed

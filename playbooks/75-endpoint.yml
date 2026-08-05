@@ -208,12 +208,21 @@
              | map(attribute='key') | list }}
       run_once: true
 
+    # so-firewall is NOT idempotent: re-adding an existing entry exits rc=3
+    # with "WARNING - IP x already exists in hostgroup y" on stderr. That is a
+    # success for our purposes -- the subnet is permitted either way. Treating
+    # it as failure aborted the whole run before the Linux hosts enrolled,
+    # because every host in this play failed. Same tolerance the grid-join
+    # firewall task in so_search already uses.
     - name: Include each endpoint subnet in the {{ so_agent_firewall_hostgroup }} hostgroup
       ansible.builtin.command: >-
         so-firewall includehost {{ so_agent_firewall_hostgroup }} {{ item }}
       loop: "{{ so_agent_endpoint_subnets }}"
       register: fw_include
       changed_when: fw_include.rc == 0
+      failed_when:
+        - fw_include.rc != 0
+        - "'already exists' not in fw_include.stderr"
       run_once: true
 
     - name: Apply the firewall state
