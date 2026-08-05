@@ -11,6 +11,51 @@ Severity key:
 
 
 
+## 2026-08-04 (later 12) · bug · The Fleet enrollment check counted the wrong thing entirely — `so-elastic-agent-status` reports one host, not the grid
+
+**Symptom.** All 44 endpoints enrolled with `failed=0`, and the verification
+reported:
+
+```
+Fleet reports 2 healthy agents; 49 expected (44 endpoints + 5 SO grid nodes).
+```
+
+**Cause.** `so-elastic-agent-status` reports the status of the agent on the
+host it runs on. Its entire output is two lines:
+
+```
+├─ fleet          → status: (HEALTHY) Connected
+└─ elastic-agent  → status: (HEALTHY) Running
+```
+
+so `grep -ci healthy` returns **2** whether the grid has 2 agents or 200. The
+check was never counting enrollments — it was counting lines in a fixed-size
+status banner, and would have reported "2" on an empty grid just the same.
+
+**Fix.** Ask Elasticsearch, which is the authority: Fleet keeps enrolled agents
+in `.fleet-agents`, and `so-elasticsearch-query` is the established helper in
+this repo (60-verify uses it for cluster health).
+
+```yaml
+so-elasticsearch-query ".fleet-agents/_count"
+```
+
+The task now polls that count until it reaches the expected total (20×15s,
+since agents take a moment to register after the installer returns), reports
+actual-versus-expected, and **fails** when short — naming the likely cause and
+where to look. A separate guard fails loudly if the query output contains no
+`count` at all, so an unreadable result can never be mistaken for a pass.
+
+**Sixth in the family.** Notable for being the worst kind: not a check that
+could never fail, nor one that could never pass, but one measuring something
+unrelated to the claim it made. A grep against human-readable CLI output that
+happens to contain the search word a fixed number of times. The rule from
+PORTING_GUIDE 9.15b — assert on parsed values, never `grep` against free-form
+output — would have caught this too.
+
+**Status: PROPOSED** — verify by re-running the play and confirming a real
+count near 49.
+
 ## 2026-08-04 (later 11) · bug · `so-firewall includehost` is not idempotent — rc=3 on an existing entry aborted the whole run
 
 **Symptom.** Re-running `75-endpoint.yml` after the subnets were already

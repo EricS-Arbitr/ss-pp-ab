@@ -275,21 +275,56 @@
           | difference(groups['so_all'] | default([]))
           | unique | list | length) + (groups['so_all'] | default([]) | length) }}
   tasks:
-    - name: Count agents Fleet considers healthy
-      ansible.builtin.shell: |
-        set -o pipefail
-        so-elastic-agent-status 2>/dev/null | grep -ci "healthy" || true
-      args:
-        executable: /bin/bash
-      register: fleet_count
+    # `so-elastic-agent-status` reports THIS HOST's agent, not the grid --
+    # its output is two lines ("fleet: HEALTHY Connected", "elastic-agent:
+    # HEALTHY Running"), so `grep -c healthy` returned 2 regardless of how
+    # many agents were enrolled. It was never counting enrollments. Ask
+    # Elasticsearch instead: Fleet keeps enrolled agents in .fleet-agents.
+    - name: Count agents enrolled in Fleet
+      ansible.builtin.command: so-elasticsearch-query ".fleet-agents/_count"
+      register: fleet_raw
       changed_when: false
+      failed_when: false
+
+    - name: Fail if the agent count could not be read at all
+      ansible.builtin.fail:
+        msg: |
+          Could not read the Fleet agent count from Elasticsearch.
+          rc={{ fleet_raw.rc }}
+          output: {{ fleet_raw.stdout | default('') }}{{ fleet_raw.stderr | default('') }}
+
+          Without this the enrollment result is unverified -- do not read a
+          clean run as proof the endpoints are reporting.
+      when: '"count" not in (fleet_raw.stdout | default(""))'
+
+    # Agents take a little while to register after the installer returns, so
+    # poll rather than sampling once. This is a REAL check: it fails when the
+    # grid is short, which is the whole point of running it.
+    - name: Wait for every agent to appear in Fleet
+      ansible.builtin.command: so-elasticsearch-query ".fleet-agents/_count"
+      register: fleet_poll
+      changed_when: false
+      until: ((fleet_poll.stdout | from_json).count | default(0) | int) >= (expected | int)
+      retries: 20
+      delay: 15
+      failed_when: false
 
     - name: Report enrollment
       ansible.builtin.debug:
         msg: >-
-          Fleet reports {{ fleet_count.stdout | trim }} healthy agents;
-          {{ expected }} expected ({{ expected | int - (groups['so_all'] | default([]) | length) }}
-          endpoints + {{ groups['so_all'] | default([]) | length }} SO grid nodes).
-          A shortfall means some hosts installed but did not enroll — check
-          the elastic_agent_endpoint hostgroup covers their subnet.
+          Fleet has {{ (fleet_poll.stdout | from_json).count | default(0) }}
+          agents enrolled; {{ expected }} expected
+          ({{ expected | int - (groups['so_all'] | default([]) | length) }} endpoints
+          + {{ groups['so_all'] | default([]) | length }} SO grid nodes).
+
+    - name: Fail if the grid is short of agents
+      ansible.builtin.fail:
+        msg: >-
+          Only {{ (fleet_poll.stdout | from_json).count | default(0) }} of
+          {{ expected }} agents are enrolled after 5 minutes. Hosts that
+          installed but did not enroll usually cannot reach Fleet on 8220 --
+          check the {{ so_agent_firewall_hostgroup }} hostgroup covers their
+          subnet, and look at /opt/Elastic/Agent/elastic-agent.log on a
+          missing host.
+      when: ((fleet_poll.stdout | from_json).count | default(0) | int) < (expected | int)
   tags: [endpoint, agent]
