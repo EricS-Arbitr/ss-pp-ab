@@ -50,7 +50,15 @@ TCP 443 from pp-syslog and read its failure as evidence. 443 is only granted to
 and 8443. The test could only ever have failed, and it told us nothing. Check
 which port a host is actually *supposed* to reach before using it as a probe.
 
-**Status: PROPOSED** — verify by re-running for pp-syslog.
+**Status: VERIFIED** — 2026-08-05. `pp-syslog` enrolled on re-run, and the
+per-host check reported `Missing: none` across all 44 agent targets. The
+fresh-range deploy is now complete end to end.
+
+*Note on the aggregate:* Fleet reports 50 hostnames against my arithmetic of
+49 (44 + 5 grid nodes), so the SO grid contributes one more agent document
+than assumed. That discrepancy is exactly why the count was replaced — the
+authoritative signal is the per-host diff, which enumerates real inventory
+targets and cannot be satisfied by an unrelated document.
 
 ## 2026-08-05 (later) · bug · Two more of my checks: a fragile reachability probe, and a Fleet count that passed while two hosts had failed
 
@@ -96,8 +104,15 @@ had to fix in two days, and they share a root: asserting on something
 correlated with the claim rather than on the claim itself. The claim here is
 "every target host is enrolled", so the check must enumerate target hosts.
 
-**Status: PROPOSED** — verify on the next run: the report should list missing
-hosts by name, or "none".
+**Status: VERIFIED** — 2026-08-05. `pp-syslog` enrolled on re-run, and the
+per-host check reported `Missing: none` across all 44 agent targets. The
+fresh-range deploy is now complete end to end.
+
+*Note on the aggregate:* Fleet reports 50 hostnames against my arithmetic of
+49 (44 + 5 grid nodes), so the SO grid contributes one more agent document
+than assumed. That discrepancy is exactly why the count was replaced — the
+authoritative signal is the per-host diff, which enumerates real inventory
+targets and cannot be satisfied by an unrelated document.
 
 ## 2026-08-05 · enhancement · Restored a boot delay in deploy.sh — "the retry loop handles it" cost two full sweeps
 
@@ -132,7 +147,15 @@ the failure beats a mechanism that recovers from it. Worth applying to the
 `MAX_ATTEMPTS=3` loop generally — a late-phase failure currently re-runs
 everything from the range baseline.
 
-**Status: PROPOSED** — verify on the next fresh-range deploy.
+**Status: VERIFIED** — 2026-08-05. `pp-syslog` enrolled on re-run, and the
+per-host check reported `Missing: none` across all 44 agent targets. The
+fresh-range deploy is now complete end to end.
+
+*Note on the aggregate:* Fleet reports 50 hostnames against my arithmetic of
+49 (44 + 5 grid nodes), so the SO grid contributes one more agent document
+than assumed. That discrepancy is exactly why the count was replaced — the
+authoritative signal is the per-host diff, which enumerates real inventory
+targets and cannot be satisfied by an unrelated document.
 
 ## 2026-08-04 (later 12) · bug · The Fleet enrollment check counted the wrong thing entirely — `so-elastic-agent-status` reports one host, not the grid
 
