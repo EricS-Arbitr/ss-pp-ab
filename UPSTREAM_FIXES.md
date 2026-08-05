@@ -183,6 +183,27 @@ not need it (chmod on your own file), and the second kind only surfaces on a
 host where passwordless sudo happens not to be configured. Escalate per task,
 where the need is real.
 
+**9c — and then removing `become` entirely broke the REMOTE read.**
+
+On the fresh-range run of 2026-08-05:
+
+```
+failed: [ansible -> so-manager] "Failed to get information on remote file
+  (/nsm/elastic-fleet/so_agent-installers/so-elastic-agent_windows_amd64):
+  Permission denied"
+```
+
+The installers are root-owned on the manager, so the fetch's remote read needs
+privilege — the exact thing the play-level `become` had been providing before
+9b removed it. Having been wrong in one direction, I corrected past the answer
+rather than to it.
+
+**The correct configuration, arrived at the long way:** `become: true` on the
+fetch task ONLY. Remote read is privileged; local write is not, and cannot be;
+the chmod needs no privilege because the ansible user owns what it fetched.
+That is precisely the "escalate per task" conclusion 9b already stated — and
+then I applied it as "escalate nowhere".
+
 **Status: VERIFIED** — PowerPlant, 2026-08-04. All 44 endpoints enrolled
 (`failed=0` across 40 Windows + 4 Linux), and the Fleet verification play
 passed with both its guard tasks SKIPPED — which only happens when

@@ -114,7 +114,16 @@
 
     # fetch pulls manager -> controller over SSH. ~530 MB combined, once.
     # Guarded on the stat so a re-run does not move it again.
+    # become is required HERE and nowhere else in this play. The installers are
+    # root-owned on the manager, so the REMOTE read needs privilege -- while
+    # the LOCAL write still happens as the ansible user regardless, which is
+    # why the agents dir is ansible-user-owned (created by so_apt_mirror).
+    #
+    # Getting this wrong in BOTH directions cost two runs on 2026-08-04:
+    # play-level become broke the unprivileged chmod, and then removing become
+    # entirely broke this remote read. Per-task is the only correct answer.
     - name: Pull the installers from the manager
+      become: true
       ansible.builtin.fetch:
         src: "/nsm/elastic-fleet/so_agent-installers/{{ item.item }}"
         dest: "{{ so_mirror_root }}/agents/{{ item.item }}"
