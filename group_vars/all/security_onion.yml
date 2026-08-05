@@ -45,14 +45,21 @@ so_upstream_proxy: "http://{{ inet_proxy_addr }}:{{ inet_proxy_port }}"
 # `ansible` is 10.255.240.152 (mgmt) / 10.10.10.10 (control-10). The mgmt IP
 # is used because that is the interface the SO nodes can reach it on.
 # NOTE: earmarked to move to a platform-hosted Nexus later (Eric, 2026-07-30).
-so_mirror_host: "10.255.240.152"
+# Derived, not restated. This duplicated `ansible_host` in host_vars/ansible.yml,
+# so a range whose controller gets a different mgmt IP needed the same value
+# changed in two places -- and forgetting the second breaks phases 10, 30 and
+# 75 with a connection error pointing at neither file.
+so_mirror_host: "{{ hostvars[groups['ansible_controller'][0]]['ansible_host'] }}"
 so_mirror_port: 80
 so_mirror_url: "http://{{ so_mirror_host }}:{{ so_mirror_port }}"
 so_source_tarball_url: "{{ so_mirror_url }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
 so_bundled_rules_filename: "emerging.rules.tar.gz"
 
 # --- Grid ----------------------------------------------------------------
-so_manager_ip: "172.16.9.30"
+# Derived from the manager's own host_vars for the same reason. `groups` and
+# `ansible_host`/`so_prod_ip` are inventory data, resolved lazily at use time
+# and available even under `--limit`, so this is safe in every play.
+so_manager_ip: "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
 so_manager_hostname: "so-manager"
 so_msrv: "{{ so_manager_hostname }}"
 so_msrv_ip: "{{ so_manager_ip }}"
@@ -96,6 +103,12 @@ so_web_access_type: "IP"
 # SOC WebUI admin + the shared secret search/sensor use to join the manager.
 # Both live in group_vars/all/vault.yml (ansible-vault, password `simspace1`),
 # added 2026-07-30 along with every other credential in this repo.
+# DELIBERATELY a literal, not "admin@{{ domain_name }}". `domain_name` is
+# defined in group_vars/proxy.yml and group_vars/voltgrid.yml -- both GROUP
+# scoped -- and so-manager belongs to neither, so deriving it here would be
+# undefined on the very host that renders the answer file. That is the same
+# scope trap verify_vars.py now catches for role defaults; it does not yet
+# catch group-scoped group_vars (noted as a limitation 2026-08-05).
 so_web_user: "admin@voltgrid.com"
 so_web_password: "{{ vault_so_web_password }}"
 so_remote_password: "{{ vault_so_remote_password }}"

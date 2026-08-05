@@ -11,6 +11,59 @@ Severity key:
 
 
 
+## 2026-08-05 (structural pass 5/5) · enhancement · Host identities derived from inventory instead of restated
+
+**Method.** Swept every literal IPv4 in `group_vars/` and the SO role defaults
+and cross-referenced each against the `host_vars` files that declare it.
+
+**Most hits were false alarms**, and worth recording so the next sweep does not
+re-flag them:
+- `so_subnet_*` values match a router interface only because a `/24` base and
+  a `.0` host address look identical to a regex. They are subnet definitions,
+  correctly declared once.
+- `group_vars/voltgrid.yml` DNS records restate host addresses by design — it
+  is zone data. Pre-existing range design, outside this pass, and risky to
+  churn.
+- `splunk_server_ip`, `syslog_server_ip`, `proxy_server` are pre-existing
+  range variables, not SO-owned.
+
+**Two genuine duplications of a HOST'S IDENTITY, both SO-owned:**
+
+```yaml
+so_mirror_host: "{{ hostvars[groups['ansible_controller'][0]]['ansible_host'] }}"
+so_manager_ip:  "{{ hostvars[groups['so_manager'][0]]['so_prod_ip'] }}"
+```
+
+Previously `10.255.240.152` and `172.16.9.30`, restating
+`host_vars/ansible.yml` and `host_vars/so-manager.yml`. A range whose
+controller or manager gets a different address needed the same value changed in
+two files, and missing the second breaks phases 10, 30 and 75 with a connection
+error pointing at neither. Flagged as a fresh-deploy risk on 2026-08-05 before
+the from-scratch run; it did not bite only because the range came from the same
+blueprint.
+
+**Validated by rendering**, not by inspection: both expressions plus the
+dependent `so_mirror_url` and `so_msrv_ip` were rendered against a mocked
+Ansible data model and produce byte-identical values to the literals they
+replaced.
+
+**One candidate deliberately NOT derived.** `so_web_user: "admin@voltgrid.com"`
+looks like it should be `"admin@{{ domain_name }}"`. It must not be:
+`domain_name` is defined in `group_vars/proxy.yml` and `group_vars/voltgrid.yml`,
+both GROUP-scoped, and so-manager is in neither — it would be undefined on the
+one host that renders the answer file. Left literal with a comment explaining
+why, so the next person does not "fix" it.
+
+**Limitation this exposed in the new checker.** `verify_vars.py` treats every
+file under `group_vars/` as globally defined, so it would NOT have caught that
+`domain_name` reference. It now handles ROLE scope (structural pass 1/5) but
+not GROUP scope. Doing it properly needs group-membership analysis: resolve
+which hosts each play targets, and which `group_vars/<group>.yml` files apply
+to them. Worth doing, not done here.
+
+**Status: VERIFIED** for the substitution (renders identically); the checker
+limitation is **OPEN**.
+
 ## 2026-08-05 (structural pass 4/5) · enhancement · `become` audit — privilege contracts made explicit, and one unexplained inconsistency
 
 **Method.** Mapped play-level `become` across every SO phase playbook against
