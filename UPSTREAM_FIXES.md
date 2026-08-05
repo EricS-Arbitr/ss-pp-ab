@@ -11,6 +11,69 @@ Severity key:
 
 
 
+## 2026-08-05 (later 4) · bug · MY build_tarball change silently stopped packing — seven commits shipped a stale tarball
+
+**Symptom.** After the ICMP fix, `md5 ab_pp.tgz` was byte-identical to the
+previous build despite `roles/so_sensor` having changed. `git ls-tree` across
+the structural pass confirmed it:
+
+```
+31c698c  7aa58abb8f83   (last real rebuild)
+6410120  7aa58abb8f83   structural pass 1/5
+c5ed531  7aa58abb8f83   2/5
+e8bd415  7aa58abb8f83   3/5
+b862183  7aa58abb8f83   4/5
+9d7f525  7aa58abb8f83   5/5
+bd6f9fb  7aa58abb8f83   "structural pass VERIFIED"
+36d4997  7aa58abb8f83   ICMP fix
+```
+
+One blob across eight commits. The tarball had not been rebuilt since before
+the structural pass began.
+
+**Cause — mine, introduced in structural pass 1/5.** `build_tarball.sh` runs
+under `set -euo pipefail` (line 21). The verify call had been
+`python3 verify_vars.py "$STAGE" || true`, and I replaced it with a bare call
+plus `VERIFY_RC=$?` in order to abort on scope errors. Under `errexit`, the
+bare call's **exit 1 — which happens on EVERY run, since there are three
+standing soft warnings — killed the script before the Pack step.**
+
+The irony is exact: a change made to stop bad code reaching the range instead
+stopped ALL code reaching the range.
+
+**Why it went unnoticed for seven commits.** I ran `./build_tarball.sh
+>/dev/null 2>&1` in the commit sequence and never checked its exit status;
+where I did tail the output, the last lines were the verify warnings, which
+look like a normal ending. "=== Archive built ===" was absent from every one of
+those runs and I did not miss it. And `md5` was printed from a file that simply
+had not changed — a value I reported to the operator as if it identified the
+build.
+
+**Fix.**
+
+```bash
+VERIFY_RC=0
+python3 "$SS_PP_AB/verify_vars.py" "$STAGE" || VERIFY_RC=$?
+```
+
+`||` satisfies `errexit` while preserving the code. Verified: exit 0, "Archive
+built" printed, md5 changed, and the archive now demonstrably contains the
+structural-pass content (checked by extracting `so_search`/`so_sensor` from the
+tarball and grepping for the new tasks).
+
+**Lesson, and it is the same one as the check audit.** I verified the *change*
+(scope errors now abort) and not the *invariant* (the build still produces an
+archive). A guard added to a pipeline must be tested for what it does on the
+PASSING path, not only the failing one. The passing path here ran on every
+single build and was broken from the first.
+
+**Consequence for the operator.** The deploy tested against "9d7f525" pulled
+the `31c698c` archive. Whatever it exercised, it was not the structural pass —
+so those five entries' VERIFIED status is withdrawn pending a real run.
+
+**Status: VERIFIED** for the build fix (archive rebuilds, contents confirmed).
+Structural pass 1/5–5/5 revert to PROPOSED.
+
 ## 2026-08-05 (later 3) · bug · Sensors were injecting ICMP unreachables into the range
 
 **Symptom.** Phase 60's pcap check, which prints its capture, showed the
@@ -109,14 +172,9 @@ not GROUP scope. Doing it properly needs group-membership analysis: resolve
 which hosts each play targets, and which `group_vars/<group>.yml` files apply
 to them. Worth doing, not done here.
 
-**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
-60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
-`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
-`end_host` probe within a task or two — the lifetime invariants and the five
-`become` preflights now run on already-installed nodes. Phase 60 exercised the
-rewritten tunnel-flag and mirror checks on all three sensors; phase 75
-exercised the DOCKER-USER-scoped firewall proof and the derived
-`so_mirror_host` / `so_manager_ip`.
+**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
+actually deployed the `31c698c` archive; `build_tarball.sh` had silently
+stopped packing (see 2026-08-05 later 4). Never exercised on a range.
 
 ## 2026-08-05 (structural pass 4/5) · enhancement · `become` audit — privilege contracts made explicit, and one unexplained inconsistency
 
@@ -171,14 +229,9 @@ invoked, or something environmental in `deploy.sh` that a direct
 `ansible-playbook` run does not set. The new preflight will now catch it in the
 first task instead of mid-role.
 
-**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
-60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
-`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
-`end_host` probe within a task or two — the lifetime invariants and the five
-`become` preflights now run on already-installed nodes. Phase 60 exercised the
-rewritten tunnel-flag and mirror checks on all three sensors; phase 75
-exercised the DOCKER-USER-scoped firewall proof and the derived
-`so_mirror_host` / `so_manager_ip`.
+**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
+actually deployed the `31c698c` archive; `build_tarball.sh` had silently
+stopped packing (see 2026-08-05 later 4). Never exercised on a range.
 
 ## 2026-08-05 (structural pass 3/5) · enhancement · Lifetime-invariant vs first-install-only, classified across all four SO roles
 
@@ -231,14 +284,9 @@ work: rendering an answer file, running so-setup, the post-install reboot.
 The sharpest form of the question: *if this state were destroyed on a running
 range, would a re-run put it back?* If not, it is in the wrong place.
 
-**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
-60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
-`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
-`end_host` probe within a task or two — the lifetime invariants and the five
-`become` preflights now run on already-installed nodes. Phase 60 exercised the
-rewritten tunnel-flag and mirror checks on all three sensors; phase 75
-exercised the DOCKER-USER-scoped firewall proof and the derived
-`so_mirror_host` / `so_manager_ip`.
+**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
+actually deployed the `31c698c` archive; `build_tarball.sh` had silently
+stopped packing (see 2026-08-05 later 4). Never exercised on a range.
 
 ## 2026-08-05 (structural pass 2/5) · enhancement · Check audit — 80 checks reviewed against "can it fail?" and "does it measure its claim?"
 
@@ -303,14 +351,9 @@ chain instead of the filtering chain. The question that catches them is not
 "will this fail if something breaks" but **"what exactly would have to be true
 for this to pass, and is that the thing I am claiming?"**
 
-**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
-60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
-`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
-`end_host` probe within a task or two — the lifetime invariants and the five
-`become` preflights now run on already-installed nodes. Phase 60 exercised the
-rewritten tunnel-flag and mirror checks on all three sensors; phase 75
-exercised the DOCKER-USER-scoped firewall proof and the derived
-`so_mirror_host` / `so_manager_ip`.
+**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
+actually deployed the `31c698c` archive; `build_tarball.sh` had silently
+stopped packing (see 2026-08-05 later 4). Never exercised on a range.
 
 ## 2026-08-05 (structural pass 1/5) · enhancement · verify_vars.py now detects role-scope errors, and build_tarball aborts on them
 
@@ -369,14 +412,9 @@ root only 2 appear, because `nat` lives in `roles/vyos`, a base role copied in
 from `../range-development-ansible/` at build time. I briefly documented "2"
 from a repo-root run; corrected.
 
-**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
-60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
-`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
-`end_host` probe within a task or two — the lifetime invariants and the five
-`become` preflights now run on already-installed nodes. Phase 60 exercised the
-rewritten tunnel-flag and mirror checks on all three sensors; phase 75
-exercised the DOCKER-USER-scoped firewall proof and the derived
-`so_mirror_host` / `so_manager_ip`.
+**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
+actually deployed the `31c698c` archive; `build_tarball.sh` had silently
+stopped packing (see 2026-08-05 later 4). Never exercised on a range.
 
 ## 2026-08-05 (later 2) · bug · Agent enrollment is a single shot against a firewall that rewrites itself every 15 minutes
 

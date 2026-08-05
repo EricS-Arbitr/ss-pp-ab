@@ -267,8 +267,14 @@ if [ -x "$SS_PP_AB/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   # including that role. It resolves in YAML and fails on the range, so it is
   # fatal here -- three of these have cost a build/upload/deploy round trip.
   # Exit 1 = soft warnings (usually `| default(...)` references); advisory only.
-  python3 "$SS_PP_AB/verify_vars.py" "$STAGE"
-  VERIFY_RC=$?
+  # `|| VERIFY_RC=$?` is REQUIRED, not stylistic: this script runs under
+  # `set -euo pipefail` (line 21), so a bare non-zero exit aborts it. The
+  # checker returns 1 for soft warnings on EVERY run, so removing the old
+  # `|| true` silently stopped the build before the Pack step -- leaving a
+  # stale ab_pp.tgz committed under seven commits' worth of changes
+  # (2026-08-05). The `||` form keeps errexit satisfied while preserving rc.
+  VERIFY_RC=0
+  python3 "$SS_PP_AB/verify_vars.py" "$STAGE" || VERIFY_RC=$?
   if [ "$VERIFY_RC" -eq 3 ]; then
     echo ""
     echo "ABORTING: role-scope error(s) above would fail at run time."
