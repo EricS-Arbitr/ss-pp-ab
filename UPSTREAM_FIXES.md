@@ -113,14 +113,36 @@ accepts — a salt INPUT, so it survives the highstate rewrite. DROP not REJECT,
 and matched on the input INTERFACE so it cannot affect anything but mirrored
 traffic. Verified afterwards against the RUNNING ruleset, not the template.
 
-**UNCONFIRMED: the anchor.** `so_tun_forward_anchor` defaults to
-`-A FORWARD -j LOGGING`, mirroring the INPUT anchor, but I have not seen SO's
-FORWARD section. If that line is absent — or if the FORWARD reject comes from
-Docker rather than SO's template — the guard fails the role loudly rather than
-writing a rule that lands somewhere harmless. Confirm before running.
+**The anchor, now evidence-based.** I first guessed
+`-A FORWARD -j LOGGING` by analogy with the INPUT anchor. Wrong — there is no
+such line, and that guard would have failed all three sensors. The rendered
+ruleset on so-sensor-corp (`/etc/iptables/rules.v4`, and live in
+`iptables -S FORWARD`) ends:
 
-**Status: PROPOSED** — anchor unverified; do not deploy until the template's
-FORWARD section is checked.
+```
+:FORWARD DROP [0:0]
+...
+-A FORWARD -m conntrack --ctstate INVALID -j DROP
+-A FORWARD -j REJECT --reject-with icmp-host-prohibited
+```
+
+`so_tun_forward_anchor` is now that reject line. Mirrored traffic is new and
+unrelated, so it passes both conntrack rules and lands on the reject —
+inserting immediately before it is sufficient and is the smallest possible
+change to the chain.
+
+It also answers the question that would have invalidated the whole approach:
+the reject IS in `rules.v4`, so it is rendered from SO's template rather than
+added by Docker, and the derived-override mechanism reaches it.
+
+**Two wrong instructions on the way here, recorded because they cost round
+trips.** I asked for the template from `so-sensor-corp` and then from the
+controller. `/opt/so/saltstack` exists ONLY on the manager — a fact this
+role's own comments state ("the sensor has no /opt/so/saltstack at all"). I
+had the answer in the code I was editing.
+
+**Status: PROPOSED** — anchor confirmed against the rendered ruleset; the
+injection itself is exercised on the next phase 50 run.
 
 ## 2026-08-05 (structural pass 5/5) · enhancement · Host identities derived from inventory instead of restated
 

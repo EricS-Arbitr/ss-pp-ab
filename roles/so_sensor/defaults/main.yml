@@ -103,7 +103,20 @@ so_sensor_force_cloud_mode: true
 # affect anything but mirrored traffic.
 so_tun_forward_rule: "-A FORWARD -i {{ so_monitor_interface }} -j DROP\n"
 
-# Anchor the injection ahead of SO's FORWARD reject. Same guarded-anchor
-# pattern as so_gre_anchor: if SO's template stops containing this line the
-# role FAILS rather than writing a rule that lands somewhere harmless.
-so_tun_forward_anchor: "-A FORWARD -j LOGGING"
+# Anchor: the FORWARD reject itself. Confirmed from the RENDERED ruleset on
+# so-sensor-corp 2026-08-05 (/etc/iptables/rules.v4 line 50, and live in
+# `iptables -S FORWARD`):
+#
+#   -A FORWARD -m conntrack --ctstate INVALID -j DROP
+#   -A FORWARD -j REJECT --reject-with icmp-host-prohibited
+#
+# There is NO `-A FORWARD -j LOGGING` -- an earlier guess by analogy with the
+# INPUT anchor, which would have failed the guard on all three sensors.
+# Mirrored traffic is new and unrelated, so it passes both conntrack rules and
+# lands on the reject; inserting immediately before it is sufficient and is the
+# smallest possible change to the chain.
+#
+# Same guarded-anchor pattern as so_gre_anchor: if SO's template stops
+# containing this line, the role FAILS rather than writing a rule that lands
+# somewhere harmless.
+so_tun_forward_anchor: "-A FORWARD -j REJECT --reject-with icmp-host-prohibited"
