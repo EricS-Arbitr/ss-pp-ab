@@ -189,6 +189,45 @@
   ansible.builtin.debug:
     msg: "{{ so_monitor_interface }}: {{ tun_state.stdout }}"
 
+# --- LIFETIME INVARIANT: this node's entry in the manager's firewall -------
+# Moved above the `meta: end_host` probe 2026-08-05 (structural pass 3/5).
+#
+# This is MANAGER-SIDE state, not node-side. The node being installed says
+# nothing about whether the manager still lists it: a rebuilt manager, a
+# restored pillar, or a hand-edited hostgroup all leave an installed node
+# permanently unable to reach salt on 4505/4506, and the old ordering meant
+# a re-run could never repair it -- the play ended at the probe first.
+#
+# Cheap on re-runs: `so-firewall includehost` reports "already exists" (rc=3)
+# and is not `changed`, so the expensive apply below is skipped entirely.
+- name: Grid join — on manager, add this node's IP to sensor firewall hostgroup
+  ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost sensor {{ so_prod_ip }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_add
+  changed_when: "'Successfully added' in fw_add.stdout"
+  # so-firewall returns rc=3 with "WARNING - IP already exists" on repeated adds. Idempotent, not a failure.
+  failed_when:
+    - fw_add.rc != 0
+    - "'already exists' not in fw_add.stderr"
+
+- name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
+  ansible.builtin.command: sudo salt-call state.apply firewall queue=True
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_apply
+  changed_when: fw_apply.rc == 0
+  # Highstate scheduler retry logic (see so_search for full rationale).
+  until: fw_apply.rc == 0
+  retries: 40
+  delay: 30
+  # Gate on the EXIT CODE, not on `changed`. rc=0 means the entry was added;
+  # rc=3 is "already exists". Keying off `changed` would couple this to
+  # `changed_when`'s stdout string-match, so a reworded so-firewall message
+  # would silently skip the apply on a FRESH node and leave 4505/4506 shut --
+  # the failure would surface much later as a grid join that never completes.
+  when: fw_add.rc == 0
+
 - name: Idempotency probe
   ansible.builtin.stat:
     path: "{{ so_sensor_installed_marker }}"
@@ -477,28 +516,6 @@
 # override sensor.interface from the default 'bond0' to
 # {{ so_monitor_interface }} (tun0 on our GRE-mirror setup) — else
 # suricata + zeek would bind to a phantom bond0 and capture 0 packets.
-
-- name: Grid join — on manager, add this node's IP to sensor firewall hostgroup
-  ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost sensor {{ so_prod_ip }}"
-  delegate_to: "{{ groups['so_manager'][0] }}"
-  become: true
-  register: fw_add
-  changed_when: "'Successfully added' in fw_add.stdout"
-  # so-firewall returns rc=3 with "WARNING - IP already exists" on repeated adds. Idempotent, not a failure.
-  failed_when:
-    - fw_add.rc != 0
-    - "'already exists' not in fw_add.stderr"
-
-- name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
-  ansible.builtin.command: sudo salt-call state.apply firewall queue=True
-  delegate_to: "{{ groups['so_manager'][0] }}"
-  become: true
-  register: fw_apply
-  changed_when: fw_apply.rc == 0
-  # Highstate scheduler retry logic (see so_search for full rationale).
-  until: fw_apply.rc == 0
-  retries: 40
-  delay: 30
 
 - name: Grid join — preflight, confirm salt-key is invokable on manager
   ansible.builtin.command: "sudo salt-key --version"

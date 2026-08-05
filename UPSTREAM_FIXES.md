@@ -11,6 +11,61 @@ Severity key:
 
 
 
+## 2026-08-05 (structural pass 3/5) · enhancement · Lifetime-invariant vs first-install-only, classified across all four SO roles
+
+**The recurring trap.** `meta: end_host` ends the play for an already-installed
+node. Any task below it is unreachable on a re-run, so a fix placed there can
+never repair an existing host — seven instances so far, each discovered by a
+change that silently did nothing.
+
+**Method.** Dumped the task order of every SO role against its `end_host`
+position and classified each task: does it describe a fact that must hold for
+the node's whole lifetime, or work that only makes sense once?
+
+**Findings.**
+
+*`so_manager` — already correct.* It includes `airgap_mode.yml` twice: once
+above the probe gated on `so_installed.stat.exists`, once below for fresh
+installs. Slightly awkward, but the invariant is genuinely re-asserted.
+
+*`elastic_agent` — correct by construction.* No `end_host` at all; it gates on
+the agent SERVICE STATE, which is re-evaluated every run.
+
+*`so_sensor` — GRE firewall and tunnel already above the probe* from the
+2026-08-04 fix.
+
+*`so_search` and `so_sensor` — the manager-side firewall entry was below it.*
+`so-firewall includehost <group> <ip>` plus the state apply sat in the grid-join
+sequence, after `end_host`. That is MANAGER-side state, not node-side: a
+rebuilt manager, a restored pillar or a hand-edited hostgroup leaves an
+installed node permanently unable to reach salt on 4505/4506, and no re-run
+could repair it because the play ended at the probe first. Both moved above.
+
+**Made cheap rather than unconditional.** Re-asserting the entry on every run
+is the point; paying for a possibly-20-minute queued `state.apply firewall`
+when nothing changed is not. The apply is now gated on the add's EXIT CODE —
+rc=0 means something was added, rc=3 is "already exists".
+
+**A trap I set and then removed.** I first gated on `fw_add.changed`, which
+couples the apply to `changed_when`'s stdout string-match
+(`'Successfully added' in stdout`). A reworded so-firewall message would then
+silently skip the apply on a FRESH node, leaving 4505/4506 shut — surfacing much
+later as a grid join that never completes. Exit codes are contract; log strings
+are not.
+
+**The rule, for the porting guide.** A task belongs ABOVE the probe if it
+asserts a fact that must remain true for the node's lifetime — firewall
+entries, tunnel definitions, pillar switches, anything held on a DIFFERENT host
+than the one being probed. It belongs below only if it is genuinely one-shot
+work: rendering an answer file, running so-setup, the post-install reboot.
+
+The sharpest form of the question: *if this state were destroyed on a running
+range, would a re-run put it back?* If not, it is in the wrong place.
+
+**Status: PROPOSED** — exercises on the next phase 50 run; a re-run against
+installed nodes should now report the firewall tasks as ok/skipped rather than
+ending immediately at the probe.
+
 ## 2026-08-05 (structural pass 2/5) · enhancement · Check audit — 80 checks reviewed against "can it fail?" and "does it measure its claim?"
 
 **Method.** Extracted every task carrying `failed_when`, `until`, `assert` or
