@@ -13,6 +13,30 @@
 # (First live dry-run on 2026-07-21 failed here with "Failed to update
 # apt cache: unknown reason" because the RC_NG_Ansible image doesn't
 # ship with apt proxy pre-configured — only env vars.)
+- name: Preflight — confirm this role is running with escalated privilege
+  ansible.builtin.command: id -u
+  register: _role_euid
+  changed_when: false
+
+# so_apt_mirror carries no task-level `become`: it relies entirely on the calling
+# play supplying `become: true`. That contract is invisible until a task
+# fails on a permission error somewhere in the middle, which is an expensive
+# way to learn it -- on this project every such discovery costs a
+# build/upload/deploy round trip through a web console.
+#
+# Two `become` mistakes on 2026-08-04/05 came from exactly this ambiguity:
+# a play-level become that broke an unprivileged chmod, then removing it
+# entirely and breaking a privileged remote read. State the requirement and
+# fail on it immediately.
+- name: Fail immediately if so_apt_mirror was invoked without become
+  ansible.builtin.fail:
+    msg: >-
+      so_apt_mirror requires privilege escalation but is running as uid
+      {{ _role_euid.stdout | trim }}. Add `become: true` to the play that
+      invokes it. Every task in this role assumes root; without it you get a
+      permission error partway through, in a task that looks unrelated.
+  when: (_role_euid.stdout | trim) != '0'
+
 - name: APT proxy for the ansible controller's own apt calls
   ansible.builtin.copy:
     dest: /etc/apt/apt.conf.d/95so-proxy

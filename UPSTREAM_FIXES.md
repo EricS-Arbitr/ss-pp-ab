@@ -11,6 +11,62 @@ Severity key:
 
 
 
+## 2026-08-05 (structural pass 4/5) · enhancement · `become` audit — privilege contracts made explicit, and one unexplained inconsistency
+
+**Method.** Mapped play-level `become` across every SO phase playbook against
+task-level `become` inside every SO role.
+
+**Two coherent patterns, both correct.**
+
+*Roles that delegate carry task-level `become`* — `so_sensor` (14),
+`so_search` (7), `vyos_mirror/tc` (4), `elastic_agent/linux` (4). These are
+exactly the roles with tasks that run on a DIFFERENT host than the play
+targets, where the privilege needed at each end differs. Escalating per task
+is the only correct approach there.
+
+*Windows paths carry none* — `05-time`, `70-analyst`, the sysmon plays,
+`elastic_agent/windows`. WinRM connects already-elevated, so `become` is noise
+at best.
+
+**The gap: five roles with an invisible contract.** `so_apt_mirror`, `so_base`,
+`so_manager`, `so_search` and `so_sensor` have zero (or partial) task-level
+`become` and depend entirely on the calling play supplying it. Nothing states
+that. The failure mode is a permission error partway through, in a task that
+looks unrelated to privilege — and on this project every such discovery costs a
+build/upload/deploy round trip through a web console.
+
+Both `become` mistakes on 2026-08-04/05 grew from this ambiguity: a play-level
+`become: true` that broke an unprivileged chmod, then removing it entirely and
+breaking a privileged remote read.
+
+**Fix.** Each of the five now opens with a two-task preflight: read `id -u`,
+fail immediately with a message naming the role and the required
+`become: true` if it is not 0. The contract is stated where it is depended on,
+and violating it fails in the first second rather than the fortieth minute.
+Placed at the very top, so it precedes the `end_host` probe per 9.4b.
+
+**Deliberately NOT done.** Converting those five roles to task-level `become`
+throughout — roughly 120 tasks. It is mechanical, touches every task in the
+working set, and buys little while they are only ever invoked from
+`become: true` plays. The preflight gets the safety without the churn.
+
+**OPEN — an inconsistency I cannot explain from here.** `10-mirror.yml` runs
+`hosts: ansible_controller, become: true` and works (it installs nginx, writes
+under /var/www). `75-endpoint.yml`'s staging play used the identical
+`hosts: ansible_controller, become: true` and failed with
+`sudo: a password is required`. Same host, same user, same inventory entry.
+
+I removed the need for privilege there rather than resolving why, which was the
+right call for unblocking but leaves the question open. If a future play hits
+`sudo: a password is required` on the controller, that is the thread to pull —
+suspect a `become_method`/`become_pass` difference between how the two were
+invoked, or something environmental in `deploy.sh` that a direct
+`ansible-playbook` run does not set. The new preflight will now catch it in the
+first task instead of mid-role.
+
+**Status: PROPOSED** — the preflights fire on the next run; a normal deploy
+should show them as ok and cost about a second per host.
+
 ## 2026-08-05 (structural pass 3/5) · enhancement · Lifetime-invariant vs first-install-only, classified across all four SO roles
 
 **The recurring trap.** `meta: end_host` ends the play for an already-installed
