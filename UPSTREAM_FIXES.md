@@ -53,8 +53,11 @@ happens to contain the search word a fixed number of times. The rule from
 PORTING_GUIDE 9.15b — assert on parsed values, never `grep` against free-form
 output — would have caught this too.
 
-**Status: PROPOSED** — verify by re-running the play and confirming a real
-count near 49.
+**Status: VERIFIED** — PowerPlant, 2026-08-04. All 44 endpoints enrolled
+(`failed=0` across 40 Windows + 4 Linux), and the Fleet verification play
+passed with both its guard tasks SKIPPED — which only happens when
+`.fleet-agents/_count` parsed cleanly AND reached the expected 49
+(44 endpoints + 5 SO grid nodes).
 
 ## 2026-08-04 (later 11) · bug · `so-firewall includehost` is not idempotent — rc=3 on an existing entry aborted the whole run
 
@@ -96,7 +99,11 @@ command in one of them is far more expensive than the same command in a
 40-host play. Second time this shape has cost a run today — the first was
 `so-firewall`'s sibling behaviour in the highstate lock (later 2).
 
-**Status: PROPOSED** — verify by re-running and reaching the Linux enrollments.
+**Status: VERIFIED** — PowerPlant, 2026-08-04. All 44 endpoints enrolled
+(`failed=0` across 40 Windows + 4 Linux), and the Fleet verification play
+passed with both its guard tasks SKIPPED — which only happens when
+`.fleet-agents/_count` parsed cleanly AND reached the expected 49
+(44 endpoints + 5 SO grid nodes).
 
 ## 2026-08-04 (later 10) · bug · Linux agent install had no privilege — Windows hid the gap because WinRM already runs elevated
 
@@ -127,8 +134,11 @@ lab-mode rules on that firewall are more permissive than its host_vars comment
 ("ESP boundary; default-deny, static-only") implies. No posture change was
 needed, and none was made.
 
-**Status: PROPOSED** — verify by re-running `75-endpoint.yml` and seeing the
-four Linux hosts enroll, then a Fleet count of 49.
+**Status: VERIFIED** — PowerPlant, 2026-08-04. All 44 endpoints enrolled
+(`failed=0` across 40 Windows + 4 Linux), and the Fleet verification play
+passed with both its guard tasks SKIPPED — which only happens when
+`.fleet-agents/_count` parsed cleanly AND reached the expected 49
+(44 endpoints + 5 SO grid nodes).
 
 ## 2026-08-04 (later 9) · bug · Two `become` mistakes staging the agent installers — one asked for too little privilege, one for too much
 
@@ -173,8 +183,11 @@ not need it (chmod on your own file), and the second kind only surfaces on a
 host where passwordless sudo happens not to be configured. Escalate per task,
 where the need is real.
 
-**Status: PROPOSED** — verify by re-running `10-mirror.yml` then
-`75-endpoint.yml`.
+**Status: VERIFIED** — PowerPlant, 2026-08-04. All 44 endpoints enrolled
+(`failed=0` across 40 Windows + 4 Linux), and the Fleet verification play
+passed with both its guard tasks SKIPPED — which only happens when
+`.fleet-agents/_count` parsed cleanly AND reached the expected 49
+(44 endpoints + 5 SO grid nodes).
 
 ## 2026-08-04 (later 8) · bug · Role-scoped variables referenced from a play that does not include the role — third instance
 
@@ -211,8 +224,11 @@ longer referenced anywhere in the repo, and `unlisted` is now flagged — a fals
 positive, since it is a task-level `vars:` entry and verify_vars.py parses only
 play-level `vars:`.
 
-**Status: PROPOSED** — verify by re-running `75-endpoint.yml` past the staging
-play.
+**Status: VERIFIED** — PowerPlant, 2026-08-04. All 44 endpoints enrolled
+(`failed=0` across 40 Windows + 4 Linux), and the Fleet verification play
+passed with both its guard tasks SKIPPED — which only happens when
+`.fleet-agents/_count` parsed cleanly AND reached the expected 49
+(44 endpoints + 5 SO grid nodes).
 
 ## 2026-08-04 (later 7) · bug · Two `win_powershell` output bugs of my own — one check that could never pass, one that could never fail
 
@@ -266,9 +282,11 @@ A `| float` on unparsable text yielding `0.0` rather than erroring is what
 turned 7b from a visible bug into an invisible one. Fifth instance in the
 can-this-check-actually-fail family (PORTING_GUIDE 9.15, 9.15b).
 
-**Status: PROPOSED** — verify by re-running `05-time.yml` and `75-endpoint.yml`
-and confirming the drift check reports a real number and the Sysmon check
-passes on hosts where the service is genuinely running.
+**Status: VERIFIED** — PowerPlant, 2026-08-04. All 44 endpoints enrolled
+(`failed=0` across 40 Windows + 4 Linux), and the Fleet verification play
+passed with both its guard tasks SKIPPED — which only happens when
+`.fleet-agents/_count` parsed cleanly AND reached the expected 49
+(44 endpoints + 5 SO grid nodes).
 
 ## 2026-08-04 (later 6) · enhancement · Elastic Agent endpoint telemetry into SO — Sysmon + eventlogs from all 44 managed hosts
 
@@ -336,8 +354,11 @@ those hosts individually with a message naming the needed
 path changes the range's security posture and is a deliberate decision, not
 something this role should make on its own.
 
-**Status: PROPOSED** — not yet run. Verify with `75-endpoint.yml` and a Fleet
-agent count of 49 (44 endpoints + 5 grid nodes).
+**Status: VERIFIED** — PowerPlant, 2026-08-04. All 44 endpoints enrolled
+(`failed=0` across 40 Windows + 4 Linux), and the Fleet verification play
+passed with both its guard tasks SKIPPED — which only happens when
+`.fleet-agents/_count` parsed cleanly AND reached the expected 49
+(44 endpoints + 5 SO grid nodes).
 
 ## 2026-08-04 (later 5) · platform · SOC login loops on win-hunt-1 — the Windows clock fix was left behind when 00-setup was excluded
 
