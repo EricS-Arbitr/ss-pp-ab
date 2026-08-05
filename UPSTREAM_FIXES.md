@@ -11,6 +11,54 @@ Severity key:
 
 
 
+## 2026-08-05 (later 3) · bug · Sensors were injecting ICMP unreachables into the range
+
+**Symptom.** Phase 60's pcap check, which prints its capture, showed the
+sensors' own traffic rather than only mirrored range traffic:
+
+```
+IP 172.16.9.40 > 172.16.3.5:      ICMP host 172.16.9.20 unreachable - admin prohibited
+IP 172.16.9.41 > 192.168.100.101: ICMP host 172.16.9.20 unreachable - admin prohibited
+IP 172.16.9.42 > 8.8.4.4:         ICMP host 172.16.2.7 unreachable - admin prohibited
+```
+
+Source addresses are the sensors' own prod IPs.
+
+**Cause.** Mirrored packets arrive on `tun0` carrying FOREIGN destinations —
+Splunk, a DC, 8.8.4.4. The kernel treats them as routable, they fall through to
+SO's `-A FORWARD -j REJECT --reject-with icmp-host-prohibited`, and each sensor
+emits an ICMP unreachable **to the original sender**.
+
+**Why it matters.** A workstation mid-conversation with Splunk on 9997 receives
+"host 172.16.9.20 unreachable — admin prohibited" from a machine it never
+contacted. Some stacks act on that. A passive monitoring system generating
+traffic into the network it monitors is the one thing it must never do.
+
+It also feeds back on itself: those ICMPs egress the prod NIC, traverse the
+routers, get mirrored, and return — which is precisely how they became visible.
+
+**How it stayed hidden.** The mirror checks passed throughout, because packets
+*were* flowing; nothing asserted anything about their content or direction. It
+surfaced only because the phase 60 check PRINTS its capture. Worth noting
+against the check audit (structural pass 2/5): a check can be correct, pass
+correctly, and still tell you nothing about a serious defect one field away
+from what it inspects.
+
+**Fix.** `-A FORWARD -i tun0 -j DROP` injected ahead of SO's FORWARD reject,
+through the same derived `iptables.jinja` override that already carries the GRE
+accepts — a salt INPUT, so it survives the highstate rewrite. DROP not REJECT,
+and matched on the input INTERFACE so it cannot affect anything but mirrored
+traffic. Verified afterwards against the RUNNING ruleset, not the template.
+
+**UNCONFIRMED: the anchor.** `so_tun_forward_anchor` defaults to
+`-A FORWARD -j LOGGING`, mirroring the INPUT anchor, but I have not seen SO's
+FORWARD section. If that line is absent — or if the FORWARD reject comes from
+Docker rather than SO's template — the guard fails the role loudly rather than
+writing a rule that lands somewhere harmless. Confirm before running.
+
+**Status: PROPOSED** — anchor unverified; do not deploy until the template's
+FORWARD section is checked.
+
 ## 2026-08-05 (structural pass 5/5) · enhancement · Host identities derived from inventory instead of restated
 
 **Method.** Swept every literal IPv4 in `group_vars/` and the SO role defaults

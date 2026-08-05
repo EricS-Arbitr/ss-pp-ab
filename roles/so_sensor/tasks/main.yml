@@ -82,6 +82,21 @@
   become: true
   register: so_stock_ipt
 
+- name: GRE firewall — fail loudly if the FORWARD anchor is gone (SO upgraded)
+  ansible.builtin.fail:
+    msg: |
+      Cannot place the tun0 FORWARD drop: anchor '{{ so_tun_forward_anchor }}'
+      not found in SO's iptables.jinja.
+
+      Without it the sensor forwards mirrored traffic, SO's FORWARD reject
+      fires, and the sensor emits ICMP unreachables to hosts across the range
+      from its own prod IP -- telling workstations that Splunk and the DCs are
+      unreachable. A passive sensor must not generate traffic.
+
+      Re-derive the anchor from the current template and update
+      so_tun_forward_anchor.
+  when: so_tun_forward_anchor not in (so_stock_ipt.content | b64decode)
+
 - name: GRE firewall — fail loudly if the anchor line is gone (SO upgraded)
   ansible.builtin.fail:
     msg: |
@@ -96,7 +111,10 @@
   ansible.builtin.copy:
     # Single-line form on purpose — a `|` block scalar would re-indent and
     # newline-pad the rendered file.
-    content: "{{ (so_stock_ipt.content | b64decode) | replace(so_gre_anchor, so_gre_rule_block + so_gre_anchor) }}"
+    # Two injections, both ahead of their anchors: GRE accepts into INPUT, and
+    # a DROP for mirrored traffic into FORWARD. Chained replaces on one
+    # expression so the file is written once.
+    content: "{{ (so_stock_ipt.content | b64decode) | replace(so_gre_anchor, so_gre_rule_block + so_gre_anchor) | replace(so_tun_forward_anchor, so_tun_forward_rule + so_tun_forward_anchor) }}"
     dest: /opt/so/saltstack/local/salt/firewall/iptables.jinja
     owner: socore
     group: socore
@@ -136,6 +154,15 @@
   changed_when: false
   register: ipt_syntax
   failed_when: ipt_syntax.rc != 0
+  when: so_grid_member.stat.exists
+
+- name: GRE firewall — verify the tun0 FORWARD drop is in the running ruleset
+  ansible.builtin.shell: |
+    iptables -S FORWARD | grep -E -- "-A FORWARD -i {{ so_monitor_interface }} -j DROP"
+  become: true
+  changed_when: false
+  register: tun_drop_check
+  failed_when: tun_drop_check.rc != 0
   when: so_grid_member.stat.exists
 
 - name: GRE firewall — verify proto 47 is now accepted in INPUT

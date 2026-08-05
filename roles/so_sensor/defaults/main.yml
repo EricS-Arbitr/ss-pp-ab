@@ -84,3 +84,26 @@ so_gre_rule_block: "{% for s in so_gre_sources %}-A INPUT -s {{ s }} -p gre -j A
 # hardcoding INTERFACE=bond0. See the long comment in tasks/main.yml.
 # Set false to get stock (bond0) behavior back.
 so_sensor_force_cloud_mode: true
+
+# --- Stop the sensor injecting ICMP into the range -------------------------
+# Mirrored packets arrive on tun0 carrying FOREIGN destinations (Splunk, a DC,
+# 8.8.4.4). The kernel treats them as routable, they fall through to
+# `-A FORWARD -j REJECT --reject-with icmp-host-prohibited`, and the sensor
+# emits an ICMP unreachable TO THE ORIGINAL SENDER from its own prod IP.
+#
+# Observed on all three sensors 2026-08-05:
+#   IP 172.16.9.40 > 172.16.3.5: ICMP host 172.16.9.20 unreachable - admin prohibited
+#
+# A workstation mid-conversation with Splunk receives "that host is
+# unreachable" from a machine it never contacted. A passive sensor must not
+# generate traffic. It also feeds back: those ICMPs egress the prod NIC, get
+# mirrored, and return -- which is how they became visible in the pcap check.
+#
+# DROP rather than REJECT, and matched on the INPUT INTERFACE so it cannot
+# affect anything but mirrored traffic.
+so_tun_forward_rule: "-A FORWARD -i {{ so_monitor_interface }} -j DROP\n"
+
+# Anchor the injection ahead of SO's FORWARD reject. Same guarded-anchor
+# pattern as so_gre_anchor: if SO's template stops containing this line the
+# role FAILS rather than writing a rule that lands somewhere harmless.
+so_tun_forward_anchor: "-A FORWARD -j LOGGING"
