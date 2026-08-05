@@ -11,6 +11,59 @@ Severity key:
 
 
 
+## 2026-08-05 (later 5) · enhancement · deploy.sh made hands-off — the blueprint runs it, nobody is at a keyboard
+
+**Requirement.** These deploys are driven by the range BLUEPRINT: the platform
+spins the images, pulls the tarball from GitHub, extracts it and runs
+`deploy.sh`. Any step that previously read "now run these three commands by
+hand" is a defect, not documentation.
+
+**Two things extraction leaves wrong.**
+- `/etc/ansible/retry` is root-owned, because the tarball extracts as root. The
+  ansible user cannot write retry files — every failed run printed
+  `Could not create retry file ... Permission denied`, and attempt 2 lost its
+  retry-file scope and silently degraded to a full sweep.
+- `/home/simspace/.vault_pass` is placed by the platform with its value, but
+  not necessarily with ownership and mode this account can read. `0600
+  root:root` is unreadable to `simspace`, and every vaulted variable resolves
+  through it.
+
+**Fix.** `deploy.sh` corrects both itself, before the vault guard. Details that
+matter:
+
+- **`sudo -n`** throughout, via an `as_root` helper that calls directly when
+  already uid 0. Non-interactive is the point: a sudo password prompt would
+  hang a headless deploy forever on stdin rather than failing.
+- **Fix only what is actually wrong**, judged by BEHAVIOUR — can this account
+  write the retry dir, can it read the password file — not by comparing
+  ownership metadata. A first attempt chown'd unconditionally and emitted five
+  `sudo: a password is required` warnings on every clean run. It is also the
+  correct assertion: `0600 root:root` is broken, but so is any other
+  combination that leaves the file unreadable.
+- **Readability, not existence.** The old guard checked `[ -f ]`. A file that
+  exists but cannot be read fails much later as a confusing vault decrypt
+  error on the first vaulted variable. Now `head -c1` proves the deploy can
+  actually read it, and an empty file is rejected too.
+- **Asymmetric severity, deliberately.** An unfixable vault password ABORTS —
+  nothing will work without it. An unfixable retry dir WARNS and continues —
+  it only costs retry-file scoping. Treating them the same would either block
+  deploys for a cosmetic problem or let a fatal one through.
+
+**Tested against five cases** before shipping, not reasoned about:
+
+| case | result |
+|---|---|
+| retry writable, vault readable (normal) | silent, exit 0 |
+| vault password missing | exit 1, message points at the blueprint |
+| vault password empty | exit 1 |
+| vault password unreadable, unfixable | exit 1, prints `ls -l` |
+| retry dir unfixable | WARN, exit 0, deploy proceeds |
+
+All paths overridable via `ANSIBLE_OWNER`, `VAULT_PASS_FILE`, `RETRY_DIR`.
+
+**Status: VERIFIED** for the logic (all five cases exercised locally);
+exercised end-to-end on the next blueprint-driven deploy.
+
 ## 2026-08-05 (later 4) · bug · MY build_tarball change silently stopped packing — seven commits shipped a stale tarball
 
 **Symptom.** After the ICMP fix, `md5 ab_pp.tgz` was byte-identical to the

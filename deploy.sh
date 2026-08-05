@@ -39,6 +39,77 @@ export ANSIBLE_CACHE_PLUGIN_CONNECTION="$HOME/.ansible/fact_cache"
 export ANSIBLE_CACHE_PLUGIN_TIMEOUT=86400
 mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
 
+# --- Unattended prerequisites -------------------------------------------------
+# This deploy is driven by the range BLUEPRINT: the platform spins the images,
+# pulls the tarball from GitHub and extracts it, then runs this script. Nobody
+# is at a keyboard. Anything that would previously have been a "now run these
+# three commands by hand" instruction has to be done here instead.
+#
+# Two things the extraction leaves wrong:
+#   * /etc/ansible/retry — the tarball extracts as root, so the ansible user
+#     cannot write retry files. Previously every failed run printed
+#     "Could not create retry file ... Permission denied" and attempt 2 lost
+#     its retry-file scope, silently degrading to a full sweep.
+#   * /home/simspace/.vault_pass — the password file and its value are placed
+#     by the platform, but not necessarily with ownership and mode the ansible
+#     user can read. 0600 root:root is unreadable to simspace, and every
+#     vaulted variable in the repo resolves through it.
+#
+# `sudo -n` throughout: non-interactive, so a sudo password prompt FAILS
+# immediately rather than hanging a headless deploy forever waiting on stdin.
+ANSIBLE_OWNER="${ANSIBLE_OWNER:-simspace}"
+VAULT_PASS_FILE="${VAULT_PASS_FILE:-/home/simspace/.vault_pass}"
+RETRY_DIR="${RETRY_DIR:-/etc/ansible/retry}"
+
+as_root() {
+	if [ "$(id -u)" -eq 0 ]; then
+		"$@"
+	else
+		sudo -n "$@"
+	fi
+}
+
+# Fix only what is actually WRONG. Testing the behaviour we need -- can the
+# deploy account write the retry dir, can it read the vault password -- rather
+# than comparing ownership metadata, keeps the common case silent and avoids
+# five spurious "sudo: a password is required" warnings on every clean run.
+# It is also the right assertion: 0600 root:root is broken, but so is any
+# other combination that leaves the file unreadable.
+echo "=== Checking prerequisites the platform is responsible for ==="
+
+# retry dir — the tarball extracts as root, so this is root-owned and the
+# ansible user cannot write retry files. Without it a failed attempt 1 loses
+# its retry-file scope and attempt 2 silently degrades to a full sweep.
+if [ ! -d "$RETRY_DIR" ] || [ ! -w "$RETRY_DIR" ]; then
+	echo "  $RETRY_DIR not writable by $(id -un) — correcting"
+	as_root mkdir -p "$RETRY_DIR" 2>/dev/null \
+		|| echo "  WARN: could not create $RETRY_DIR"
+	as_root chown -R "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$RETRY_DIR" 2>/dev/null \
+		|| echo "  WARN: could not chown $RETRY_DIR"
+	as_root chmod 0755 "$RETRY_DIR" 2>/dev/null \
+		|| echo "  WARN: could not chmod $RETRY_DIR"
+	[ -w "$RETRY_DIR" ] \
+		&& echo "  $RETRY_DIR now writable" \
+		|| echo "  WARN: $RETRY_DIR still not writable — retry scoping will be lost, deploy continues"
+else
+	echo "  $RETRY_DIR writable"
+fi
+
+# vault password file — placed by the blueprint, but not necessarily with
+# ownership and mode this account can read.
+if [ -f "$VAULT_PASS_FILE" ] && ! head -c1 "$VAULT_PASS_FILE" >/dev/null 2>&1; then
+	echo "  $VAULT_PASS_FILE not readable by $(id -un) — correcting"
+	as_root chown "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$VAULT_PASS_FILE" 2>/dev/null \
+		|| echo "  WARN: could not chown $VAULT_PASS_FILE"
+	as_root chmod 0600 "$VAULT_PASS_FILE" 2>/dev/null \
+		|| echo "  WARN: could not chmod $VAULT_PASS_FILE"
+elif [ -f "$VAULT_PASS_FILE" ]; then
+	# Readable already. Still enforce 0600 -- a world-readable vault password
+	# is a finding even though the deploy would work fine.
+	as_root chmod 0600 "$VAULT_PASS_FILE" 2>/dev/null || true
+	echo "  $VAULT_PASS_FILE readable"
+fi
+
 # --- Vault guard -------------------------------------------------------------
 # Refuse to deploy if the vault is missing or plaintext. Written FAIL-CLOSED on
 # purpose: the equivalent guard in so-ansible was
@@ -60,12 +131,32 @@ if ! head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
 	exit 1
 fi
 
-if [ ! -f /home/simspace/.vault_pass ]; then
-	echo "ERROR: /home/simspace/.vault_pass not found — it does NOT persist"
-	echo "       across range spin-ups. Recreate it:"
-	echo "         sudo bash -c 'echo -n \"simspace1\" > /home/simspace/.vault_pass'"
-	echo "         sudo chown simspace:simspace /home/simspace/.vault_pass"
-	echo "         sudo chmod 600 /home/simspace/.vault_pass"
+if [ ! -f "$VAULT_PASS_FILE" ]; then
+	echo "ERROR: $VAULT_PASS_FILE not found. Refusing to deploy."
+	echo "       The range blueprint is responsible for placing this file and"
+	echo "       its value on the controller; it does NOT persist across"
+	echo "       spin-ups. If the blueprint is not doing that, fix it there —"
+	echo "       a hands-off deploy cannot prompt for it."
+	exit 1
+fi
+
+# READABILITY, not existence. The chown/chmod above may have failed (sudo -n
+# is deliberately non-interactive), and a file that exists but cannot be read
+# fails later as a confusing vault decrypt error on the first vaulted variable
+# rather than here. Test what actually matters: can THIS process read it?
+if ! head -c1 "$VAULT_PASS_FILE" >/dev/null 2>&1; then
+	echo "ERROR: $VAULT_PASS_FILE exists but is not readable by $(id -un)."
+	echo "       Ownership/mode could not be corrected — check that the"
+	echo "       deploy account has passwordless sudo, or have the blueprint"
+	echo "       place the file as $ANSIBLE_OWNER:$ANSIBLE_OWNER mode 0600."
+	ls -l "$VAULT_PASS_FILE" 2>&1 | sed 's/^/       /'
+	exit 1
+fi
+
+# And that it is not empty -- an empty password file decrypts nothing and the
+# error surfaces far from here.
+if [ ! -s "$VAULT_PASS_FILE" ]; then
+	echo "ERROR: $VAULT_PASS_FILE is empty. Refusing to deploy."
 	exit 1
 fi
 
