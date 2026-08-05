@@ -263,7 +263,18 @@ fi
 if [ -x "$SS_PP_AB/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   echo ""
   echo "=== Verifying Jinja var references ==="
-  python3 "$SS_PP_AB/verify_vars.py" "$STAGE" || true
+  # Exit 3 = ROLE SCOPE ERROR: a play references a role default without
+  # including that role. It resolves in YAML and fails on the range, so it is
+  # fatal here -- three of these have cost a build/upload/deploy round trip.
+  # Exit 1 = soft warnings (usually `| default(...)` references); advisory only.
+  python3 "$SS_PP_AB/verify_vars.py" "$STAGE"
+  VERIFY_RC=$?
+  if [ "$VERIFY_RC" -eq 3 ]; then
+    echo ""
+    echo "ABORTING: role-scope error(s) above would fail at run time."
+    echo "          Move the variable to group_vars/all/ and rebuild."
+    exit 1
+  fi
 fi
 
 # --- Pack ------------------------------------------------------------------

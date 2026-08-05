@@ -78,11 +78,15 @@ Three tooling changes were needed to support this, all easy to regress:
 - `TAR_PATHS` gained `site.yml`, `playbooks`, `ansible.cfg`.
 - `verify_vars.py` learned to recurse into `group_vars/all/`, treat `vault_*`
   as defined, parse FQCN `ansible.builtin.set_fact`, and read play-level
-  `vars:` blocks at their own indent. Expected warning count is still 3, but the membership changed on
-  2026-08-04: `billing_secret_key`, `pfsense_stale_gateways`, `unlisted`.
-  `nat` is no longer referenced anywhere. `unlisted` is a FALSE POSITIVE —
-  it is defined in a task-level `vars:` block in `playbooks/75-endpoint.yml`,
-  and verify_vars.py only parses play-level `vars:`.
+  `vars:` blocks. **Expected warning count is 3**: `billing_secret_key`,
+  `nat`, `pfsense_stale_gateways` — all intentional `| default(...)`
+  references. `unlisted` and `missing` were false positives from a greedy
+  regex that swallowed task-level `vars:` blocks; fixed 2026-08-05.
+
+  Note: run it against the STAGE, not the repo root. The stage includes base
+  roles copied from `../range-development-ansible/`, so `nat` (in
+  `roles/vyos/tasks/main.yml`) only appears there. Against the repo root you
+  see 2 and would wrongly conclude the baseline had changed.
 
 ## Secrets — ansible-vault (added 2026-07-30)
 
@@ -120,7 +124,9 @@ ansible-playbook arbitr_pp_playbook.yaml --limit pp-ot-firewall
 
 `verify_vars.py` runs at the end of `build_tarball.sh` and warns about Jinja `{{ var }}` references that don't resolve from any `group_vars`, `host_vars`, or `role/defaults`. The three current "expected" warnings are `billing_secret_key`, `pfsense_stale_gateways` and `unlisted` (updated 2026-08-04). The first two have `| default(...)` filters and are intentional; `unlisted` is a false positive — a task-level `vars:` entry in `playbooks/75-endpoint.yml`, which verify_vars.py does not parse.
 
-**Known limitation, and it bites.** verify_vars.py treats every `roles/*/defaults/main.yml` entry as globally defined, so it cannot detect ROLE-SCOPE errors: a play that references a role default without including that role passes the check and fails at run time. That has now happened three times — `so_bundled_rules_filename` (2026-07-29) and `so_mirror_root` + `so_agent_installer_*` (2026-08-04). Variables shared across plays belong in `group_vars/all/`.
+**Role-scope checking (added 2026-08-05).** verify_vars.py detects a play referencing a role default without including that role — the class that failed at run time three times (`so_bundled_rules_filename` 2026-07-29, `so_mirror_root` + `so_agent_installer_*` 2026-08-04). It exits **3** on a scope error and `build_tarball.sh` ABORTS, because such a reference resolves in YAML and only fails on the range. Exit 1 is the soft-warning path and is advisory.
+
+Granularity is per file, not per play: a role used anywhere in a playbook satisfies references anywhere in it. That can miss a genuine error but cannot invent one — the right trade for a check that fails the build. Variables shared across plays belong in `group_vars/all/`, with a pointer comment left in the role's defaults.
 
 ## Network topology (the mental model)
 

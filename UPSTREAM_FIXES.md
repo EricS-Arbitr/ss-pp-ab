@@ -11,6 +11,66 @@ Severity key:
 
 
 
+## 2026-08-05 (structural pass 1/5) · enhancement · verify_vars.py now detects role-scope errors, and build_tarball aborts on them
+
+**The class this closes.** A play referencing a role default without including
+that role resolves fine in YAML and fails at run time. It happened three
+times — `so_bundled_rules_filename` (2026-07-29), `so_mirror_root` and
+`so_agent_installer_*` (2026-08-04) — each costing a full
+build → upload → deploy round trip to discover, which on this project means a
+human hand-carrying commands through a web console.
+
+The checker could not catch it *by construction*: it treated every
+`roles/*/defaults/main.yml` key as globally defined.
+
+**What was added.**
+- `role_scoped_definitions()` — var → the role(s) whose defaults define it.
+- `roles_used_in()` — roles a playbook references, via `roles:` blocks,
+  `- role:`/`- name:` forms, and `import_role`/`include_role`.
+- `scope_errors()` — for each playbook, any referenced var that is not
+  globally defined, not locally satisfied, and IS owned by a role the playbook
+  does not use.
+- Exit **3** for scope errors; `build_tarball.sh` aborts. Exit 1 remains the
+  advisory soft-warning path. Previously the exit code was discarded entirely
+  (`|| true`), so nothing the checker found could ever stop a build.
+
+**Granularity is per file, not per play.** A role used anywhere in a playbook
+satisfies references anywhere in it. That can miss a genuine error but cannot
+invent one — the right trade for a check that fails the build.
+
+**Validated by reintroducing the bug.** Reverting `so_mirror_root` to
+role-scope only produced exactly:
+
+```
+SCOPE ERROR: role-scoped variable(s) referenced by a play that
+does not include the defining role.
+  - so_mirror_root    in playbooks/75-endpoint.yml
+      defined only in role default(s): so_apt_mirror
+exit=3
+```
+
+A check is worth what its failure case proves, so it was tested by breaking
+the thing it exists to catch.
+
+**Second bug found while testing.** The `vars:` collector used
+`^([ \t]*)vars:\n((?:[ \t]+\S.*\n|[ \t]*\n)+)`, whose greedy body swallows
+every indented line after a play-level `vars:` — including the whole `tasks:`
+section. Task-level `vars:` blocks nested inside were never matched, so their
+keys were reported as undefined. That is where the `unlisted` and `missing`
+"expected false positives" came from — which I had documented as acceptable
+rather than investigated. Replaced with a line-based scanner that stops at
+dedent and resumes scanning after each block. **A checker with known-bogus
+warnings trains you to skim past the real ones.**
+
+**Baseline correction.** Expected warnings are **3** — `billing_secret_key`,
+`nat`, `pfsense_stale_gateways` — when run against the STAGE. Against the repo
+root only 2 appear, because `nat` lives in `roles/vyos`, a base role copied in
+from `../range-development-ansible/` at build time. I briefly documented "2"
+from a repo-root run; corrected.
+
+**Status: VERIFIED** — scope detection confirmed by deliberate reintroduction;
+clean build produces the expected 3 warnings and exits 0.
+
 ## 2026-08-05 (later 2) · bug · Agent enrollment is a single shot against a firewall that rewrites itself every 15 minutes
 
 **Symptom.** `pp-syslog` failed to enroll:
