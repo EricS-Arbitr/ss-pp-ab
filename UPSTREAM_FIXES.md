@@ -61,8 +61,14 @@ not GROUP scope. Doing it properly needs group-membership analysis: resolve
 which hosts each play targets, and which `group_vars/<group>.yml` files apply
 to them. Worth doing, not done here.
 
-**Status: VERIFIED** for the substitution (renders identically); the checker
-limitation is **OPEN**.
+**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
+60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
+`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
+`end_host` probe within a task or two — the lifetime invariants and the five
+`become` preflights now run on already-installed nodes. Phase 60 exercised the
+rewritten tunnel-flag and mirror checks on all three sensors; phase 75
+exercised the DOCKER-USER-scoped firewall proof and the derived
+`so_mirror_host` / `so_manager_ip`.
 
 ## 2026-08-05 (structural pass 4/5) · enhancement · `become` audit — privilege contracts made explicit, and one unexplained inconsistency
 
@@ -117,8 +123,14 @@ invoked, or something environmental in `deploy.sh` that a direct
 `ansible-playbook` run does not set. The new preflight will now catch it in the
 first task instead of mid-role.
 
-**Status: PROPOSED** — the preflights fire on the next run; a normal deploy
-should show them as ok and cost about a second per host.
+**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
+60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
+`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
+`end_host` probe within a task or two — the lifetime invariants and the five
+`become` preflights now run on already-installed nodes. Phase 60 exercised the
+rewritten tunnel-flag and mirror checks on all three sensors; phase 75
+exercised the DOCKER-USER-scoped firewall proof and the derived
+`so_mirror_host` / `so_manager_ip`.
 
 ## 2026-08-05 (structural pass 3/5) · enhancement · Lifetime-invariant vs first-install-only, classified across all four SO roles
 
@@ -171,9 +183,14 @@ work: rendering an answer file, running so-setup, the post-install reboot.
 The sharpest form of the question: *if this state were destroyed on a running
 range, would a re-run put it back?* If not, it is in the wrong place.
 
-**Status: PROPOSED** — exercises on the next phase 50 run; a re-run against
-installed nodes should now report the firewall tasks as ok/skipped rather than
-ending immediately at the probe.
+**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
+60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
+`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
+`end_host` probe within a task or two — the lifetime invariants and the five
+`become` preflights now run on already-installed nodes. Phase 60 exercised the
+rewritten tunnel-flag and mirror checks on all three sensors; phase 75
+exercised the DOCKER-USER-scoped firewall proof and the derived
+`so_mirror_host` / `so_manager_ip`.
 
 ## 2026-08-05 (structural pass 2/5) · enhancement · Check audit — 80 checks reviewed against "can it fail?" and "does it measure its claim?"
 
@@ -238,8 +255,14 @@ chain instead of the filtering chain. The question that catches them is not
 "will this fail if something breaks" but **"what exactly would have to be true
 for this to pass, and is that the thing I am claiming?"**
 
-**Status: PROPOSED** — #2 and #3 exercise on the next deploy; #4 and #5
-verified against real command output.
+**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
+60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
+`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
+`end_host` probe within a task or two — the lifetime invariants and the five
+`become` preflights now run on already-installed nodes. Phase 60 exercised the
+rewritten tunnel-flag and mirror checks on all three sensors; phase 75
+exercised the DOCKER-USER-scoped firewall proof and the derived
+`so_mirror_host` / `so_manager_ip`.
 
 ## 2026-08-05 (structural pass 1/5) · enhancement · verify_vars.py now detects role-scope errors, and build_tarball aborts on them
 
@@ -298,8 +321,14 @@ root only 2 appear, because `nat` lives in `roles/vyos`, a base role copied in
 from `../range-development-ansible/` at build time. I briefly documented "2"
 from a repo-root run; corrected.
 
-**Status: VERIFIED** — scope detection confirmed by deliberate reintroduction;
-clean build produces the expected 3 warnings and exits 0.
+**Status: VERIFIED** — exercised on the deployed range 2026-08-05. Phases 50,
+60 and 75 all completed with `failed=0`. Phase 50 is the proof for 3/5 and 4/5:
+`so-search ok=19`, sensors `ok=32`, where the play previously ended at the
+`end_host` probe within a task or two — the lifetime invariants and the five
+`become` preflights now run on already-installed nodes. Phase 60 exercised the
+rewritten tunnel-flag and mirror checks on all three sensors; phase 75
+exercised the DOCKER-USER-scoped firewall proof and the derived
+`so_mirror_host` / `so_manager_ip`.
 
 ## 2026-08-05 (later 2) · bug · Agent enrollment is a single shot against a firewall that rewrites itself every 15 minutes
 
