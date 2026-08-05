@@ -278,62 +278,76 @@
   become: true
   gather_facts: false
   vars:
-    expected: >-
-      {{ (((groups['windows'] | default([])) + (groups['linux'] | default([])))
-          | difference(groups['unmanaged'] | default([]))
-          | difference(groups['so_all'] | default([]))
-          | unique | list | length) + (groups['so_all'] | default([]) | length) }}
+    agent_targets: >-
+      {{ ((groups['windows'] | default([])) + (groups['linux'] | default([])))
+         | difference(groups['unmanaged'] | default([]))
+         | difference(groups['so_all'] | default([]))
+         | unique | sort | list }}
   tasks:
-    # `so-elastic-agent-status` reports THIS HOST's agent, not the grid --
-    # its output is two lines ("fleet: HEALTHY Connected", "elastic-agent:
-    # HEALTHY Running"), so `grep -c healthy` returned 2 regardless of how
-    # many agents were enrolled. It was never counting enrollments. Ask
-    # Elasticsearch instead: Fleet keeps enrolled agents in .fleet-agents.
-    - name: Count agents enrolled in Fleet
-      ansible.builtin.command: so-elasticsearch-query ".fleet-agents/_count"
-      register: fleet_raw
+    # A raw COUNT cannot tell you which hosts enrolled. On 2026-08-05 it
+    # reported the expected 49 while pp-proxy and pp-syslog had visibly failed
+    # their preflight and installed nothing -- the SO grid contributes more
+    # agent documents than the 5 nodes I assumed, and the numbers happened to
+    # cancel out. A check whose pass condition can be met by unrelated
+    # documents is not measuring enrollment. Ask WHICH hostnames Fleet knows.
+    - name: List the hostnames Fleet has enrolled
+      ansible.builtin.shell: |
+        set -o pipefail
+        so-elasticsearch-query ".fleet-agents/_search?size=500" | python3 -c '
+        import json,sys
+        d = json.load(sys.stdin)
+        names = set()
+        for h in d.get("hits", {}).get("hits", []):
+            src = h.get("_source", {}) or {}
+            host = ((src.get("local_metadata") or {}).get("host") or {})
+            n = host.get("hostname")
+            if n:
+                names.add(n.lower())
+        print("\n".join(sorted(names)))
+        '
+      args:
+        executable: /bin/bash
+      register: fleet_hosts
       changed_when: false
       failed_when: false
 
-    - name: Fail if the agent count could not be read at all
+    - name: Fail if Fleet could not be queried at all
       ansible.builtin.fail:
         msg: |
-          Could not read the Fleet agent count from Elasticsearch.
-          rc={{ fleet_raw.rc }}
-          output: {{ fleet_raw.stdout | default('') }}{{ fleet_raw.stderr | default('') }}
+          Could not list enrolled agents from Elasticsearch.
+          rc={{ fleet_hosts.rc }}
+          stdout: {{ fleet_hosts.stdout | default('') }}
+          stderr: {{ fleet_hosts.stderr | default('') }}
 
-          Without this the enrollment result is unverified -- do not read a
-          clean run as proof the endpoints are reporting.
-      when: '"count" not in (fleet_raw.stdout | default(""))'
-
-    # Agents take a little while to register after the installer returns, so
-    # poll rather than sampling once. This is a REAL check: it fails when the
-    # grid is short, which is the whole point of running it.
-    - name: Wait for every agent to appear in Fleet
-      ansible.builtin.command: so-elasticsearch-query ".fleet-agents/_count"
-      register: fleet_poll
-      changed_when: false
-      until: ((fleet_poll.stdout | from_json).count | default(0) | int) >= (expected | int)
-      retries: 20
-      delay: 15
-      failed_when: false
+          Enrollment is therefore UNVERIFIED. Do not read a clean run as proof.
+      when: fleet_hosts.rc != 0
 
     - name: Report enrollment
       ansible.builtin.debug:
         msg: >-
-          Fleet has {{ (fleet_poll.stdout | from_json).count | default(0) }}
-          agents enrolled; {{ expected }} expected
-          ({{ expected | int - (groups['so_all'] | default([]) | length) }} endpoints
-          + {{ groups['so_all'] | default([]) | length }} SO grid nodes).
+          Fleet knows {{ fleet_hosts.stdout_lines | length }} hostnames.
+          Expected {{ agent_targets | length }} endpoints
+          + {{ groups['so_all'] | default([]) | length }} SO grid nodes.
+          Missing: {{ missing | join(', ') if missing else 'none' }}
+      vars:
+        missing: >-
+          {{ agent_targets | map('lower') | list
+             | difference(fleet_hosts.stdout_lines | map('trim') | list) }}
 
-    - name: Fail if the grid is short of agents
+    - name: Fail if any agent target is absent from Fleet
       ansible.builtin.fail:
-        msg: >-
-          Only {{ (fleet_poll.stdout | from_json).count | default(0) }} of
-          {{ expected }} agents are enrolled after 5 minutes. Hosts that
-          installed but did not enroll usually cannot reach Fleet on 8220 --
-          check the {{ so_agent_firewall_hostgroup }} hostgroup covers their
-          subnet, and look at /opt/Elastic/Agent/elastic-agent.log on a
-          missing host.
-      when: ((fleet_poll.stdout | from_json).count | default(0) | int) < (expected | int)
+        msg: |
+          These hosts are NOT enrolled in Fleet:
+            {{ missing | join(', ') }}
+
+          The agent installed but never registered, or never installed at all.
+          Check /opt/Elastic/Agent/elastic-agent.log (Linux) or
+          C:\Program Files\Elastic\Agent\elastic-agent.log (Windows) on one of
+          them, and confirm the {{ so_agent_firewall_hostgroup }} hostgroup
+          covers its subnet.
+      vars:
+        missing: >-
+          {{ agent_targets | map('lower') | list
+             | difference(fleet_hosts.stdout_lines | map('trim') | list) }}
+      when: missing | length > 0
   tags: [endpoint, agent]

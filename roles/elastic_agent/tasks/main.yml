@@ -31,12 +31,21 @@
   changed_when: false
   when: inventory_hostname in groups['windows']
 
+# `wait_for` uses a real Python socket on the target. The previous
+# implementation was `timeout 5 bash -c '</dev/tcp/host/8220'`, which reports
+# False for reasons that have nothing to do with reachability -- a missing
+# `timeout` binary, a bash built without net redirection, or simply a slow
+# handshake inside 5s. On 2026-08-05 it failed pp-proxy and pp-syslog while
+# Windows hosts on the SAME subnet (172.16.2.0/24) connected fine, which is
+# not a network story.
 - name: Preflight — Fleet control port reachable (Linux)
-  ansible.builtin.shell: |
-    timeout 5 bash -c '</dev/tcp/{{ so_fleet_host }}/8220' 2>/dev/null && echo True || echo False
-  args:
-    executable: /bin/bash
+  ansible.builtin.wait_for:
+    host: "{{ so_fleet_host }}"
+    port: 8220
+    timeout: 15
+    state: started
   register: fleet_reach_lin
+  failed_when: false
   changed_when: false
   when: inventory_hostname in groups['linux']
 
@@ -57,7 +66,7 @@
   when: >-
     (inventory_hostname in groups['windows'] and not (fleet_reach_win.output[0] | default(false) | bool))
     or
-    (inventory_hostname in groups['linux'] and (fleet_reach_lin.stdout | default('False') | trim) != 'True')
+    (inventory_hostname in groups['linux'] and (fleet_reach_lin.failed | default(true)))
 
 - name: Install and enroll (Windows)
   ansible.builtin.include_tasks: windows.yml

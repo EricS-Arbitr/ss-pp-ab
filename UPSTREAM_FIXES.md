@@ -11,6 +11,53 @@ Severity key:
 
 
 
+## 2026-08-05 (later) · bug · Two more of my checks: a fragile reachability probe, and a Fleet count that passed while two hosts had failed
+
+**Symptom.** On the fresh range, `pp-proxy` and `pp-syslog` failed the Fleet
+preflight — while `pp-dc01`, `pp-file`, `pp-mail` and `pp-sql`, all on the SAME
+subnet (172.16.2.0/24), enrolled without trouble. Then the verification play
+reported:
+
+```
+Fleet has 49 agents enrolled; 49 expected (44 endpoints + 5 SO grid nodes).
+```
+
+and passed — with two endpoints demonstrably not enrolled.
+
+### The reachability probe was not measuring reachability
+
+```yaml
+timeout 5 bash -c '</dev/tcp/{{ so_fleet_host }}/8220' 2>/dev/null && echo True || echo False
+```
+
+This reports `False` for a missing `timeout` binary, a bash built without net
+redirection, or a handshake slower than 5s — none of which are "the port is
+unreachable". Windows hosts on the same subnet connecting fine is not a network
+story. Replaced with `ansible.builtin.wait_for`, which opens a real Python
+socket on the target and reports the actual result, with a 15s timeout.
+
+### The Fleet count could be satisfied by unrelated documents
+
+`expected` was computed as `44 endpoints + 5 grid nodes = 49`, and
+`.fleet-agents/_count` returned 49. But only 42 endpoints had enrolled, so the
+SO grid contributes more agent documents than the five nodes I assumed, and the
+two errors cancelled. **A count cannot tell you WHICH hosts enrolled.**
+
+Replaced with a per-host diff: list the hostnames Fleet actually knows
+(`.fleet-agents/_search`, parsed with python3 on the manager), subtract them
+from the inventory's agent targets, and fail naming exactly which hosts are
+missing. A separate guard fails if the query itself returns non-zero, so an
+unreadable result cannot pass.
+
+**The pattern, stated plainly.** An aggregate that *should* equal N is not
+evidence that the N specific things happened. This is the seventh check I have
+had to fix in two days, and they share a root: asserting on something
+correlated with the claim rather than on the claim itself. The claim here is
+"every target host is enrolled", so the check must enumerate target hosts.
+
+**Status: PROPOSED** — verify on the next run: the report should list missing
+hosts by name, or "none".
+
 ## 2026-08-05 · enhancement · Restored a boot delay in deploy.sh — "the retry loop handles it" cost two full sweeps
 
 **Symptom.** On the first from-scratch deploy of the `security-onion` branch,
