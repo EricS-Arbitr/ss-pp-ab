@@ -11,6 +11,47 @@ Severity key:
 
 
 
+## 2026-08-05 (later 2) · bug · Agent enrollment is a single shot against a firewall that rewrites itself every 15 minutes
+
+**Symptom.** `pp-syslog` failed to enroll:
+
+```
+Starting enrollment to URL: https://172.16.9.30:8220/
+Enrollment failed: ... dial tcp 172.16.9.30:8220: connect: no route to host
+```
+
+while `pp-proxy` — same subnet (172.16.2.0/24), same gateway, same play, same
+batch — enrolled without trouble.
+
+**The manager's firewall was correct.**
+`-A DOCKER-USER -s 172.16.2.0/24 -p tcp --dport 8220 -j ACCEPT` covers both
+hosts, and the hostgroup pillar lists all eight subnets.
+
+**The decisive detail is that pp-syslog PASSED the preflight.** `wait_for`
+connected to 8220 successfully, and the enrollment attempt seconds later got
+`EHOSTUNREACH`. The port was reachable, then it was not.
+
+**Cause.** SO's firewall state runs `iptables_restore` as a bare `cmd.run`
+with no `onchanges`, so the ruleset is rewritten on EVERY highstate (~15 min) —
+this is documented in `so_sensor`'s GRE firewall comments as the reason a
+manually added rule cannot survive. During that rewrite an unmatched packet
+falls through to `-A FORWARD -j REJECT --reject-with icmp-host-prohibited`,
+which returns ICMP admin-prohibited and surfaces as "no route to host" rather
+than a timeout. The agent's own backoff (init 5s, max 10m) gave up after ~8s
+and cleanly uninstalled itself.
+
+**Fix.** The installer task now retries: `until rc == 0`, 4 retries, 45s delay,
+on both the Linux and Windows paths. Safe because a failed enroll removes the
+install directory and the service, so each attempt starts from a clean host.
+
+**My diagnostic error, recorded so it is not repeated.** I asked for a test of
+TCP 443 from pp-syslog and read its failure as evidence. 443 is only granted to
+`172.16.9.0/24` via the `analyst` hostgroup — `172.16.2.0/24` gets 8220, 5055
+and 8443. The test could only ever have failed, and it told us nothing. Check
+which port a host is actually *supposed* to reach before using it as a probe.
+
+**Status: PROPOSED** — verify by re-running for pp-syslog.
+
 ## 2026-08-05 (later) · bug · Two more of my checks: a fragile reachability probe, and a Fleet count that passed while two hosts had failed
 
 **Symptom.** On the fresh range, `pp-proxy` and `pp-syslog` failed the Fleet

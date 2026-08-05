@@ -31,10 +31,24 @@
   become: true
   ansible.builtin.command: >-
     {{ so_agent_linux_dir }}/{{ so_agent_installer_linux }} {{ so_agent_install_args }}
-  register: agent_install
   when: agent_active_before.stdout | trim != 'active'
   changed_when: agent_install.rc == 0
   failed_when: false
+  # Retried, because enrollment is a network operation against a manager whose
+  # iptables is REWRITTEN every ~15 minutes: SO's firewall state runs
+  # `iptables_restore` as a bare cmd.run with no `onchanges`. An unmatched
+  # packet during that window falls through to
+  # `-A FORWARD -j REJECT --reject-with icmp-host-prohibited`, giving the agent
+  # "no route to host" rather than a timeout. On 2026-08-05 pp-syslog PASSED
+  # the 8220 preflight and then hit exactly that seconds later; the agent's own
+  # backoff gave up after ~8s and cleanly uninstalled itself.
+  #
+  # Safe to retry: a failed enroll removes the install directory and service,
+  # so each attempt starts clean.
+  register: agent_install
+  until: agent_install.rc == 0
+  retries: 4
+  delay: 45
 
 - name: Wait for the Elastic Agent service to become active
   become: true
