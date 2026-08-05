@@ -69,45 +69,54 @@ as_root() {
 	fi
 }
 
-# Fix only what is actually WRONG. Testing the behaviour we need -- can the
-# deploy account write the retry dir, can it read the vault password -- rather
-# than comparing ownership metadata, keeps the common case silent and avoids
-# five spurious "sudo: a password is required" warnings on every clean run.
-# It is also the right assertion: 0600 root:root is broken, but so is any
-# other combination that leaves the file unreadable.
-echo "=== Checking prerequisites the platform is responsible for ==="
+# ASSERT THE END STATE UNCONDITIONALLY. An earlier version skipped the chown
+# when the path merely looked fine for the CURRENT user -- and a
+# blueprint-driven deploy runs as root, for whom everything is writable. The
+# chown was therefore skipped on exactly the run it was written for, leaving
+# /etc/ansible/retry as root:root (observed 2026-08-05).
+#
+# The requirement is an end state -- owned by the ansible user -- not "writable
+# by whoever happens to be running". chown/chmod are idempotent and cost
+# milliseconds; there is no reason to guess whether they are needed.
+owner_of() {
+	# GNU first (the controller is Ubuntu), BSD fallback so this is testable
+	# on a developer Mac.
+	stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || echo "unknown"
+}
 
-# retry dir — the tarball extracts as root, so this is root-owned and the
-# ansible user cannot write retry files. Without it a failed attempt 1 loses
-# its retry-file scope and attempt 2 silently degrades to a full sweep.
-if [ ! -d "$RETRY_DIR" ] || [ ! -w "$RETRY_DIR" ]; then
-	echo "  $RETRY_DIR not writable by $(id -un) — correcting"
-	as_root mkdir -p "$RETRY_DIR" 2>/dev/null \
-		|| echo "  WARN: could not create $RETRY_DIR"
-	as_root chown -R "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$RETRY_DIR" 2>/dev/null \
-		|| echo "  WARN: could not chown $RETRY_DIR"
-	as_root chmod 0755 "$RETRY_DIR" 2>/dev/null \
-		|| echo "  WARN: could not chmod $RETRY_DIR"
-	[ -w "$RETRY_DIR" ] \
-		&& echo "  $RETRY_DIR now writable" \
-		|| echo "  WARN: $RETRY_DIR still not writable — retry scoping will be lost, deploy continues"
+echo "=== Asserting prerequisites the platform is responsible for ==="
+
+# retry dir — the tarball extracts as root, so this lands root-owned. Without
+# the fix a failed attempt 1 cannot write its retry file, and attempt 2 loses
+# retry-file scope and silently degrades to a full sweep.
+as_root mkdir -p "$RETRY_DIR" 2>/dev/null || true
+# Failures are deliberately silent here: what matters is the END STATE,
+# checked immediately below. Reporting "chown failed" when the ownership was
+# already correct is the same proxy-versus-claim mistake catalogued all
+# through this log.
+as_root chown -R "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$RETRY_DIR" 2>/dev/null || true
+as_root chmod 0755 "$RETRY_DIR" 2>/dev/null || true
+
+# Verify the END STATE, not that the commands ran.
+retry_owner="$(owner_of "$RETRY_DIR")"
+if [ "$retry_owner" = "$ANSIBLE_OWNER" ]; then
+	echo "  $RETRY_DIR owned by $ANSIBLE_OWNER"
 else
-	echo "  $RETRY_DIR writable"
+	echo "  WARN: $RETRY_DIR still owned by '$retry_owner', wanted '$ANSIBLE_OWNER'"
+	echo "        Retry-file scoping will be lost on a failed attempt; deploy continues."
 fi
 
-# vault password file — placed by the blueprint, but not necessarily with
-# ownership and mode this account can read.
-if [ -f "$VAULT_PASS_FILE" ] && ! head -c1 "$VAULT_PASS_FILE" >/dev/null 2>&1; then
-	echo "  $VAULT_PASS_FILE not readable by $(id -un) — correcting"
-	as_root chown "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$VAULT_PASS_FILE" 2>/dev/null \
-		|| echo "  WARN: could not chown $VAULT_PASS_FILE"
-	as_root chmod 0600 "$VAULT_PASS_FILE" 2>/dev/null \
-		|| echo "  WARN: could not chmod $VAULT_PASS_FILE"
-elif [ -f "$VAULT_PASS_FILE" ]; then
-	# Readable already. Still enforce 0600 -- a world-readable vault password
-	# is a finding even though the deploy would work fine.
+# vault password file — placed by the blueprint with its value, but not
+# necessarily with ownership and mode the ansible user can read.
+if [ -f "$VAULT_PASS_FILE" ]; then
+	as_root chown "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$VAULT_PASS_FILE" 2>/dev/null || true
 	as_root chmod 0600 "$VAULT_PASS_FILE" 2>/dev/null || true
-	echo "  $VAULT_PASS_FILE readable"
+	vault_owner="$(owner_of "$VAULT_PASS_FILE")"
+	if [ "$vault_owner" = "$ANSIBLE_OWNER" ]; then
+		echo "  $VAULT_PASS_FILE owned by $ANSIBLE_OWNER, mode 0600"
+	else
+		echo "  WARN: $VAULT_PASS_FILE still owned by '$vault_owner'"
+	fi
 fi
 
 # --- Vault guard -------------------------------------------------------------

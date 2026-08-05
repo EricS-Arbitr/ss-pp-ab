@@ -61,8 +61,29 @@ matter:
 
 All paths overridable via `ANSIBLE_OWNER`, `VAULT_PASS_FILE`, `RETRY_DIR`.
 
-**Status: VERIFIED** for the logic (all five cases exercised locally);
-exercised end-to-end on the next blueprint-driven deploy.
+**FIRST VERSION WAS WRONG — corrected same day.** The "fix only what is
+actually wrong" optimisation gated the chown on
+`[ ! -w "$RETRY_DIR" ]`. A blueprint-driven `deploy.sh` runs as **root**, for
+whom the directory IS writable, so the condition was false and the chown was
+skipped — on precisely the run it was written for. Observed on the first real
+blueprint deploy: `/etc/ansible/retry` still `root:root` while the playbook ran.
+
+I optimised for a case that does not occur (interactive run without sudo) and
+broke the one that does.
+
+**Corrected.** chown/chmod now run UNCONDITIONALLY — they are idempotent and
+cost milliseconds, so there is no reason to guess whether they are needed. The
+requirement is an END STATE (owned by the ansible user), not "writable by
+whoever happens to be running". The script then verifies that end state with
+`stat` and warns with the ACTUAL owner if it is still wrong.
+
+Command-level failures are silent by design: reporting "chown failed" when the
+ownership was already correct is the same proxy-versus-claim mistake this log
+catalogues throughout. The end-state check is the only voice.
+
+**Status: VERIFIED** for the logic — clean path silent, wrong-owner path warns
+with the real owner and continues, missing/empty/unreadable vault password all
+abort. Exercised end-to-end on the next blueprint-driven deploy.
 
 ## 2026-08-05 (later 4) · bug · MY build_tarball change silently stopped packing — seven commits shipped a stale tarball
 
