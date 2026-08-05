@@ -159,11 +159,21 @@
   ansible.builtin.command: "ip link set dev {{ so_monitor_interface }} promisc on"
   changed_when: false
 
-- name: Verify tunnel is up
+# `'UP' not in stdout` passes on the LOWER_UP flag, on UNKNOWN state text, and
+# on any future field containing those two letters -- it is a substring test
+# against free-form output (PORTING_GUIDE 9.15b). GRE tunnels report state
+# UNKNOWN, never UP, so the old check was passing purely on the flag list.
+# Assert on the flag list explicitly, which is what actually matters: the
+# interface is administratively up and the carrier is present.
+- name: Verify the tunnel interface is administratively up with carrier
   ansible.builtin.command: "ip -brief link show {{ so_monitor_interface }}"
   register: tun_state
   changed_when: false
-  failed_when: "'UP' not in tun_state.stdout"
+  # `[<,]UP[,>]` matches UP as a whole token in the flag list and does NOT
+  # match LOWER_UP, where the preceding character is an underscore.
+  failed_when: >-
+    tun_state.stdout is not search('[<,]UP[,>]')
+    or 'LOWER_UP' not in tun_state.stdout
 
 # "UP" is not proof. PowerPlant 2026-08-04: tun0 was UP, PROMISC and carried a
 # valid /30 while RX sat at 0 packets, because the tunnel's remote pointed at

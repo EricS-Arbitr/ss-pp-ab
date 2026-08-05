@@ -50,12 +50,19 @@
     msg: "tc-mirror script failed. See stdout above and /tmp/so-mirror-tc.log on router-0."
   when: tc_run.rc != 0 or 'FAILED:' in tc_run.stdout
 
-- name: Verify tc mirror filters exist on first source interface
-  ansible.builtin.command: "tc filter show dev {{ vyos_mirror_source_interfaces[0] }} ingress"
+# EVERY source interface, not just [0]. Checking one and reporting success
+# claims the mirror is configured when it may be configured on a fifth of the
+# interfaces -- pp-corp-router mirrors five. The script SKIPs an interface that
+# is absent on the device (blueprint NIC order does not always match ethN,
+# PORTING_GUIDE 9.9), so a silent partial mirror is a real outcome, and the
+# sensor's pcap check would still pass on traffic from the one working link.
+- name: Verify tc mirror filters exist on EVERY source interface
+  ansible.builtin.command: "tc filter show dev {{ item }} ingress"
   become: true
   register: tc_verify
   changed_when: false
   failed_when: "'mirred' not in tc_verify.stdout"
+  loop: "{{ vyos_mirror_source_interfaces }}"
 
 - name: Report mirror state
   ansible.builtin.debug:

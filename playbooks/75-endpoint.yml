@@ -244,10 +244,17 @@
       delay: 30
 
     # Proof the rules are in the RUNNING ruleset, not just the pillar.
-    - name: Verify every endpoint subnet is now permitted to 8220
+    # Scoped to DOCKER-USER specifically. Fleet server runs in a container, so
+    # its traffic is filtered there, not in INPUT -- grepping the whole ruleset
+    # would accept an INPUT rule that has no bearing on whether an agent can
+    # reach 8220. Verified against the live ruleset on 2026-08-05: every
+    # elastic_agent_endpoint rule lands in DOCKER-USER.
+    - name: Verify every endpoint subnet is permitted to 8220 in DOCKER-USER
       ansible.builtin.shell: |
         set -o pipefail
-        iptables -S | grep -E -- "-s {{ item | regex_escape }}" | grep -c 8220 || true
+        iptables -S DOCKER-USER \
+          | grep -E -- "-s {{ item | regex_escape }}( |/32 )" \
+          | grep -c -- "--dport 8220" || true
       args:
         executable: /bin/bash
       loop: "{{ so_agent_endpoint_subnets }}"

@@ -11,6 +11,72 @@ Severity key:
 
 
 
+## 2026-08-05 (structural pass 2/5) · enhancement · Check audit — 80 checks reviewed against "can it fail?" and "does it measure its claim?"
+
+**Method.** Extracted every task carrying `failed_when`, `until`, `assert` or
+`fail` across the four SO roles, `elastic_agent`, `vyos_mirror` and the phase
+playbooks: **80 checks in 272 tasks.**
+
+**Most of it holds up.** The `until` + terminal-`fail` pattern is applied
+consistently, and `failed_when: false` is used correctly throughout as "probe
+now, judge later" rather than as a way to silence a task. Five failed the
+audit.
+
+### 1. `so_base` — ICMP reachability. NOT CHANGED, and worth explaining why.
+Flagged initially: `ping` proves nothing about the ports the deploy needs, and
+we watched pp-syslog ping the manager at 1.1ms while its TCP was rejected. I
+started replacing it with a `wait_for` on salt 4505/4506 — and that would have
+been a regression. `so_base` runs in phase 30, BEFORE so-setup installs
+anything; there are no salt ports to test, and the manager is a bare VM.
+
+The check was measuring prod-plane L3 reachability, which is genuinely what it
+needed to measure. Fixed the *claim* instead: renamed to
+"Confirm prod-plane L3 reachability to the manager (ICMP only)" with a comment
+saying a pass here does NOT mean the node can talk to the manager once SO's
+firewall is up. Auditing a check requires knowing when in the sequence it runs.
+
+### 2. `vyos_mirror` — verified ONE interface and reported the mirror configured
+`tc filter show dev {{ vyos_mirror_source_interfaces[0] }}` on a router that
+mirrors five. The script SKIPs interfaces absent on the device (blueprint NIC
+order vs `ethN`, PORTING_GUIDE 9.9), so a partial mirror is a real outcome —
+and the sensor's pcap check would still pass on traffic from the one working
+link. Now loops every source interface.
+
+### 3. `75-endpoint` firewall proof — right answer, wrong chain
+`iptables -S | grep <cidr> | grep -c 8220` accepts a match anywhere in the
+ruleset. Fleet runs in a container, so what matters is `DOCKER-USER`; an INPUT
+rule would have satisfied the check without permitting a single agent. Now
+scoped to `iptables -S DOCKER-USER` with an exact `--dport 8220` match.
+
+### 4. `so_sensor` — "Verify tunnel is up" passed on the wrong substring
+`'UP' not in stdout` matches the `LOWER_UP` flag. GRE tunnels report state
+`UNKNOWN`, never `UP`, so this check was passing purely on the flag list and
+would also have passed on any future field containing those two letters. Now
+`stdout is search('[<,]UP[,>]')` — UP as a whole token, which does not match
+`LOWER_UP` — plus an explicit `LOWER_UP` carrier test. Verified against four
+real `ip -brief` outputs including admin-down and up-without-carrier.
+
+### 5. `so_manager` airgap pillar — substring where equality was available
+`'True' not in stdout`, when `--out=newline_values_only` prints the bare value.
+Now an exact match on trimmed stdout.
+
+### Also: deleted dead code carrying a stale check
+`roles/so_sensor/tasks/gre_tunnel.yml` was referenced by nothing and contained
+a duplicate of the "Verify tunnel is up" check — the weaker version, which
+would not have been fixed by #4. Dead code holding an outdated copy of a check
+is worse than no code: it reads as authoritative to whoever finds it next.
+
+**The through-line across all eight historical failures and these five.**
+Every one asserted on something *correlated* with the claim instead of the
+claim itself: a status banner instead of enrollment, a count instead of a host
+list, a substring instead of a value, one interface instead of all of them, any
+chain instead of the filtering chain. The question that catches them is not
+"will this fail if something breaks" but **"what exactly would have to be true
+for this to pass, and is that the thing I am claiming?"**
+
+**Status: PROPOSED** — #2 and #3 exercise on the next deploy; #4 and #5
+verified against real command output.
+
 ## 2026-08-05 (structural pass 1/5) · enhancement · verify_vars.py now detects role-scope errors, and build_tarball aborts on them
 
 **The class this closes.** A play referencing a role default without including

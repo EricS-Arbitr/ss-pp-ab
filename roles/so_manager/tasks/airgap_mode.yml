@@ -172,7 +172,11 @@
   become: true
   register: airgap_pillar_check
   changed_when: false
-  failed_when: "'True' not in airgap_pillar_check.stdout"
+  # Exact match, not substring. `--out=newline_values_only` prints the bare
+  # value, so an equality test is available and strictly better: 'True' is a
+  # substring of plenty of things salt might print on a bad day, including
+  # error text. PORTING_GUIDE 9.15b.
+  failed_when: (airgap_pillar_check.stdout | trim) != 'True'
 
 - name: Airgap — verify soc.json now points at the LOCAL ETOPEN directory
   ansible.builtin.command: grep -c "{{ so_airgap_etopen_dest }}" /opt/so/conf/soc/soc.json

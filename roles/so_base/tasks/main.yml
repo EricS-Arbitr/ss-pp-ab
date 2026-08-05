@@ -259,11 +259,20 @@
   when: netplan_onlink.changed
   changed_when: netplan_onlink.changed
 
-- name: Confirm we can reach the manager on the prod NIC
+# L3 reachability on the prod plane, and NOTHING MORE. Deliberately ICMP:
+# this runs in phase 30, before so-setup has installed anything, so there are
+# no salt ports to test yet -- the manager is a bare VM at this point.
+#
+# Do not read a pass here as "this node can talk to the manager". SO's
+# firewall accepts ICMP from everywhere (`-A INPUT -p icmp -j ACCEPT`) while
+# rejecting unpermitted TCP with icmp-host-prohibited, so once SO is up a ping
+# succeeds from hosts that cannot open a single port. Port-level proof belongs
+# in the grid-join tasks, which have it.
+- name: Confirm prod-plane L3 reachability to the manager (ICMP only)
   ansible.builtin.command: "ping -c 2 -W 2 {{ so_manager_ip }}"
   changed_when: false
   register: mgr_ping
-  # First run on the manager itself may or may not ping self; skip.
+  # The manager pinging itself proves nothing about the prod plane.
   when: inventory_hostname != groups['so_manager'][0]
   failed_when: mgr_ping.rc != 0
 
