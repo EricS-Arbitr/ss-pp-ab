@@ -75,11 +75,17 @@ fi
 # have direct internet. Failure here doesn't abort the deploy — ansible-playbook
 # will surface a clear "collection not found" error if anything's actually missing.
 #
-# NOTE: The historical `sleep 120` before this section was removed 2026-07-02
-# as part of the speed pass. It was a defensive delay to let fresh-provisioned
-# VMs finish booting before the deploy started, but the retry loop already
-# handles any "host unreachable" from a VM that isn't ready. On iterative
-# deploys the sleep is pure wasted wall clock.
+# NOTE: a `sleep 120` here was removed 2026-07-02 in a speed pass, reasoning
+# that the retry loop already handles a VM that is not ready yet. RESTORED
+# 2026-08-05 at 180s, because that reasoning did not survive contact with a
+# fresh range: the first two attempts of a from-scratch deploy both failed on
+# hosts that had not finished booting, and "the retry loop handles it" meant
+# paying for two full multi-hour sweeps to discover that. A three-minute wait
+# is cheap against a ~5-hour deploy; two wasted passes are not.
+#
+# BOOT_DELAY is overridable so iterative deploys need not pay it -- which was
+# the legitimate half of the 2026-07-02 argument:
+#     BOOT_DELAY=0 ./deploy.sh
 echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then
@@ -87,6 +93,14 @@ if [ -f requirements.yml ]; then
 	HTTPS_PROXY="http://10.255.240.1:3128" \
 		ansible-galaxy collection install -r requirements.yml \
 		|| echo "WARN: galaxy install returned non-zero; continuing"
+fi
+
+# --- Let a freshly provisioned range finish booting --------------------------
+BOOT_DELAY="${BOOT_DELAY:-180}"
+if [ "$BOOT_DELAY" -gt 0 ]; then
+	echo "=== Waiting ${BOOT_DELAY}s for range VMs to finish booting ==="
+	echo "    (override with BOOT_DELAY=0 ./deploy.sh on an already-up range)"
+	sleep "$BOOT_DELAY"
 fi
 
 for i in $(seq 1 $MAX_ATTEMPTS); do

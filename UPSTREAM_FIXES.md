@@ -11,6 +11,41 @@ Severity key:
 
 
 
+## 2026-08-05 · enhancement · Restored a boot delay in deploy.sh — "the retry loop handles it" cost two full sweeps
+
+**Symptom.** On the first from-scratch deploy of the `security-onion` branch,
+attempts 1 and 2 both failed on hosts that had not finished booting; the
+controller got no response from them. Attempt 3 then ran cleanly through every
+phase. Three multi-hour sweeps to do the work of one.
+
+**History.** `deploy.sh` used to `sleep 120` before the first attempt. It was
+removed on 2026-07-02 in a speed pass, with the reasoning recorded in the file:
+*"the retry loop already handles any host unreachable from a VM that isn't
+ready. On iterative deploys the sleep is pure wasted wall clock."*
+
+Half of that was right and half was expensive. On an ITERATIVE deploy against
+an already-running range, the sleep is indeed waste. On a FRESH range it is
+not, because "the retry loop handles it" means paying for an entire failed
+sweep — here, two of them — to arrive at the same place a three-minute wait
+would have reached directly. The cost asymmetry was never examined: 180s
+against a ~5-hour deploy is 1%.
+
+**Fix.** `BOOT_DELAY`, defaulting to 180s before attempt 1, overridable:
+
+```bash
+BOOT_DELAY=0 ./deploy.sh     # already-up range, iterative work
+```
+
+which keeps the legitimate half of the original argument.
+
+**Generalisable.** "A retry will catch it" is only cheap when a retry is cheap.
+When the retried unit is a multi-hour full-fleet sweep, a guard that prevents
+the failure beats a mechanism that recovers from it. Worth applying to the
+`MAX_ATTEMPTS=3` loop generally — a late-phase failure currently re-runs
+everything from the range baseline.
+
+**Status: PROPOSED** — verify on the next fresh-range deploy.
+
 ## 2026-08-04 (later 12) · bug · The Fleet enrollment check counted the wrong thing entirely — `so-elastic-agent-status` reports one host, not the grid
 
 **Symptom.** All 44 endpoints enrolled with `failed=0`, and the verification
