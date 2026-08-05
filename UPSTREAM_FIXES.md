@@ -141,8 +141,15 @@ controller. `/opt/so/saltstack` exists ONLY on the manager — a fact this
 role's own comments state ("the sensor has no /opt/so/saltstack at all"). I
 had the answer in the code I was editing.
 
-**Status: PROPOSED** — anchor confirmed against the rendered ruleset; the
-injection itself is exercised on the next phase 50 run.
+**Status: PARTIALLY VERIFIED** — the rule is IN PLACE. Phase 50 on 2026-08-05:
+the anchor guard skipped (anchor found in the template, line 107), and
+`verify the tun0 FORWARD drop is in the running ruleset` returned ok on all
+three sensors — checked against live `iptables -S FORWARD`, not the template.
+
+The EFFECT is not yet proven. That requires phase 60 captures showing no
+`ICMP ... unreachable - admin prohibited` lines sourced from 172.16.9.40/.41/.42.
+A rule being present is not the same as the traffic having stopped — the
+distinction this log keeps re-learning.
 
 ## 2026-08-05 (structural pass 5/5) · enhancement · Host identities derived from inventory instead of restated
 
@@ -194,9 +201,19 @@ not GROUP scope. Doing it properly needs group-membership analysis: resolve
 which hosts each play targets, and which `group_vars/<group>.yml` files apply
 to them. Worth doing, not done here.
 
-**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
-actually deployed the `31c698c` archive; `build_tarball.sh` had silently
-stopped packing (see 2026-08-05 later 4). Never exercised on a range.
+**Status: VERIFIED** — genuinely this time, on the deployed range with a
+tarball confirmed to contain the changes (`b2737cc`, grep-checked on the
+controller before running). Phase 50, `failed=0` on all four nodes:
+`become` preflights pass on so_base/so_search/so_sensor; the relocated firewall
+invariants run on already-installed nodes with the apply correctly SKIPPED via
+the `rc == 0` gate; the rewritten tunnel checks pass against real
+`UNKNOWN`-state output; and every `so_base` task using the derived
+`so_mirror_host` / `so_manager_ip` succeeded.
+
+*The `ok=19/32` I could not reconcile earlier:* `so_base` runs as a META
+DEPENDENCY of `so_search` and `so_sensor`, so those plays execute ~28 `so_base`
+tasks before the role's own. I was counting only the role's tasks and built two
+wrong theories from the difference instead of reading the task output.
 
 ## 2026-08-05 (structural pass 4/5) · enhancement · `become` audit — privilege contracts made explicit, and one unexplained inconsistency
 
@@ -251,9 +268,19 @@ invoked, or something environmental in `deploy.sh` that a direct
 `ansible-playbook` run does not set. The new preflight will now catch it in the
 first task instead of mid-role.
 
-**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
-actually deployed the `31c698c` archive; `build_tarball.sh` had silently
-stopped packing (see 2026-08-05 later 4). Never exercised on a range.
+**Status: VERIFIED** — genuinely this time, on the deployed range with a
+tarball confirmed to contain the changes (`b2737cc`, grep-checked on the
+controller before running). Phase 50, `failed=0` on all four nodes:
+`become` preflights pass on so_base/so_search/so_sensor; the relocated firewall
+invariants run on already-installed nodes with the apply correctly SKIPPED via
+the `rc == 0` gate; the rewritten tunnel checks pass against real
+`UNKNOWN`-state output; and every `so_base` task using the derived
+`so_mirror_host` / `so_manager_ip` succeeded.
+
+*The `ok=19/32` I could not reconcile earlier:* `so_base` runs as a META
+DEPENDENCY of `so_search` and `so_sensor`, so those plays execute ~28 `so_base`
+tasks before the role's own. I was counting only the role's tasks and built two
+wrong theories from the difference instead of reading the task output.
 
 ## 2026-08-05 (structural pass 3/5) · enhancement · Lifetime-invariant vs first-install-only, classified across all four SO roles
 
@@ -306,9 +333,19 @@ work: rendering an answer file, running so-setup, the post-install reboot.
 The sharpest form of the question: *if this state were destroyed on a running
 range, would a re-run put it back?* If not, it is in the wrong place.
 
-**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
-actually deployed the `31c698c` archive; `build_tarball.sh` had silently
-stopped packing (see 2026-08-05 later 4). Never exercised on a range.
+**Status: VERIFIED** — genuinely this time, on the deployed range with a
+tarball confirmed to contain the changes (`b2737cc`, grep-checked on the
+controller before running). Phase 50, `failed=0` on all four nodes:
+`become` preflights pass on so_base/so_search/so_sensor; the relocated firewall
+invariants run on already-installed nodes with the apply correctly SKIPPED via
+the `rc == 0` gate; the rewritten tunnel checks pass against real
+`UNKNOWN`-state output; and every `so_base` task using the derived
+`so_mirror_host` / `so_manager_ip` succeeded.
+
+*The `ok=19/32` I could not reconcile earlier:* `so_base` runs as a META
+DEPENDENCY of `so_search` and `so_sensor`, so those plays execute ~28 `so_base`
+tasks before the role's own. I was counting only the role's tasks and built two
+wrong theories from the difference instead of reading the task output.
 
 ## 2026-08-05 (structural pass 2/5) · enhancement · Check audit — 80 checks reviewed against "can it fail?" and "does it measure its claim?"
 
@@ -373,9 +410,19 @@ chain instead of the filtering chain. The question that catches them is not
 "will this fail if something breaks" but **"what exactly would have to be true
 for this to pass, and is that the thing I am claiming?"**
 
-**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
-actually deployed the `31c698c` archive; `build_tarball.sh` had silently
-stopped packing (see 2026-08-05 later 4). Never exercised on a range.
+**Status: VERIFIED** — genuinely this time, on the deployed range with a
+tarball confirmed to contain the changes (`b2737cc`, grep-checked on the
+controller before running). Phase 50, `failed=0` on all four nodes:
+`become` preflights pass on so_base/so_search/so_sensor; the relocated firewall
+invariants run on already-installed nodes with the apply correctly SKIPPED via
+the `rc == 0` gate; the rewritten tunnel checks pass against real
+`UNKNOWN`-state output; and every `so_base` task using the derived
+`so_mirror_host` / `so_manager_ip` succeeded.
+
+*The `ok=19/32` I could not reconcile earlier:* `so_base` runs as a META
+DEPENDENCY of `so_search` and `so_sensor`, so those plays execute ~28 `so_base`
+tasks before the role's own. I was counting only the role's tasks and built two
+wrong theories from the difference instead of reading the task output.
 
 ## 2026-08-05 (structural pass 1/5) · enhancement · verify_vars.py now detects role-scope errors, and build_tarball aborts on them
 
@@ -434,9 +481,19 @@ root only 2 appear, because `nat` lives in `roles/vyos`, a base role copied in
 from `../range-development-ansible/` at build time. I briefly documented "2"
 from a repo-root run; corrected.
 
-**Status: PROPOSED** — the 2026-08-05 run that appeared to verify this
-actually deployed the `31c698c` archive; `build_tarball.sh` had silently
-stopped packing (see 2026-08-05 later 4). Never exercised on a range.
+**Status: VERIFIED** — genuinely this time, on the deployed range with a
+tarball confirmed to contain the changes (`b2737cc`, grep-checked on the
+controller before running). Phase 50, `failed=0` on all four nodes:
+`become` preflights pass on so_base/so_search/so_sensor; the relocated firewall
+invariants run on already-installed nodes with the apply correctly SKIPPED via
+the `rc == 0` gate; the rewritten tunnel checks pass against real
+`UNKNOWN`-state output; and every `so_base` task using the derived
+`so_mirror_host` / `so_manager_ip` succeeded.
+
+*The `ok=19/32` I could not reconcile earlier:* `so_base` runs as a META
+DEPENDENCY of `so_search` and `so_sensor`, so those plays execute ~28 `so_base`
+tasks before the role's own. I was counting only the role's tasks and built two
+wrong theories from the difference instead of reading the task output.
 
 ## 2026-08-05 (later 2) · bug · Agent enrollment is a single shot against a firewall that rewrites itself every 15 minutes
 
