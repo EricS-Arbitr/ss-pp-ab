@@ -72,6 +72,41 @@ internal_dns_records:
     value: "pp-proxy.{{ domain_name }}"
     zone: "2.16.172.in-addr.arpa"
 
+  # Security Onion grid (security-onion branch only). Not AD-joined, so they
+  # have no DNS record of their own -- same situation as pp-www above.
+  #
+  # WHY: Elastic Agent on every endpoint resolves the manager by SHORT NAME for
+  # its Fleet/Elasticsearch output. Endpoints use pp-dc01 (172.16.2.7) for DNS,
+  # which had no record, producing a steady stream of
+  #   DNS lookup failure "so-manager" on 172.16.2.7:53: server misbehaving
+  # every few seconds from pp-bp-wkstn-*, pp-dc03, pp-syslog and others.
+  # Enrollment itself used the IP, so agents joined and ship data -- this is a
+  # degraded path, not a broken one, but it is constant noise in the SO events
+  # list and any retry it governs is failing.
+  #
+  # A records only: there is no 9.16.172.in-addr.arpa reverse zone in this
+  # range (only 8.16.172 and 2.16.172), so PTRs would target a zone that does
+  # not exist.
+  - name: "so-manager"
+    type: "A"
+    value: "172.16.9.30"
+    zone: "{{ domain_name }}"
+  - name: "so-search"
+    type: "A"
+    value: "172.16.9.35"
+    zone: "{{ domain_name }}"
+  - name: "so-sensor-corp"
+    type: "A"
+    value: "172.16.9.40"
+    zone: "{{ domain_name }}"
+  - name: "so-sensor-ot"
+    type: "A"
+    value: "172.16.9.41"
+    zone: "{{ domain_name }}"
+  - name: "so-sensor-edge"
+    type: "A"
+    value: "172.16.9.42"
+    zone: "{{ domain_name }}"
 DomainUsers:
   - name: "simspace"
     fullname: "simspace"

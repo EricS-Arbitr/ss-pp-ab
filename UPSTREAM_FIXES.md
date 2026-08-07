@@ -11,6 +11,50 @@ Severity key:
 
 
 
+## 2026-08-07 (later 3) · bug · Every endpoint failing to resolve "so-manager" — SO nodes had no DNS record
+
+**Symptom.** A steady stream in the SO events list, every few seconds:
+
+```
+DNS lookup failure "so-manager": lookup so-manager: no such host
+DNS lookup failure "so-manager" on 172.16.2.7:53: server misbehaving
+```
+
+`event.dataset: elastic_agent`, from `pp-bp-wkstn-1..8`, `pp-dc03`,
+`pp-syslog` and others — endpoints, not grid nodes.
+
+**Cause.** Elastic Agent resolves the manager by SHORT NAME for its
+Fleet/Elasticsearch output. Endpoints use pp-dc01 (172.16.2.7) for DNS, and the
+SO nodes are not AD-joined, so no record existed. The grid nodes themselves are
+unaffected: `so_base` writes `/etc/hosts` entries for their peers.
+
+Enrollment used the IP (`https://172.16.9.30:8220/` in the install log), which
+is why all 44 agents joined and ship data regardless. This is a DEGRADED path
+rather than a broken one — but it is constant noise in the events list, and
+whatever retry it governs is failing every time.
+
+**Fix.** Five A records in `internal_dns_records`
+(`group_vars/voltgrid.yml`) — the range's existing mechanism, with `pp-www` as
+precedent for a non-AD-joined host needing a record. Applied by the `dns` play.
+
+A records only: this range has reverse zones for `8.16.172` and `2.16.172` but
+NOT `9.16.172`, so PTRs would target a zone that does not exist.
+
+**Branch note.** Unlike the two range-baseline timing fixes, this one is
+correctly `security-onion`-only — `main` has no SO nodes to publish.
+
+**Method note, for once in the right order.** The hypothesis (policy points at
+the manager by hostname) was stated as a hypothesis, and the groupby by
+`host.name` was run BEFORE changing anything. It distinguished two outcomes —
+all endpoints meant a policy-level URL problem, only grid nodes meant the
+reasoning was wrong. It was the endpoints. After five wrong inferences earlier
+the same day, asking the question that could falsify the guess cost one
+exchange and saved the usual three.
+
+**Status: PROPOSED** — verify by running the `dns` play, then confirming
+`Resolve-DnsName so-manager -DnsOnly` answers from a workstation and that the
+elastic_agent DNS failures stop appearing.
+
 ## 2026-08-07 (later 2) · bug · Every tarball shipped so far was ~50% AppleDouble junk, and macOS tar cannot see it
 
 **Symptom.** `sudo tar xzvf ab_pp.tgz` on the controller listed a `._` companion
