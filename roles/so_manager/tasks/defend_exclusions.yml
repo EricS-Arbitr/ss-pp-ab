@@ -1,0 +1,75 @@
+---
+# =========================================================================
+# defend_exclusions.yml — Elastic Defend event filters, salt-native
+# =========================================================================
+# LIFETIME INVARIANT. Included above the end_host probe as well as below it,
+# like airgap_mode.yml: an installed manager must still receive corrections.
+# The filters live in Fleet's database, so a rebuilt manager or a reset Fleet
+# loses them and only a re-run puts them back (PORTING_GUIDE 9.4b).
+# =========================================================================
+
+- name: Defend filters — directory for the local/salt override
+  ansible.builtin.file:
+    path: "{{ so_defend_filters_src | dirname }}"
+    state: directory
+    owner: socore
+    group: socore
+    mode: '0755'
+
+# local/salt precedes default/salt in file_roots, so this becomes the source
+# the highstate uses for custom-filters-raw. Writing custom-filters-raw itself
+# would be reverted -- it is `file.managed` from this very path.
+- name: Defend filters — render the override of SO's custom-filters source
+  ansible.builtin.template:
+    src: elastic-defend-custom-filters.yaml.j2
+    dest: "{{ so_defend_filters_src }}"
+    owner: socore
+    group: socore
+    mode: '0644'
+  register: defend_src
+
+# Apply now rather than waiting for the 03:00 cron. The helper reads the raw
+# file, converts it into the custom-filters/ directory and uploads each rule
+# to Fleet.
+- name: Defend filters — push the salt-managed copy of the raw file
+  ansible.builtin.command: salt-call state.apply elasticfleet.config queue=True
+  register: defend_state
+  changed_when: defend_state.rc == 0
+  until: defend_state.rc == 0
+  retries: 40
+  delay: 30
+
+- name: Defend filters — run the helper to upload them to Fleet
+  ansible.builtin.command: >-
+    python3 /sbin/so-elastic-defend-manage-filters.py
+    -c /opt/so/conf/elasticsearch/curl.config
+    -d /opt/so/conf/elastic-fleet/defend-exclusions/disabled-filters.yaml
+    -i /nsm/securityonion-resources/event_filters/
+    -i {{ so_defend_filters_out }}/
+  register: defend_apply
+  changed_when: false
+  failed_when: false
+
+# PROOF, not "the command ran". Two independent checks:
+#   1. our rule IDs reached the generated directory  -> the raw file was ours
+#      and the conversion consumed it
+#   2. the helper's own log records processing       -> it was uploaded
+- name: Defend filters — confirm our rule IDs are in the generated directory
+  ansible.builtin.shell: |
+    set -o pipefail
+    grep -rl "{{ item.id }}" {{ so_defend_filters_out }}/ 2>/dev/null | head -1
+  args:
+    executable: /bin/bash
+  loop: "{{ so_defend_exclusions }}"
+  loop_control:
+    label: "{{ item.event_type }} {{ item.id }}"
+  register: defend_present
+  changed_when: false
+  failed_when: defend_present.stdout | trim == ''
+
+- name: Defend filters — report
+  ansible.builtin.debug:
+    msg: >-
+      {{ so_defend_exclusions | length }} Defend exclusion(s) active.
+      Helper output: {{ (defend_apply.stdout_lines | default([]))[-3:] | join(' | ')
+                        if defend_apply.stdout_lines | default([]) else 'see /opt/so/log/elasticfleet/elastic-defend-manage-filters.log' }}

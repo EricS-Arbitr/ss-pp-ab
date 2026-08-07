@@ -47,6 +47,12 @@
     - so_airgap_mode | bool
     - so_installed.stat.exists
 
+- name: Defend filters — assert exclusions on an already-installed manager
+  ansible.builtin.include_tasks: defend_exclusions.yml
+  when:
+    - so_defend_exclusions | default([]) | length > 0
+    - so_installed.stat.exists
+
 - name: End play early on this host if SO is already installed
   ansible.builtin.meta: end_host
   when: so_installed.stat.exists
@@ -371,3 +377,7 @@
 - name: Airgap — put SO into airgap mode and stage local detection content
   ansible.builtin.include_tasks: airgap_mode.yml
   when: so_airgap_mode | bool
+
+- name: Defend filters — apply Elastic Defend event-filter exclusions
+  ansible.builtin.include_tasks: defend_exclusions.yml
+  when: so_defend_exclusions | default([]) | length > 0

@@ -11,6 +11,82 @@ Severity key:
 
 
 
+## 2026-08-07 · enhancement · pp-splunk generated 96% of its telemetry as file events — Defend exclusions via SO's own mechanism
+
+**Finding.** `host.name: "pp-splunk" | groupby event.dataset` over 24h:
+
+```
+endpoint.events.file      11,147,502   (96%)
+endpoint.events.process      410,342
+system.syslog                 65,182
+endpoint.events.network       33,463   (0.3%)
+```
+
+Flat at ~480,000/hour across the whole window — constant, not bursty.
+
+**My first theory was wrong and worth recording.** I predicted network events
+would dominate, reasoning that pp-splunk terminates 9997 from ~40 forwarders.
+Network was 0.3%. The driver is Splunk writing its own index buckets: bucket
+rotation, journal slices and tsidx files under `/opt/splunk/var/lib/splunk/`,
+each logged as a file event. A database journaling to disk, one event at a
+time.
+
+**Why it matters beyond dashboard tidiness.** 11.1M events/day from one host
+dominates Elasticsearch retention, ageing out the corp-workstation telemetry
+actually worth hunting on. The agent stays — a SIEM indexer is a high-value
+target and "someone logged in and stopped a service" is exactly what endpoint
+telemetry is for. Only the bucket churn goes.
+
+**Mechanism — SO ships the seam.** `so-elastic-defend-manage-filters.py` runs
+from `config.sls`/`enabled.sls` and on a 03:00 cron, reading
+`-i /opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters/`.
+Facts read from the script rather than guessed:
+
+```python
+"TargetFilename": "file.path"          # generic ECS -> works on Linux
+"file_create"/"file_delete": "endpoint.events.file"
+"begin with": ("included", "wildcard")
+```
+
+Three consequences: `TargetFilename` is not Windows-only despite every one of
+the ~250 filters SO ships being Windows; `operating_system` is never read by
+the script, so filters are grid-wide; and the script itself converts
+`custom-filters-raw` into the `custom-filters/` directory.
+
+**Delivery — the soc.json trap again.** `custom-filters-raw` is
+`file.managed` from `salt://elasticfleet/files/soc/elastic-defend-custom-filters.yaml`,
+so writing it directly is reverted by the next highstate. We override the
+SOURCE in `local/salt/`, which precedes `default/salt` in `file_roots` — the
+same technique as the GRE `iptables.jinja` override. The stock file holds only
+non-functional templates (`id: 'This needs to be a UUIDv4 id'`), so replacing
+it wholesale loses nothing.
+
+**Placement.** Included above the `end_host` probe as well as below it, like
+`airgap_mode.yml`: the filters live in Fleet's database, so a rebuilt manager
+loses them and only a re-run restores them (PORTING_GUIDE 9.4b).
+
+**Scope safety.** Because the helper ignores `operating_system`, a path filter
+applies grid-wide. `/opt/splunk/var/lib/splunk/` exists on exactly one host, so
+it cannot blind another. That property is a precondition for this approach, not
+an accident — noted in the variable's comment for whoever adds the next filter.
+
+**A bug caught by testing the render, not by reading it.** The description
+contained "96% of that host's telemetry". YAML single-quoted scalars escape a
+quote by DOUBLING it, so the apostrophe truncated the scalar and the document
+failed to parse. The file would have been written successfully and broken
+inside the helper. Every interpolated value now passes through
+`replace("'", "''")`. Rendered locally with Jinja2 and parsed with
+`yaml.safe_load_all` before shipping — 2 documents, all 10 required keys,
+schema matching SO's shipped examples.
+
+**Verification in the play** asserts our rule IDs appear in the GENERATED
+`custom-filters/` directory — proving both that the override reached the raw
+file and that the conversion consumed it — rather than trusting that the
+helper command exited 0.
+
+**Status: PROPOSED** — renders and parses correctly; the effect (file-event
+volume falling on pp-splunk) is measurable in SOC a few hours after the run.
+
 ## 2026-08-05 (later 5) · enhancement · deploy.sh made hands-off — the blueprint runs it, nobody is at a keyboard
 
 **Requirement.** These deploys are driven by the range BLUEPRINT: the platform

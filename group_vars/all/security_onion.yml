@@ -178,3 +178,43 @@ so_agent_firewall_hostgroup: "elastic_agent_endpoint"
 so_mirror_root: /var/www/so-mirror
 so_agent_installer_windows: "so-elastic-agent_windows_amd64"
 so_agent_installer_linux: "so-elastic-agent_linux_amd64"
+
+# --- Elastic Defend event-filter exclusions -------------------------------
+# Applied on the manager via SO's own custom-filters mechanism. IDs must be
+# STABLE UUIDv4s: the helper keys on them, so changing one creates a duplicate
+# rule rather than updating the existing one.
+#
+# Scope note: the helper ignores `operating_system`, so every filter is
+# grid-wide. Path-based exclusions are therefore only safe when the path exists
+# on the hosts you intend to silence -- /opt/splunk/ exists solely on
+# pp-splunk, so these cannot blind another host.
+so_defend_exclusions:
+  - title: "file.path begins with /opt/splunk/var/lib/splunk/"
+    id: "99C1EB41-32BC-4FEC-BEA4-AC8A200EC305"
+    description: >-
+      Splunk index bucket churn on pp-splunk. 11.1M endpoint.events.file in 24h,
+      96% of that host's telemetry, flat at ~480k/hour. Bucket rotation and
+      tsidx writes -- no detection value, dominates ES retention.
+    date: "08/07/26"
+    event_type: "file_create"
+    target_field: "TargetFilename"
+    condition: "begin with"
+    pattern: "/opt/splunk/var/lib/splunk/"
+
+  - title: "file.path begins with /opt/splunk/var/lib/splunk/ (deletes)"
+    id: "A246A1F5-530D-4BFD-803D-25E187ACFA97"
+    description: >-
+      Same source as the create filter: Splunk ages out buckets continuously,
+      so deletes track creates.
+    date: "08/07/26"
+    event_type: "file_delete"
+    target_field: "TargetFilename"
+    condition: "begin with"
+    pattern: "/opt/splunk/var/lib/splunk/"
+
+# Where the salt SOURCE for the raw filters file lives. Overriding this path in
+# local/salt wins over default/salt in file_roots, so the highstate renders our
+# version instead of SO's template stub.
+so_defend_filters_src: "/opt/so/saltstack/local/salt/elasticfleet/files/soc/elastic-defend-custom-filters.yaml"
+so_defend_filters_raw: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters-raw"
+so_defend_filters_out: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters"
