@@ -386,6 +386,37 @@ list. Helper reported no errors.
 
 `failed=0`, and the per-item Kibana query returned 200 for both UUIDs.
 
+### Run 5: VERIFIED FOR EFFECT
+
+```
+host.name: "pp-splunk" AND event.dataset: "endpoint.events.file"   Last 30 min
+before: 230,836
+after:      213          (99.9% reduction)
+```
+
+The residual 213 are `python3.9` creating/deleting files under `/tmp/` — not
+Splunk, a few hundred an hour, and worth keeping: root-owned python writing
+temp files is legitimate signal.
+
+Also resolved: Defend's Linux agent does honour `os_types: ["linux"]`. That
+value was chosen as the obvious counterpart to `"windows"` and the read-back
+assert only proved Kibana STORED it, not that the agent matched on it. It does.
+
+**Final status: VERIFIED for both presence and effect.**
+
+**What this cost, recorded because the pattern is the lesson.** Five wrong
+inferences before the right one — network events would dominate (0.3%),
+duplicate detection was rejecting the second rule (it was a length limit),
+Elasticsearch would flood the grid nodes (they run no Defend at all), the
+wildcard lacked a trailing `*` (`modify_pattern` adds it), and
+`operating_system` was not read (it is hardcoded, which is worse). Three of
+those were stated to the operator as fact.
+
+Every one came from concluding on partial evidence — a grep against one file, a
+plausible mechanism, an absence of matches — when the authoritative artifact
+was one request away. The stored Kibana item answered it in a single GET and
+would have answered it four rounds earlier.
+
 **Status (run 3): VERIFIED — for PRESENCE only.** The filters exist in the list; that is
 what the check proves and all it proves. Whether they actually suppress
 `endpoint.events.file` from pp-splunk is a separate claim requiring a separate
