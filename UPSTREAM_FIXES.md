@@ -316,8 +316,25 @@ that fails when a source description exceeds 190. The assert runs BEFORE the
 render, so a too-long description fails immediately and names the field, rather
 than surfacing several tasks later as a Kibana 404 with no indication of cause.
 
-**Status: PROPOSED** — renders, parses and fits the budget locally; confirmed by
-the next run showing both filters at HTTP 200.
+### Run 3: both filters confirmed in Kibana
+
+```
+2 Defend exclusion(s) CONFIRMED present in Kibana's endpoint_event_filters
+list. Helper reported no errors.
+```
+
+`failed=0`, and the per-item Kibana query returned 200 for both UUIDs.
+
+**Status: VERIFIED — for PRESENCE only.** The filters exist in the list; that is
+what the check proves and all it proves. Whether they actually suppress
+`endpoint.events.file` from pp-splunk is a separate claim requiring a separate
+measurement: `host.name: "pp-splunk" | groupby event.dataset` a few hours out,
+showing file events collapsed with process/syslog/network unchanged.
+
+Keeping those two claims apart is the entire lesson of this entry's history —
+"the rule is in the generated directory" was asserted as "active", and "the
+helper ran" was printed as "Active rules: 2" while a POST was 400ing. Presence
+is not effect.
 
 ## 2026-08-05 (later 5) · enhancement · deploy.sh made hands-off — the blueprint runs it, nobody is at a keyboard
 
