@@ -11,6 +11,85 @@ Severity key:
 
 
 
+## 2026-08-07 (later) · bug · Fresh blueprint deploy needed 3 attempts — two unrelated timing defects in the range baseline
+
+**Symptom.** A hands-off, blueprint-driven deploy succeeded only on attempt 3.
+Three multi-hour sweeps for one range, and no margin: had attempt 3 failed
+there would have been nothing.
+
+From `/var/log/playbook_run.log`, the two attempts failed for DIFFERENT reasons.
+
+### 1. Windows WinRM readiness — `init` waits 60s (customer repo)
+
+```
+fatal: [pp-eng-wkstn-5]: "elapsed": 90, "msg": "timed out waiting for ping
+module test: ... port=5985 ... Connection refused"
+```
+
+Four hosts (pp-eng-wkstn-5/6/7, pp-is-wkstn-3).
+`range-development-ansible/roles/init/tasks/main.yaml` waits
+`delay: 30` + `timeout: 60` — exactly the observed `elapsed: 90`. Sixty seconds
+is not enough for a cold Windows boot on a freshly provisioned range, even
+after `deploy.sh`'s `BOOT_DELAY=180` had already elapsed.
+
+**Fix upstream:** raise the timeout in the base role, or expose it as a
+variable. It is currently hardcoded.
+
+**Workaround (overlay):** `roles/init/` locally, timings driven by
+`init_wait_timeout` (900), `init_wait_delay` (15), `init_wait_sleep` (10). Task
+names deliberately unchanged so logs stay comparable with the base role.
+
+**Why not simply raise `BOOT_DELAY`:** that penalises EVERY deploy including
+re-runs where everything is already up. A longer `wait_for_connection` costs
+nothing when the host is ready — it returns as soon as the connection succeeds.
+The blunt lever was already in the wrong place; a second blunt lever would not
+help.
+
+### 2. Domain join has no precondition — `domain_member_retry` (customer repo)
+
+```
+fatal: [pp-ls-wkstn-5]: "Computer 'pp-ls-wkstn-5' failed to join domain
+'voltgrid.com' ... The specified domain either does not exist or could not be
+contacted."
+```
+
+Failed on attempt 2 (twice — the role's own retry) and again on attempt 3.
+
+`domain_member_retry` already retries with a reboot, but never checks whether
+the DOMAIN is reachable: it joins, waits 45s, verifies, reboots, joins again.
+When DNS is not yet answering, both attempts fail identically and the retry
+adds nothing but time.
+
+pp-ls-wkstn-5 is configured IDENTICALLY to pp-ls-wkstn-4 and -6 — same subnet,
+same DNS server (172.16.2.7), adjacent addresses. Not a config defect; it
+simply reached the join before the DC was answering.
+
+**Fix upstream:** `domain_member_retry` should wait for the domain to be
+resolvable before its first attempt, not only retry after failing.
+
+**Workaround (overlay play):** `pre_tasks` on the Join Domain play waiting for
+`_ldap._tcp.dc._msdcs.<domain>` to resolve — the SRV record domain join
+actually looks up, so it is the precondition itself rather than a proxy like
+"can I ping the DC". `-DnsOnly` prevents LLMNR/NetBIOS answering falsely
+(CLAUDE.md pitfall 4). 30 × 20s, then a fail naming the host's configured DNS
+server.
+
+**A bug caught by rendering the failure message.** The diagnostic used
+`selectattr('ipv4.dns', 'defined')`, but `dns` is a SIBLING of `ipv4` in
+`network_interfaces`, not nested. It would have rendered "unknown" at best —
+and the expression only evaluates INSIDE the failure path, so a template error
+there would have replaced the diagnostic at exactly the moment it was needed.
+Corrected and rendered against real host_vars plus two degenerate cases (a host
+with no `dns` key, a host with no `network_interfaces` at all).
+
+**Branch note.** Both fixes are to the RANGE BASELINE, not Security Onion, so
+they would benefit the Splunk-only range too. Applied to `security-onion` only
+for now by decision; to be pushed to `main` once verified on a fresh deploy.
+
+**Status: PROPOSED** — verified by build (the local `init` overlay is the one
+bundled) and by rendering; the real test is a fresh blueprint deploy reaching
+success on attempt 1.
+
 ## 2026-08-07 · enhancement · pp-splunk generated 96% of its telemetry as file events — Defend exclusions via SO's own mechanism
 
 **Finding.** `host.name: "pp-splunk" | groupby event.dataset` over 24h:

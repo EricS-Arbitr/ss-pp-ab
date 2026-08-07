@@ -479,6 +479,50 @@
   # which bypasses the host loop and is unsupported under the free strategy.
   # Domain join is one of the slowest plays; if wall-clock matters, convert
   # `pause` in domain_member_retry to `wait_for` (delegated) as an overlay fix.
+  pre_tasks:
+    # PRECONDITION, added 2026-08-07. domain_member_retry already retries once
+    # with a reboot, but it never checks whether the DOMAIN is reachable -- it
+    # joins, waits 45s, verifies, reboots, joins again. If DNS is not yet
+    # answering for the domain, both attempts fail identically. That is exactly
+    # what pp-ls-wkstn-5 did on a fresh blueprint deploy: "The specified domain
+    # either does not exist or could not be contacted", twice, while its
+    # siblings on the same subnet with the same DNS server joined fine. Not a
+    # config difference -- it reached the join before the DC was answering.
+    #
+    # _ldap._tcp.dc._msdcs.<domain> is the SRV record domain join actually
+    # looks up, so waiting on it is the precondition itself rather than a proxy
+    # like "can I ping the DC". -DnsOnly keeps LLMNR/NetBIOS from answering
+    # falsely (CLAUDE.md pitfall 4).
+    - name: Wait for the domain's DC locator SRV record to resolve
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          try {
+            $r = Resolve-DnsName -Name '_ldap._tcp.dc._msdcs.{{ domain_name }}' `
+                   -Type SRV -DnsOnly -ErrorAction Stop
+            Write-Output ([string](@($r).Count))
+          } catch {
+            Write-Output '0'
+          }
+      register: dc_srv
+      changed_when: false
+      failed_when: false
+      until: (dc_srv.output[0] | default('0') | int) > 0
+      retries: 30
+      delay: 20
+
+    - name: Fail with a useful message if the domain never became resolvable
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} could not resolve
+          _ldap._tcp.dc._msdcs.{{ domain_name }} after 10 minutes, so a domain
+          join would fail with "the specified domain either does not exist or
+          could not be contacted". Check that a DC is promoted and that this
+          host's DNS server ({{ (network_interfaces | default([])
+          | selectattr('dns', 'defined') | map(attribute='dns')
+          | first | default(['unknown']))[0] }})
+          is answering.
+      when: (dc_srv.output[0] | default('0') | int) < 1
   roles:
     - domain_member_retry
   tags:

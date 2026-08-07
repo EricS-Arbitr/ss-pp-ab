@@ -1,0 +1,12 @@
+---
+# Overlay of the base `init` role. Task names deliberately unchanged so log
+# output stays comparable with the base role; only the timings differ.
+# See defaults/main.yml for why, and UPSTREAM_FIXES 2026-08-07.
+- name: wait for Windows systems to be online
+  ansible.builtin.wait_for_connection:
+    timeout: "{{ init_wait_timeout }}"
+    delay: "{{ init_wait_delay }}"
+    sleep: "{{ init_wait_sleep }}"
+
+- name: Ping test to verify connectivity
+  ansible.windows.win_ping:
