@@ -51,9 +51,23 @@ reasoning was wrong. It was the endpoints. After five wrong inferences earlier
 the same day, asking the question that could falsify the guess cost one
 exchange and saved the usual three.
 
-**Status: PROPOSED** — verify by running the `dns` play, then confirming
-`Resolve-DnsName so-manager -DnsOnly` answers from a workstation and that the
-elastic_agent DNS failures stop appearing.
+**Status: VERIFIED.** After the `dns` play: `so-manager.voltgrid.com` resolves
+to 172.16.9.30, and `elastic_agent` DNS failures fell from a constant
+few-second cadence to **1 event in 5 minutes**.
+
+**One red herring worth recording.** `Resolve-DnsName so-manager -DnsOnly` on a
+workstation still returns SERVFAIL for the bare label, while the FQDN resolves
+fine. That is a quirk of how the PowerShell cmdlet handles flat names — the
+agents' resolvers append the DNS suffix and are satisfied. Chasing the
+PowerShell result instead of re-measuring the actual symptom would have led
+into the suffix-search rabbit hole for a problem that was already fixed. The
+symptom, not the proxy for it, is what closed this out.
+
+**Residual.** The one remaining failure resolves via **8.8.8.8**, not
+172.16.2.7 — a host using the simulated-internet DNS (is-inet owns that alias)
+rather than AD DNS, which will never carry a voltgrid.com record. Expected for
+a DMZ host; identify with a `groupby host.name` before deciding whether it
+warrants anything.
 
 ## 2026-08-07 (later 2) · bug · Every tarball shipped so far was ~50% AppleDouble junk, and macOS tar cannot see it
 
