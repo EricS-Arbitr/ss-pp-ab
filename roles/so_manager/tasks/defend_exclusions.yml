@@ -1,84 +1,63 @@
 ---
 # =========================================================================
-# defend_exclusions.yml — Elastic Defend event filters, salt-native
+# defend_exclusions.yml — Elastic Defend event filters, managed via Kibana
 # =========================================================================
-# LIFETIME INVARIANT. Included above the end_host probe as well as below it,
-# like airgap_mode.yml: an installed manager must still receive corrections.
-# The filters live in Fleet's database, so a rebuilt manager or a reset Fleet
-# loses them and only a re-run puts them back (PORTING_GUIDE 9.4b).
+# LIFETIME INVARIANT — included above the end_host probe as well as below,
+# like airgap_mode.yml. The filters live in Kibana's database, so a rebuilt
+# manager or a Fleet reset loses them and only a re-run restores them
+# (PORTING_GUIDE 9.4b).
+#
+# WHY NOT SO's OWN MECHANISM
+# --------------------------
+# so-elastic-defend-manage-filters.py hardcodes `"os_types": ["windows"]` and
+# never reads the `operating_system` key from the YAML it consumes. Our first
+# attempt went through it and was created perfectly -- right dataset, right
+# wildcard, right description -- and stamped Windows-only, so Defend on a
+# Linux host never evaluated it. The rate did not move at all.
+#
+# Self-managing is safe: that helper only deletes a GUID listed in
+# disabled-filters.yaml and only iterates its own input directories, so it
+# cannot touch items it did not create.
+#
+# Plain HTTP on 5601 with basic auth from curl.config -- the same endpoint and
+# credentials the helper uses.
 # =========================================================================
 
-# Kibana rejects an exception item whose description exceeds 256 characters,
-# and the helper prepends 59 of its own -- measured 2026-08-07 when a 204-char
-# description was rejected as "value has length [263]". Budget 197; assert at
-# 190 for margin.
-#
-# Worth catching HERE rather than downstream: the helper's own summary printed
-# "Active rules: 2" while that POST was returning 400. Its reporting cannot be
-# trusted, so the failure would otherwise surface only in the Kibana check,
-# several tasks later, with no indication which field was at fault.
 - name: Defend filters — descriptions must fit Kibana's limit
   ansible.builtin.assert:
     that:
-      - (item.description | trim | length) <= 190
+      - (item.description | trim | length) <= 250
     fail_msg: >-
-      Defend filter {{ item.id }} has a {{ item.description | trim | length }}
-      character description. Kibana's limit is 256 and the helper prepends 59,
-      so the source must be <= 197. Shorten it in so_defend_exclusions.
+      Defend filter {{ item.id }} description is
+      {{ item.description | trim | length }} chars; Kibana's limit is 256.
     quiet: true
   loop: "{{ so_defend_exclusions }}"
   loop_control:
-    label: "{{ item.event_type }} ({{ item.description | trim | length }} chars)"
+    label: "{{ item.name }}"
 
-- name: Defend filters — directory for the local/salt override
+# Remove the previous approach's artifacts before creating ours. The
+# local/salt override still holds the two Windows-scoped rules with the SAME
+# item_ids; if the helper ever runs -- SO's enabled.sls references it -- it
+# would recreate them and clobber the Linux-scoped versions below. Leaving
+# superseded state in place because "nothing runs it any more" is how the next
+# person inherits a mystery.
+- name: Defend filters — remove the superseded local/salt override
   ansible.builtin.file:
-    path: "{{ so_defend_filters_src | dirname }}"
-    state: directory
-    owner: socore
-    group: socore
-    mode: '0755'
+    path: "{{ so_defend_filters_src }}"
+    state: absent
 
-# local/salt precedes default/salt in file_roots, so this becomes the source
-# the highstate uses for custom-filters-raw. Writing custom-filters-raw itself
-# would be reverted -- it is `file.managed` from this very path.
-- name: Defend filters — render the override of SO's custom-filters source
-  ansible.builtin.template:
-    src: elastic-defend-custom-filters.yaml.j2
-    dest: "{{ so_defend_filters_src }}"
-    owner: socore
-    group: socore
-    mode: '0644'
-  register: defend_src
+- name: Defend filters — remove our rules from the helper's input directory
+  ansible.builtin.file:
+    path: "{{ so_defend_filters_out }}/{{ item.id }}.yaml"
+    state: absent
+  loop: "{{ so_defend_exclusions }}"
+  loop_control:
+    label: "{{ item.id }}"
 
-# Apply now rather than waiting for the 03:00 cron. The helper reads the raw
-# file, converts it into the custom-filters/ directory and uploads each rule
-# to Fleet.
-- name: Defend filters — push the salt-managed copy of the raw file
-  ansible.builtin.command: salt-call state.apply elasticfleet.config queue=True
-  register: defend_state
-  changed_when: defend_state.rc == 0
-  until: defend_state.rc == 0
-  retries: 40
-  delay: 30
-
-# The helper POSTs to /api/exception_lists/items but NEVER creates the list
-# itself -- confirmed by reading so_elastic_defend_filters_helper.py, which
-# only ever builds that one URL. Elastic Security normally creates
-# `endpoint_event_filters` lazily on first use of the Event Filters UI, so on
-# a grid nobody has clicked through it does not exist, and every POST returns:
-#
-#   404 - {"message":"exception list id: \"endpoint_event_filters\" does not exist"}
-#
-# That is what happened on 2026-08-07: our two filters converted correctly on
-# disk and uploaded nothing. Create the list first; 409 means it already
-# exists, which is success.
-#
-# Plain HTTP on 5601 with basic auth from curl.config -- the same URL and
-# credentials the helper uses, not a guess at Elastic's API surface.
 - name: Defend filters — ensure the endpoint_event_filters list exists
   ansible.builtin.shell: |
     set -o pipefail
-    curl -s -o /tmp/.defend_list_create -w '%{http_code}' \
+    curl -s -o /dev/null -w '%{http_code}' \
       --config /opt/so/conf/elasticsearch/curl.config \
       -X POST 'http://localhost:5601/api/exception_lists' \
       -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
@@ -89,56 +68,98 @@
   changed_when: defend_list.stdout | trim == '200'
   failed_when: defend_list.stdout | trim not in ['200', '409']
 
-- name: Defend filters — report list state
-  ansible.builtin.debug:
-    msg: >-
-      endpoint_event_filters list
-      {{ 'created' if defend_list.stdout | trim == '200' else 'already existed' }}
-
-- name: Defend filters — run the helper to upload them to Fleet
-  ansible.builtin.command: >-
-    python3 /sbin/so-elastic-defend-manage-filters.py
-    -c /opt/so/conf/elasticsearch/curl.config
-    -d /opt/so/conf/elastic-fleet/defend-exclusions/disabled-filters.yaml
-    -i /nsm/securityonion-resources/event_filters/
-    -i {{ so_defend_filters_out }}/
-  register: defend_apply
-  changed_when: false
-  failed_when: false
-
-# AUTHORITATIVE CHECK — ask Kibana, not the filesystem.
-#
-# The previous version verified our rule IDs were in the GENERATED DIRECTORY
-# and the report then declared them "active". Directory presence proves the
-# local/salt override and the raw->directory conversion worked; it says
-# NOTHING about whether Fleet accepted them. On 2026-08-07 that check passed
-# while every upload 404'd, and the play reported success. Same proxy-for-claim
-# mistake this log catalogues -- committed in the very change that claimed to
-# avoid it.
-#
-# The helper keys items by our UUID (api_request builds ?item_id={guid}), so
-# a 200 here means that exact filter exists in the list.
-- name: Defend filters — verify each filter exists in Kibana
+# DELETE then POST rather than PUT. Both verbs are already exercised on this
+# grid (the helper uses DELETE; we use POST), whereas PUT's body schema
+# differs -- it rejects list_id and expects a different shape. Given how much
+# of this feature turned out to differ from expectation, using only calls with
+# observed behaviour is worth a moment of churn on a static filter.
+- name: Defend filters — remove any existing copy (may be Windows-scoped)
   ansible.builtin.shell: |
     set -o pipefail
     curl -s -o /dev/null -w '%{http_code}' \
       --config /opt/so/conf/elasticsearch/curl.config \
-      -H 'kbn-xsrf: true' \
+      -X DELETE -H 'kbn-xsrf: true' \
       'http://localhost:5601/api/exception_lists/items?item_id={{ item.id }}&namespace_type=agnostic'
   args:
     executable: /bin/bash
   loop: "{{ so_defend_exclusions }}"
   loop_control:
-    label: "{{ item.event_type }} {{ item.id }}"
-  register: defend_verify
+    label: "{{ item.name }}"
+  register: defend_delete
+  changed_when: defend_delete.stdout | trim == '200'
+  failed_when: defend_delete.stdout | trim not in ['200', '404']
+
+- name: Defend filters — create with the correct OS scope
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -s -o /tmp/.defend_post -w '%{http_code}' \
+      --config /opt/so/conf/elasticsearch/curl.config \
+      -X POST 'http://localhost:5601/api/exception_lists/items' \
+      -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+      -d @- <<'JSON'
+    {{ {
+         'list_id': 'endpoint_event_filters',
+         'item_id': item.id,
+         'name': item.name,
+         'description': item.description | trim,
+         'type': 'simple',
+         'namespace_type': 'agnostic',
+         'os_types': [item.os_type],
+         'tags': ['policy:all'],
+         'entries': [
+           {'field': item.field, 'operator': 'included', 'type': 'wildcard', 'value': item.value},
+           {'field': 'event.dataset', 'operator': 'included', 'type': 'match', 'value': item.dataset}
+         ]
+       } | to_json }}
+    JSON
+  args:
+    executable: /bin/bash
+  loop: "{{ so_defend_exclusions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: defend_create
+  changed_when: defend_create.stdout | trim in ['200', '201']
+  failed_when: defend_create.stdout | trim not in ['200', '201']
+
+# PROOF: read the stored item back and assert the two fields that were wrong
+# before -- the OS scope, and the entry value Defend actually matches on.
+# Presence alone was already verified once while the filter was inert.
+- name: Defend filters — read back each stored item
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -s --config /opt/so/conf/elasticsearch/curl.config -H 'kbn-xsrf: true' \
+      'http://localhost:5601/api/exception_lists/items?item_id={{ item.id }}&namespace_type=agnostic'
+  args:
+    executable: /bin/bash
+  loop: "{{ so_defend_exclusions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: defend_readback
   changed_when: false
-  failed_when: defend_verify.stdout | trim != '200'
+
+- name: Defend filters — assert OS scope and match value are what we intended
+  ansible.builtin.assert:
+    that:
+      - stored.os_types == [item.item.os_type]
+      - (stored.entries | selectattr('field', 'equalto', item.item.field) | map(attribute='value') | first) == item.item.value
+    fail_msg: >-
+      {{ item.item.name }} is stored with os_types={{ stored.os_types }} and
+      {{ item.item.field }}={{ stored.entries | selectattr('field', 'equalto', item.item.field)
+                               | map(attribute='value') | first | default('<absent>') }};
+      expected {{ [item.item.os_type] }} and {{ item.item.value }}.
+      A Windows-scoped filter is never evaluated on a Linux host -- that is
+      exactly how this silently did nothing the first time.
+    quiet: true
+  vars:
+    stored: "{{ item.stdout | from_json }}"
+  loop: "{{ defend_readback.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
 
 - name: Defend filters — report
   ansible.builtin.debug:
     msg: >-
-      {{ so_defend_exclusions | length }} Defend exclusion(s) CONFIRMED present
-      in Kibana's endpoint_event_filters list.
-      {{ 'Helper reported errors on other rules: ' ~ (defend_apply.stdout_lines | select('search', 'Error') | list | length) ~ ' (SO ships ~250 Windows filters through the same helper)'
-         if defend_apply.stdout_lines | default([]) | select('search', 'Error') | list | length > 0
-         else 'Helper reported no errors.' }}
+      {{ so_defend_exclusions | length }} Defend exclusion(s) stored with the
+      intended OS scope and match value. Effect on event volume is a SEPARATE
+      claim — measure endpoint.events.file for the target host over a short
+      recent window.

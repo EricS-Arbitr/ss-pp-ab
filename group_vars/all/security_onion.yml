@@ -180,45 +180,39 @@ so_agent_installer_windows: "so-elastic-agent_windows_amd64"
 so_agent_installer_linux: "so-elastic-agent_linux_amd64"
 
 # --- Elastic Defend event-filter exclusions -------------------------------
-# Applied on the manager via SO's own custom-filters mechanism. IDs must be
-# STABLE UUIDv4s: the helper keys on them, so changing one creates a duplicate
-# rule rather than updating the existing one.
+# Managed DIRECTLY against the Kibana API, not through SO's custom-filters
+# helper. The helper hardcodes `"os_types": ["windows"]` (line 87 of
+# so-elastic-defend-manage-filters.py) and never reads the `operating_system`
+# key, so it structurally cannot express a Linux filter -- our first attempt
+# was created correctly in every respect and stamped Windows-only, so Defend
+# on pp-splunk never evaluated it.
 #
-# Scope note: the helper ignores `operating_system`, so every filter is
-# grid-wide. Path-based exclusions are therefore only safe when the path exists
-# on the hosts you intend to silence -- /opt/splunk/ exists solely on
-# pp-splunk, so these cannot blind another host.
+# Safe to self-manage: the helper only ever deletes a GUID listed in
+# disabled-filters.yaml, and only iterates its own input directories. It never
+# enumerates the list, so it cannot touch items it did not create.
+#
+# ONE filter, not one per event type. The entries key on event.dataset, and
+# file_create/file_delete/rename all land in endpoint.events.file -- two rules
+# produced byte-identical entries, which is why the second reported "up to
+# date" while doing nothing.
+#
+# Path scope: /opt/splunk/var/ covers both var/lib (index buckets, tsidx,
+# .merge) and var/run (dispatch artifacts, splunkd.pid) -- both confirmed in
+# the events. /opt/splunk/bin and /opt/splunk/etc stay VISIBLE: app code and
+# configuration are what an attacker would modify, and excluding them to save
+# events would trade away the detection this host most needs.
 so_defend_exclusions:
-  - title: "file.path begins with /opt/splunk/var/lib/splunk/"
-    id: "99C1EB41-32BC-4FEC-BEA4-AC8A200EC305"
-    # Kibana caps the exception item description at 256, and the helper
-    # PREPENDS 59 characters of its own -- measured 2026-08-07, when a 204-char
-    # description came back as "value has length [263]". Budget is therefore
-    # 197; so_defend_exclusions is asserted against 190 to leave margin.
+  - id: "99C1EB41-32BC-4FEC-BEA4-AC8A200EC305"
+    name: "Arbitr - Splunk variable data (pp-splunk)"
     description: >-
-      Splunk bucket churn on pp-splunk: 11.1M file events/24h, 96% of that
-      host's telemetry. No detection value, dominates ES retention.
-    date: "08/07/26"
-    event_type: "file_create"
-    target_field: "TargetFilename"
-    condition: "begin with"
-    pattern: "/opt/splunk/var/lib/splunk/"
+      Splunk bucket and dispatch churn under /opt/splunk/var on pp-splunk:
+      ~11.1M file events/24h, 96% of that host's telemetry. No detection value
+      and it dominates ES retention. bin/ and etc/ remain monitored.
+    os_type: "linux"
+    dataset: "endpoint.events.file"
+    field: "file.path"
+    value: "/opt/splunk/var/*"
 
-  - title: "file.path begins with /opt/splunk/var/lib/splunk/ (deletes)"
-    id: "A246A1F5-530D-4BFD-803D-25E187ACFA97"
-    description: >-
-      Same source as the create filter: Splunk ages out buckets continuously,
-      so deletes track creates.
-
-    date: "08/07/26"
-    event_type: "file_delete"
-    target_field: "TargetFilename"
-    condition: "begin with"
-    pattern: "/opt/splunk/var/lib/splunk/"
-
-# Where the salt SOURCE for the raw filters file lives. Overriding this path in
-# local/salt wins over default/salt in file_roots, so the highstate renders our
-# version instead of SO's template stub.
 so_defend_filters_src: "/opt/so/saltstack/local/salt/elasticfleet/files/soc/elastic-defend-custom-filters.yaml"
 so_defend_filters_raw: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters-raw"
 so_defend_filters_out: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters"

@@ -316,6 +316,67 @@ that fails when a source description exceeds 190. The assert runs BEFORE the
 render, so a too-long description fails immediately and names the field, rather
 than surfacing several tasks later as a Kibana 404 with no indication of cause.
 
+### Run 4: the filter was correct in every respect except the one that matters
+
+Rate after applying: **230,836 in 30 minutes** — ~460k/hour, completely
+unchanged. The stored item explains it:
+
+```json
+"entries": [
+  {"type":"wildcard","field":"file.path","value":"/opt/splunk/var/lib/splunk/*"},
+  {"type":"match","field":"event.dataset","value":"endpoint.events.file"}
+],
+"os_types": ["windows"]
+```
+
+Dataset right, field right, wildcard right — `modify_pattern` appends the `*`
+correctly. **`os_types: ["windows"]` on a Linux host.** Defend never evaluates
+it. Line 87 of `so-elastic-defend-manage-filters.py` hardcodes it, and
+`operating_system` is read nowhere in that directory.
+
+**This is an upstream gap worth reporting.** `TARGET_FIELD_MAPPINGS` maps
+`TargetFilename` to `file.path` — the generic ECS field, chosen precisely
+because Linux uses it — and then every item the tool creates is stamped
+Windows-only. The mechanism is one line away from supporting Linux.
+
+**My earlier claim was wrong and I stated it as fact.** When designing this I
+wrote that "`operating_system` is NOT read by the script, so filters are
+grid-wide", and built the whole approach around path-uniqueness on that basis.
+I concluded it from a grep against the wrong file returning empty. An empty
+grep is not evidence of absent behaviour — the same mistake I had already made
+once in this thread with the HTTP layer, which also lived in the other file.
+
+**Path scope was also too narrow.** Events showed churn under BOTH
+`/opt/splunk/var/lib/` (buckets, tsidx, .merge from splunk-optimize) and
+`/opt/splunk/var/run/` (dispatch artifacts, splunkd.pid from splunkd). Now
+`/opt/splunk/var/*`. `bin/` and `etc/` stay monitored — app code and config are
+what an attacker modifies.
+
+**Two filters collapsed to one.** `file_create` and `file_delete` both map to
+`endpoint.events.file`, so both produced byte-identical entries; that is why
+the second reported "up to date" while doing nothing. One item keyed on the
+dataset covers creates, deletes and renames.
+
+### Rewritten to manage the filters directly
+
+SO's helper cannot express what we need, so the play now calls the Kibana API
+itself — same endpoint and credentials the helper uses. Safe to self-manage:
+`disable_check` only deletes a GUID listed in `disabled-filters.yaml`, and
+`process_rules` only iterates its own input directories. It never enumerates
+the list, so it cannot touch items it did not create.
+
+DELETE-then-POST rather than PUT: both verbs have observed behaviour on this
+grid, whereas PUT's body schema differs. After this many surprises, using only
+calls we have watched work is worth a moment of churn on a static filter.
+
+The play also removes the superseded `local/salt` override and the generated
+YAMLs, because they carry the SAME item_ids and would recreate Windows-scoped
+copies if the helper ever ran.
+
+**Verification now reads the item back and asserts `os_types` and the match
+value** — the two fields that were wrong while the previous check reported
+success. Presence was never the question.
+
 ### Run 3: both filters confirmed in Kibana
 
 ```
@@ -325,7 +386,7 @@ list. Helper reported no errors.
 
 `failed=0`, and the per-item Kibana query returned 200 for both UUIDs.
 
-**Status: VERIFIED — for PRESENCE only.** The filters exist in the list; that is
+**Status (run 3): VERIFIED — for PRESENCE only.** The filters exist in the list; that is
 what the check proves and all it proves. Whether they actually suppress
 `endpoint.events.file` from pp-splunk is a separate claim requiring a separate
 measurement: `host.name: "pp-splunk" | groupby event.dataset` a few hours out,
