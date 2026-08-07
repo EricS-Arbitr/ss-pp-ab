@@ -11,6 +11,71 @@ Severity key:
 
 
 
+## 2026-08-07 (later 2) · bug · Every tarball shipped so far was ~50% AppleDouble junk, and macOS tar cannot see it
+
+**Symptom.** `sudo tar xzvf ab_pp.tgz` on the controller listed a `._` companion
+beside almost every real file.
+
+**Measured, not estimated.** The archive at commit `0750421` — the one deployed —
+contained:
+
+```
+members=942   junk=471
+```
+
+Exactly one `._` companion per real file. Half the archive, on every deploy
+since the project began.
+
+**Cause.** Apple's `tar` emits an AppleDouble `._name` member for any file
+carrying an extended attribute, and `com.apple.provenance` is set on anything
+downloaded, which covers most of a checked-out repo.
+
+**`--no-xattrs` does not suppress them.** The build had carried that flag with a
+comment claiming it did. Measured on a directory containing one xattr'd file:
+
+| build | members | junk |
+|---|---|---|
+| plain `tar` | 4 | 2 |
+| `tar --no-xattrs` (what we shipped) | 4 | 2 |
+| `COPYFILE_DISABLE=1 tar` | 2 | 0 |
+
+`COPYFILE_DISABLE=1` is the load-bearing setting.
+
+**Why it went unnoticed for the entire project — and this is the real lesson.**
+Apple's `tar -tzf` **HIDES** AppleDouble members when listing, merging them back
+into xattrs. So:
+
+```
+tar -tzf ab_pp.tgz | grep -c '\._'   ->  0        (macOS: structurally blind)
+python3 tarfile getnames()           ->  471      (the truth)
+```
+
+I checked with `tar -tzf` and reported "0 junk entries in the archive" — a check
+that could not have detected the defect it was written for. Not a proxy for the
+claim this time, but a TOOL incapable of observing it. The same class as
+`so-elastic-agent-status | grep -c healthy`: the measurement was fine, the
+instrument was wrong.
+
+**Fix (both repos).**
+- `COPYFILE_DISABLE=1` on the tar invocation.
+- `--exclude='.DS_Store' --exclude='._*'` as a second layer.
+- `find "$STAGE" \( -name '.DS_Store' -o -name '._*' \) -delete` across the
+  whole stage, not just `files/` as before.
+- Verified with `python3 tarfile`, not macOS tar: ss-pp-ab 471 members / 0 junk,
+  so-ansible 131 / 0.
+
+**Consequence on the target, worth acting on separately.** `tar -xzf` is
+ADDITIVE — it never removes files absent from the archive. Every one of those
+471 junk files persists in `/etc/ansible`, as does anything ever shipped and
+later deleted. `roles/so_sensor/tasks/gre_tunnel.yml`, removed from the repo on
+2026-08-05, is still on the controller. Nothing references it, but a stale role
+or a renamed task file would be a live hazard. The durable fix belongs in the
+blueprint: extract into a clean `/etc/ansible` rather than over the previous
+one.
+
+**Status: VERIFIED** for the build fix — measured before and after with a tool
+that can see the difference.
+
 ## 2026-08-07 (later) · bug · Fresh blueprint deploy needed 3 attempts — two unrelated timing defects in the range baseline
 
 **Symptom.** A hands-off, blueprint-driven deploy succeeded only on attempt 3.

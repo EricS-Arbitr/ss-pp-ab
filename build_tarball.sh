@@ -290,7 +290,28 @@ TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml site.yml pla
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)
-tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
+# macOS junk, stripped from the WHOLE stage rather than just files/. The old
+# strip covered "$STAGE/files" only, which was the one place they had been
+# noticed. .DS_Store exists in six places across the two repos.
+find "$STAGE" \( -name '.DS_Store' -o -name '._*' \) -delete 2>/dev/null || true
+
+# COPYFILE_DISABLE=1 is the load-bearing one. Apple's tar emits an AppleDouble
+# "._name" companion for every file carrying an extended attribute, and
+# com.apple.provenance is set on anything downloaded -- which is most of a
+# checked-out repo. `--no-xattrs` does NOT suppress them: measured 2026-08-07,
+# a directory with one xattr'd file produced 2 junk members with --no-xattrs
+# and 0 with COPYFILE_DISABLE=1. The archive at commit 0750421 was 942 members,
+# 471 of them junk -- exactly one companion per real file, 50% of the archive.
+#
+# It went unnoticed because Apple's `tar -tzf` HIDES AppleDouble members when
+# listing, merging them back into xattrs. Verifying with macOS tar therefore
+# cannot detect this; use python3 -c "import tarfile; tarfile.open(...)".
+#
+# Not cosmetic on the target: extraction is ADDITIVE, so junk shipped once
+# persists in /etc/ansible forever.
+COPYFILE_DISABLE=1 tar --no-xattrs \
+  --exclude='.DS_Store' --exclude='._*' \
+  -czf "$ARCHIVE" "${TAR_PATHS[@]}"
 
 echo ""
 echo "=== Archive built ==="
