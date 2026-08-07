@@ -163,8 +163,59 @@ schema matching SO's shipped examples.
 file and that the conversion consumed it — rather than trusting that the
 helper command exited 0.
 
-**Status: PROPOSED** — renders and parses correctly; the effect (file-event
-volume falling on pp-splunk) is measurable in SOC a few hours after the run.
+### FIRST RUN UPLOADED NOTHING, AND MY CHECK SAID IT WORKED
+
+The play reported `2 Defend exclusion(s) active`. Nothing had been uploaded:
+
+```
+Error with POST request: 404 -
+  {"message":"exception list id: \"endpoint_event_filters\" does not exist"}
+```
+
+**Why it lied.** The verification asserted our rule IDs appeared in the
+GENERATED `custom-filters/` directory. That is a real check of a real thing —
+it proves the `local/salt` override reached the raw file and the raw→directory
+conversion consumed it. It says NOTHING about whether Fleet accepted them.
+Directory presence is two steps upstream of the claim. I verified the proxy and
+reported the claim, in the same commit whose message said the check "asserts
+our rule IDs appear in the GENERATED directory... rather than trusting that the
+helper command exited 0" — I correctly avoided trusting the exit code and then
+trusted something equally uninformative.
+
+It surfaced only because the report echoed the helper's stdout. Without that
+line the play was green, file events would have continued, and the next hours
+would have gone into Defend's Linux field mappings.
+
+**Root cause — the list does not exist.** Read from
+`so_elastic_defend_filters_helper.py`: the only URL it ever builds is
+`http://localhost:5601/api/exception_lists/items`. It POSTs items; it never
+creates the list. Elastic Security creates `endpoint_event_filters` lazily on
+first use of the Event Filters UI, so on a grid nobody has clicked through, it
+does not exist and every POST 404s.
+
+Also learned: plain **HTTP on 5601**, not HTTPS — my earlier probe used https
+and returned nothing, which I misread as "Kibana unreachable".
+
+**And there is no defend cron at all.** `crontab -l` has no defend entry, so
+`defend_filters.enable_auto_configuration` is off. This is not SO failing
+nightly — the whole mechanism is disabled by default, which is why the list was
+never created by SO either. **SO's own ~250 shipped Windows filters have
+therefore never applied on this grid.** Separate decision, not taken here:
+whether to enable that ruleset.
+
+**Fix.**
+- Create the list first with an idempotent POST to `/api/exception_lists`
+  (`type: endpoint_events`, `namespace_type: agnostic`), accepting 200 or 409,
+  using the same URL and `curl.config` credentials the helper uses.
+- Verification now queries **Kibana** for each rule by `item_id` — the key the
+  helper itself uses (`api_request` builds `?item_id={guid}`) — and requires
+  HTTP 200. The filesystem check is gone.
+- The report no longer says "active". It says CONFIRMED present in Kibana, and
+  separately counts errors the helper reported for other rules.
+
+**Status: PROPOSED** — the list-creation API shape is the one Kibana documents
+but has not yet run here. If it is wrong, the new verification fails loudly
+instead of reporting success, which is the whole point of the change.
 
 ## 2026-08-05 (later 5) · enhancement · deploy.sh made hands-off — the blueprint runs it, nobody is at a keyboard
 

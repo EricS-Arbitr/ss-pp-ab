@@ -39,6 +39,40 @@
   retries: 40
   delay: 30
 
+# The helper POSTs to /api/exception_lists/items but NEVER creates the list
+# itself -- confirmed by reading so_elastic_defend_filters_helper.py, which
+# only ever builds that one URL. Elastic Security normally creates
+# `endpoint_event_filters` lazily on first use of the Event Filters UI, so on
+# a grid nobody has clicked through it does not exist, and every POST returns:
+#
+#   404 - {"message":"exception list id: \"endpoint_event_filters\" does not exist"}
+#
+# That is what happened on 2026-08-07: our two filters converted correctly on
+# disk and uploaded nothing. Create the list first; 409 means it already
+# exists, which is success.
+#
+# Plain HTTP on 5601 with basic auth from curl.config -- the same URL and
+# credentials the helper uses, not a guess at Elastic's API surface.
+- name: Defend filters — ensure the endpoint_event_filters list exists
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -s -o /tmp/.defend_list_create -w '%{http_code}' \
+      --config /opt/so/conf/elasticsearch/curl.config \
+      -X POST 'http://localhost:5601/api/exception_lists' \
+      -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+      -d '{"list_id":"endpoint_event_filters","name":"Endpoint Event Filters List","description":"Endpoint Event Filters List","type":"endpoint_events","namespace_type":"agnostic"}'
+  args:
+    executable: /bin/bash
+  register: defend_list
+  changed_when: defend_list.stdout | trim == '200'
+  failed_when: defend_list.stdout | trim not in ['200', '409']
+
+- name: Defend filters — report list state
+  ansible.builtin.debug:
+    msg: >-
+      endpoint_event_filters list
+      {{ 'created' if defend_list.stdout | trim == '200' else 'already existed' }}
+
 - name: Defend filters — run the helper to upload them to Fleet
   ansible.builtin.command: >-
     python3 /sbin/so-elastic-defend-manage-filters.py
@@ -50,26 +84,39 @@
   changed_when: false
   failed_when: false
 
-# PROOF, not "the command ran". Two independent checks:
-#   1. our rule IDs reached the generated directory  -> the raw file was ours
-#      and the conversion consumed it
-#   2. the helper's own log records processing       -> it was uploaded
-- name: Defend filters — confirm our rule IDs are in the generated directory
+# AUTHORITATIVE CHECK — ask Kibana, not the filesystem.
+#
+# The previous version verified our rule IDs were in the GENERATED DIRECTORY
+# and the report then declared them "active". Directory presence proves the
+# local/salt override and the raw->directory conversion worked; it says
+# NOTHING about whether Fleet accepted them. On 2026-08-07 that check passed
+# while every upload 404'd, and the play reported success. Same proxy-for-claim
+# mistake this log catalogues -- committed in the very change that claimed to
+# avoid it.
+#
+# The helper keys items by our UUID (api_request builds ?item_id={guid}), so
+# a 200 here means that exact filter exists in the list.
+- name: Defend filters — verify each filter exists in Kibana
   ansible.builtin.shell: |
     set -o pipefail
-    grep -rl "{{ item.id }}" {{ so_defend_filters_out }}/ 2>/dev/null | head -1
+    curl -s -o /dev/null -w '%{http_code}' \
+      --config /opt/so/conf/elasticsearch/curl.config \
+      -H 'kbn-xsrf: true' \
+      'http://localhost:5601/api/exception_lists/items?item_id={{ item.id }}&namespace_type=agnostic'
   args:
     executable: /bin/bash
   loop: "{{ so_defend_exclusions }}"
   loop_control:
     label: "{{ item.event_type }} {{ item.id }}"
-  register: defend_present
+  register: defend_verify
   changed_when: false
-  failed_when: defend_present.stdout | trim == ''
+  failed_when: defend_verify.stdout | trim != '200'
 
 - name: Defend filters — report
   ansible.builtin.debug:
     msg: >-
-      {{ so_defend_exclusions | length }} Defend exclusion(s) active.
-      Helper output: {{ (defend_apply.stdout_lines | default([]))[-3:] | join(' | ')
-                        if defend_apply.stdout_lines | default([]) else 'see /opt/so/log/elasticfleet/elastic-defend-manage-filters.log' }}
+      {{ so_defend_exclusions | length }} Defend exclusion(s) CONFIRMED present
+      in Kibana's endpoint_event_filters list.
+      {{ 'Helper reported errors on other rules: ' ~ (defend_apply.stdout_lines | select('search', 'Error') | list | length) ~ ' (SO ships ~250 Windows filters through the same helper)'
+         if defend_apply.stdout_lines | default([]) | select('search', 'Error') | list | length > 0
+         else 'Helper reported no errors.' }}
