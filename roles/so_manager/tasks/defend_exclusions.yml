@@ -8,6 +8,28 @@
 # loses them and only a re-run puts them back (PORTING_GUIDE 9.4b).
 # =========================================================================
 
+# Kibana rejects an exception item whose description exceeds 256 characters,
+# and the helper prepends 59 of its own -- measured 2026-08-07 when a 204-char
+# description was rejected as "value has length [263]". Budget 197; assert at
+# 190 for margin.
+#
+# Worth catching HERE rather than downstream: the helper's own summary printed
+# "Active rules: 2" while that POST was returning 400. Its reporting cannot be
+# trusted, so the failure would otherwise surface only in the Kibana check,
+# several tasks later, with no indication which field was at fault.
+- name: Defend filters — descriptions must fit Kibana's limit
+  ansible.builtin.assert:
+    that:
+      - (item.description | trim | length) <= 190
+    fail_msg: >-
+      Defend filter {{ item.id }} has a {{ item.description | trim | length }}
+      character description. Kibana's limit is 256 and the helper prepends 59,
+      so the source must be <= 197. Shorten it in so_defend_exclusions.
+    quiet: true
+  loop: "{{ so_defend_exclusions }}"
+  loop_control:
+    label: "{{ item.event_type }} ({{ item.description | trim | length }} chars)"
+
 - name: Defend filters — directory for the local/salt override
   ansible.builtin.file:
     path: "{{ so_defend_filters_src | dirname }}"

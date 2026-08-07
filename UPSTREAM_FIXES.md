@@ -278,9 +278,46 @@ whether to enable that ruleset.
 - The report no longer says "active". It says CONFIRMED present in Kibana, and
   separately counts errors the helper reported for other rules.
 
-**Status: PROPOSED** — the list-creation API shape is the one Kibana documents
-but has not yet run here. If it is wrong, the new verification fails loudly
-instead of reporting success, which is the whole point of the change.
+### Run 2: list created, SO's own ruleset unblocked, one rule rejected on LENGTH
+
+The list-creation POST worked. Consequences beyond our two filters: **SO's ~250
+shipped Windows filters are now loading for the first time on this grid** —
+`_find` returns pages of `SO - network_connection - <guid>` items. They had
+never applied because nothing had ever created the list.
+
+Of our two, `file_delete` returned 200 and `file_create` 404. Not dedup (my
+guess), and the helper said so plainly:
+
+```
+400 - EndpointArtifactError: [description]: value has length [263]
+      but it must have a maximum length of [256].
+```
+
+**A measurable fact fell out of that.** The source description was 204
+characters and Kibana saw 263, so the helper prepends exactly **59** characters
+of its own. Budget for the source is therefore 197, not 256.
+
+**And the helper's own reporting is not trustworthy.** The same run printed:
+
+```
+Processing Summary
+ - New rules: 1
+Rule status Summary
+ - Active rules: 2
+```
+
+"Active rules: 2" while one POST was returning 400. Anything keyed on the
+helper's summary — including a human reading it — would have concluded success.
+Only the per-item Kibana query caught it, which is the check that replaced the
+filesystem one earlier the same day.
+
+**Fix.** Descriptions shortened (130 and 97 chars), plus an assert in the play
+that fails when a source description exceeds 190. The assert runs BEFORE the
+render, so a too-long description fails immediately and names the field, rather
+than surfacing several tasks later as a Kibana 404 with no indication of cause.
+
+**Status: PROPOSED** — renders, parses and fits the budget locally; confirmed by
+the next run showing both filters at HTTP 200.
 
 ## 2026-08-05 (later 5) · enhancement · deploy.sh made hands-off — the blueprint runs it, nobody is at a keyboard
 

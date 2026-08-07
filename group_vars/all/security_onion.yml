@@ -191,10 +191,13 @@ so_agent_installer_linux: "so-elastic-agent_linux_amd64"
 so_defend_exclusions:
   - title: "file.path begins with /opt/splunk/var/lib/splunk/"
     id: "99C1EB41-32BC-4FEC-BEA4-AC8A200EC305"
+    # Kibana caps the exception item description at 256, and the helper
+    # PREPENDS 59 characters of its own -- measured 2026-08-07, when a 204-char
+    # description came back as "value has length [263]". Budget is therefore
+    # 197; so_defend_exclusions is asserted against 190 to leave margin.
     description: >-
-      Splunk index bucket churn on pp-splunk. 11.1M endpoint.events.file in 24h,
-      96% of that host's telemetry, flat at ~480k/hour. Bucket rotation and
-      tsidx writes -- no detection value, dominates ES retention.
+      Splunk bucket churn on pp-splunk: 11.1M file events/24h, 96% of that
+      host's telemetry. No detection value, dominates ES retention.
     date: "08/07/26"
     event_type: "file_create"
     target_field: "TargetFilename"
@@ -206,6 +209,7 @@ so_defend_exclusions:
     description: >-
       Same source as the create filter: Splunk ages out buckets continuously,
       so deletes track creates.
+
     date: "08/07/26"
     event_type: "file_delete"
     target_field: "TargetFilename"
