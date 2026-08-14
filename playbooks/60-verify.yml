@@ -117,38 +117,44 @@
     - name: Zeek must be PROCESSING the mirror, not just receiving it
       ansible.builtin.shell: |
         set -o pipefail
-        before=$(grep -vc '^#' /nsm/zeek/logs/current/conn.log 2>/dev/null || echo 0)
+        f=/nsm/zeek/logs/current/conn.log
+        before=$(grep -vc '^#' "$f" 2>/dev/null || echo 0)
         sleep 45
-        after=$(grep -vc '^#' /nsm/zeek/logs/current/conn.log 2>/dev/null || echo 0)
-        echo "before=$before after=$after"
+        after=$(grep -vc '^#' "$f" 2>/dev/null || echo 0)
+        if [ "$after" -gt "$before" ]; then
+          echo "GROWING before=$before after=$after"
+        else
+          echo "STALLED before=$before after=$after"
+        fi
       args:
         executable: /bin/bash
       register: zeek_conn
       changed_when: false
-      # Retried across a rotation boundary: conn.log is recreated hourly and
-      # is legitimately empty for a moment. Without this the check would fail
-      # for a reason that has nothing to do with what it is testing.
-      until: >-
-        (zeek_conn.stdout | regex_search('after=(\d+)', '\1') | first | int)
-        > (zeek_conn.stdout | regex_search('before=(\d+)', '\1') | first | int)
+      failed_when: false
+      # The comparison happens IN BASH and Ansible only looks for a word.
+      # The first version compared two regex_search captures in a `until:`
+      # conditional, which failed on the controller with "Unknown argument"
+      # -- backslash handling differs between a YAML folded scalar and the
+      # double-quoted scalar it was tested in. Numbers extracted by Jinja
+      # across two escaping layers is a fragile way to ask "is it bigger".
+      until: "'GROWING' in zeek_conn.stdout"
       retries: 4
       delay: 20
-      failed_when: false
 
     - name: Fail if Zeek is receiving packets but logging no connections
       ansible.builtin.fail:
         msg: |
-          {{ inventory_hostname }}: conn.log is not growing ({{ zeek_conn.stdout | default('no reading') }}).
+          {{ inventory_hostname }}: conn.log is not growing
+          ({{ zeek_conn.stdout | default('no reading') | trim }}).
 
           Packets ARE arriving -- the tcpdump above proved it. Zeek is
           receiving them and producing nothing, which is a capture or
-          link-type mismatch, not a mirroring fault. Check what it is
-          actually parsing:
+          link-type mismatch, not a mirroring fault:
 
             sudo tail -3 /nsm/zeek/spool/worker-1-1/stdout.log
               -> "N packets received, M (100.00%) not processed" is the
-                 fingerprint. Anything near 100% means the capture method
-                 cannot read this interface's frames.
+                 fingerprint. Near 100% means the capture method cannot read
+                 this interface's frames.
 
             ip -d link show {{ so_monitor_interface }}
               -> must report `gretap`. A plain `gre` device carries no
@@ -158,9 +164,4 @@
 
           Suricata is NOT evidence here -- it reads cooked capture natively
           and keeps alerting while Zeek sees nothing.
-      when: >-
-        (zeek_conn.stdout | default('') | regex_search('after=(\d+)', '\1') | first | int)
-        <= (zeek_conn.stdout | default('after=0 before=0') | regex_search('before=(\d+)', '\1') | first | int)
-  tags:
-    - so
-    - so_verify
+      when: "'GROWING' not in (zeek_conn.stdout | default(''))"
