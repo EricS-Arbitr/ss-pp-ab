@@ -220,34 +220,6 @@
   ansible.builtin.command: netplan apply
   when: netplan_tun.changed or (stale_tun is changed)
 
-# THE TUNNEL CHANGED UNDER A RUNNING ZEEK.
-#
-# Zeek's workers hold an AF_PACKET socket bound to tun0 at startup. Deleting
-# and recreating the interface -- which switching gre -> gretap requires,
-# since link kind is fixed at creation -- leaves them attached to a device
-# that no longer exists. They keep running, keep reporting healthy, and keep
-# producing nothing, which is indistinguishable from the bug we just fixed.
-#
-# Only relevant on a range where SO is ALREADY installed. On a fresh deploy
-# the tunnel exists before so-setup runs, so Zeek attaches to gretap first
-# time and this is a no-op.
-- name: Is SO already installed here?
-  ansible.builtin.stat:
-    path: "{{ so_sensor_installed_marker }}"
-  register: so_installed_for_restart
-
-- name: Restart Zeek so it re-attaches to the recreated tunnel
-  ansible.builtin.command: so-zeek-restart
-  when:
-    - so_installed_for_restart.stat.exists
-    - (netplan_tun is changed) or (stale_tun is changed)
-  register: zeek_restart
-  changed_when: zeek_restart.rc == 0
-  # so-zeek-restart is absent before so-setup completes; tolerate that by
-  # name rather than ignoring every failure.
-  failed_when:
-    - zeek_restart.rc != 0
-    - "'command not found' not in (zeek_restart.stderr | default(''))"
 
 
 - name: Wait for {{ so_monitor_interface }} to appear
@@ -284,6 +256,66 @@
   register: tun_remote
   changed_when: false
   failed_when: "'remote ' ~ so_gre_remote_underlay not in tun_remote.stdout"
+
+# THE INTERFACE MUST STOP MOVING BEFORE ZEEK ATTACHES TO IT.
+#
+# netplan's renderer here is NetworkManager (99-netcfg-vmware.yaml), so
+# `netplan apply` regenerates NM profiles and hands off -- NM then activates
+# the tunnel on its own schedule. Restarting Zeek immediately after the apply
+# is a race: Zeek binds an AF_PACKET socket to a tun0 that NM is about to
+# replace, and the workers are left reading a device that no longer exists.
+#
+# Observed 2026-08-14 on soc-sensor-edge: netplan written 18:24, Zeek
+# restarted straight after, conn.log stopped at 18:25:07 while the workers
+# stayed RUNNING in run_loop and capture_loss kept being written. Every
+# liveness signal looked healthy. A manual restart once the interface had
+# settled logged continuously at ~450 conn records/min.
+#
+# Gate on the ifindex being unchanged across a window rather than sleeping a
+# fixed amount -- a fixed sleep is the same bet with a different number.
+- name: Wait until {{ so_monitor_interface }} stops being recreated
+  ansible.builtin.shell: |
+    set -o pipefail
+    a=$(cat /sys/class/net/{{ so_monitor_interface }}/ifindex 2>/dev/null || echo none)
+    sleep 20
+    b=$(cat /sys/class/net/{{ so_monitor_interface }}/ifindex 2>/dev/null || echo none)
+    if [ "$a" = "$b" ] && [ "$a" != "none" ]; then echo "STABLE idx=$b"; else echo "MOVING $a -> $b"; fi
+  args:
+    executable: /bin/bash
+  register: tun_settle
+  changed_when: false
+  until: "'STABLE' in tun_settle.stdout"
+  retries: 6
+  delay: 5
+
+# THE TUNNEL CHANGED UNDER A RUNNING ZEEK.
+#
+# Zeek's workers hold an AF_PACKET socket bound to tun0 at startup. Deleting
+# and recreating the interface -- which switching gre -> gretap requires,
+# since link kind is fixed at creation -- leaves them attached to a device
+# that no longer exists. They keep running, keep reporting healthy, and keep
+# producing nothing, which is indistinguishable from the bug we just fixed.
+#
+# Only relevant on a range where SO is ALREADY installed. On a fresh deploy
+# the tunnel exists before so-setup runs, so Zeek attaches to gretap first
+# time and this is a no-op.
+- name: Is SO already installed here?
+  ansible.builtin.stat:
+    path: "{{ so_sensor_installed_marker }}"
+  register: so_installed_for_restart
+
+- name: Restart Zeek so it re-attaches to the recreated tunnel
+  ansible.builtin.command: so-zeek-restart
+  when:
+    - so_installed_for_restart.stat.exists
+    - (netplan_tun is changed) or (stale_tun is changed)
+  register: zeek_restart
+  changed_when: zeek_restart.rc == 0
+  # so-zeek-restart is absent before so-setup completes; tolerate that by
+  # name rather than ignoring every failure.
+  failed_when:
+    - zeek_restart.rc != 0
+    - "'command not found' not in (zeek_restart.stderr | default(''))"
 
 - name: Report tunnel state
   ansible.builtin.debug:
