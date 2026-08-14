@@ -28,3 +28,6 @@
     #   - Snapshotted so-setup overlay
     #   - Disable UFW (SO uses so-firewall)
     - so_base
+  tags:
+    - so
+    - so_prereqs

@@ -23,3 +23,6 @@
   gather_facts: true
   roles:
     - so_manager
+  tags:
+    - so
+    - so_manager

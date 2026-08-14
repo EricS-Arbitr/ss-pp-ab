@@ -26,3 +26,6 @@
     # controller is asking for a broken deploy. so_base handles the
     # cross-cutting SO-side prep; SO's own so-setup handles netplan.
     - so_apt_mirror
+  tags:
+    - so
+    - so_mirror

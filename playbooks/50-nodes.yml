@@ -17,10 +17,15 @@
   gather_facts: true
   roles:
     - so_search
-
+  tags:
+    - so
+    - so_nodes
 - name: SO Sensor install
   hosts: so_sensor
   become: true
   gather_facts: true
   roles:
     - so_sensor
+  tags:
+    - so
+    - so_nodes

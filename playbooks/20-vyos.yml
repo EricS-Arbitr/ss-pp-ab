@@ -29,7 +29,9 @@
       ansible.builtin.import_role:
         name: vyos_mirror
         tasks_from: tunnel
-
+  tags:
+    - so
+    - so_mirror_routers
 - name: VyOS mirror config on router-0 — Part B (tc script via ssh)
   # so-ansible mirrors from a single router group [net_vyos]. Here the
   # mirror sources are their own group: pp-corp-router, pp-ot-router and
@@ -62,3 +64,6 @@
       ansible.builtin.import_role:
         name: vyos_mirror
         tasks_from: tc
+  tags:
+    - so
+    - so_mirror_routers

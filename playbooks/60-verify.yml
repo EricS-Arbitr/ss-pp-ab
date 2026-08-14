@@ -22,7 +22,9 @@
     - name: report
       ansible.builtin.debug:
         msg: "{{ so_status_out.stdout_lines[-20:] }}"
-
+  tags:
+    - so
+    - so_verify
 - name: Elastic cluster health (query from manager; so-elasticsearch-query is manager-only, and cluster health is a whole-cluster metric anyway)
   hosts: so_manager
   become: true
@@ -45,6 +47,9 @@
 # prove the whole chain (tc mirred -> GRE encap -> route to sensor -> firewall
 # -> kernel decap -> tun0). It does NOT prove every mirrored interface on
 # every router. Do not read a pass as full coverage.
+  tags:
+    - so
+    - so_verify
 - name: SO sensor pcap flow rate — all three sensors
   hosts: so_sensor
   become: true
@@ -165,3 +170,6 @@
           Suricata is NOT evidence here -- it reads cooked capture natively
           and keeps alerting while Zeek sees nothing.
       when: "'GROWING' not in (zeek_conn.stdout | default(''))"
+  tags:
+    - so
+    - so_verify
