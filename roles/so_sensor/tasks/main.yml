@@ -197,9 +197,28 @@
     group: root
   register: netplan_tun
 
+# netplan will not convert an existing L3 `gre` device into a `gretap` one --
+# the link kind is fixed at creation. Left in place, the old tunnel keeps
+# working, keeps feeding Suricata, and keeps Zeek parsing nothing, which is
+# indistinguishable from success on every check we had.
+- name: Remove a stale L3 gre tunnel so netplan can recreate it as gretap
+  ansible.builtin.shell: |
+    set -o pipefail
+    kind=$(ip -d link show {{ so_monitor_interface }} 2>/dev/null | awk '/gre|gretap/ {for(i=1;i<=NF;i++) if($i=="gre"||$i=="gretap"){print $i; exit}}')
+    if [ "$kind" = "gre" ]; then
+      ip link del {{ so_monitor_interface }}
+      echo "deleted stale L3 gre {{ so_monitor_interface }}"
+    else
+      echo "kind=${kind:-absent}"
+    fi
+  args:
+    executable: /bin/bash
+  register: stale_tun
+  changed_when: "'deleted stale' in stale_tun.stdout"
+
 - name: netplan apply (brings tun0 up)
   ansible.builtin.command: netplan apply
-  when: netplan_tun.changed
+  when: netplan_tun.changed or (stale_tun is changed)
 
 - name: Wait for {{ so_monitor_interface }} to appear
   ansible.builtin.wait_for:

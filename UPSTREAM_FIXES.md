@@ -1968,6 +1968,58 @@ Option 2 is preferred because it's declarative and works for any future pfSense/
 
 ---
 
+## 2026-08-14 · bug · L3 `gre` mirror tunnel makes Zeek discard 100% of frames
+
+**Found on airfield-range, confirmed here.** Both ranges build the mirror the
+same way and both are affected. See airfield-range/UPSTREAM_FIXES.md for the
+full investigation.
+
+**Symptom.** Sensors contribute almost nothing to the dashboard. Zeek's
+container is `healthy`, packets arrive on `tun0`, Suricata alerts normally,
+and there is no `conn.log`.
+
+**Measured, same interface and traffic, minutes apart:**
+
+| capture | packets | not processed | conn records |
+|---|---|---|---|
+| `zeek -i tun0` | 5,390 | 0.37% | **583** |
+| `zeek -i af_packet::tun0` | 841 | **100.00%** | **0** |
+
+SO runs the workers as `-i af_packet::tun0` with `lb_procs: 3`.
+
+**Cause.** `tc mirred` copies complete ETHERNET FRAMES. A plain `gre` tunnel
+is L3 and carries IP only, so the kernel strips the L2 header and `tun0`
+presents cooked-mode frames (`DLT_LINUX_SLL`). Zeek's AF_PACKET plugin
+requires Ethernet and parses none of them.
+
+**Why every check passed.** Suricata reads cooked capture natively, so
+alerting worked throughout. `capture_loss.log` shows `rcvd` climbing with
+drops flat — Zeek was receiving fine; that counter does not measure parsing.
+The container health check passes, because parsing nothing is not unhealthy.
+And `60-verify` counted packets on `tun0`, which were genuinely arriving — it
+measured the transport and reported it as the outcome.
+
+**Fix.** `gretap` on both ends (L2 GRE, carries the Ethernet frame end to
+end), MTU 1462, plus removal of a stale L3 `gre` device before `netplan
+apply` — link kind is fixed at creation, so netplan cannot convert one in
+place, and a leftover tunnel keeps feeding Suricata while Zeek parses
+nothing.
+
+`60-verify` now asserts `conn.log` is GROWING, with retries across the hourly
+rotation boundary.
+
+**Check any existing PowerPlant range with:**
+
+```
+grep -vc '^#' /nsm/zeek/logs/current/conn.log
+```
+
+**This range was declared green on 2026-08-05 with three working mirrors.**
+That assessment covered packet delivery, which was real. It did not cover
+Zeek producing anything, and should be revisited before customer sign-off.
+
+---
+
 ## 2026-07-03 · gap · roles/domain_member_retry/tasks/main.yml — `pause` incompatible with `strategy: free`
 
 **Symptom.** With the Join Domain play set to `strategy: free` (added on 2026-07-02 as a wall-clock optimization for per-host reboots), the deploy fails immediately after the first host's "Check if already domain joined" task:

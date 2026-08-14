@@ -1,6 +1,25 @@
 ---
 # =========================================================================
 # vyos_mirror/tunnel.yml — GRE tunnel via vyos_config (network_cli)
+#
+# ENCAPSULATION IS gretap, NOT gre, AND THE DIFFERENCE IS THE WHOLE MIRROR.
+#
+# `tc mirred` copies complete ETHERNET FRAMES. An L3 `gre` tunnel carries IP
+# only, so the kernel strips the L2 header and the sensor's tun0 presents
+# cooked-mode frames (DLT_LINUX_SLL). Suricata reads those natively -- which
+# is why alerting worked and hid this for 42 hours -- but Zeek's AF_PACKET
+# plugin expects Ethernet and cannot parse a single frame.
+#
+# Measured on so-sensor-corp equivalent, measured on airfield 2026-08-14, same interface, same traffic:
+#   zeek -i tun0              5390 pkts, 0.37% not processed, 583 conn records
+#   zeek -i af_packet::tun0    841 pkts,  100% NOT PROCESSED,   0 conn records
+# The running workers use af_packet::tun0, so Zeek produced 66 connection
+# records in its entire lifetime while 23.5M packets arrived.
+#
+# gretap carries the Ethernet frame end to end, so tun0 is DLT_EN10MB and
+# SO keeps its intended af_packet + lb_procs fanout path. Fixing it here
+# rather than overriding SO's salt-rendered node.cfg is the same principle as
+# not patching soc.json: make the environment match what SO expects.
 # =========================================================================
 # Runs under `connection: network_cli` in the calling play. Modules used
 # here (vyos_config, vyos_command) require network_cli; they can't be
@@ -10,7 +29,7 @@
 - name: Configure GRE tunnel {{ vyos_gre_tunnel_iface }} -> so-sensor-1
   vyos.vyos.vyos_config:
     lines:
-      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} encapsulation gre"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} encapsulation gretap"
       - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} source-address {{ vyos_gre_source_ip }}"
       - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} remote {{ vyos_gre_remote_ip }}"
       - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} address {{ vyos_gre_local_addr }}/{{ vyos_gre_tunnel_prefix }}"

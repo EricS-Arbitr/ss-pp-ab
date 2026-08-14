@@ -7,7 +7,12 @@ network:
   version: 2
   tunnels:
     {{ so_monitor_interface }}:
-      mode: gre
+      # gretap, NOT gre. `tc mirred` on the router copies whole Ethernet
+      # frames; an L3 gre tunnel discards the L2 header and hands Zeek
+      # cooked-mode frames its AF_PACKET plugin cannot parse -- 100% "not
+      # processed", zero conn.log, while Suricata carried on regardless.
+      # Must match the router's `encapsulation gretap`.
+      mode: gretap
       local: {{ so_prod_ip }}
       # MUST match the router's vyos_gre_source_ip exactly -- the kernel
       # silently declines to decapsulate a GRE packet whose source does not
@@ -15,4 +20,8 @@ network:
       remote: {{ so_gre_remote_underlay }}
       addresses:
         - {{ so_gre_tunnel_local }}/{{ so_gre_tunnel_prefix }}
-      mtu: 1476   # 1500 - 24 (IP + GRE headers)
+      # 1500 - 20 (outer IP) - 4 (GRE) - 14 (inner Ethernet). 14 bytes less
+      # than the L3 gre tunnel this replaced, because the frame now carries
+      # its L2 header. SO's pillar asks for mtu 9000 -- it expects a
+      # jumbo-capable monitor path, which a 1500-byte underlay cannot give.
+      mtu: 1462
