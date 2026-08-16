@@ -19,13 +19,88 @@
     password_never_expires: yes
     account_disabled: no
 
+# PROMOTION IS WRAPPED IN block/rescue, AND THE RESCUE IS THE POINT.
+#
+# When this fails partway, the DNS Server role is already installed and
+# running with no AD zone and no forwarders. It then answers every query with
+# SERVFAIL -- which is WORSE than the host being down. A down server times out
+# and the Windows resolver falls through to the next configured entry; a
+# SERVFAIL is a RESPONSE, so the resolver stops there and never tries the
+# secondary.
+#
+# PowerPlant 2026-08-16: pp-dc03's promotion failed on a replication race and
+# the zone-less DNS server it left behind took the OT segment's name
+# resolution with it. pp-ctl-wks-03 -- configured {192.168.100.5,
+# 172.16.2.7}, byte-identical to its three siblings that succeeded -- never
+# fell back to pp-dc01, could not resolve _ldap._tcp.dc._msdcs, and failed to
+# join. One failed promotion, three failed hosts. Measured on the range:
+#
+#   Resolve-DnsName _ldap._tcp.dc._msdcs.<domain> -Server 192.168.100.5
+#       -> RCODE_SERVER_FAILURE
+#   Resolve-DnsName _ldap._tcp.dc._msdcs.<domain> -Server 172.16.2.7
+#       -> answers, both DCs
 - name: Promote to additional domain controller
-  microsoft.ad.domain_controller:
-    dns_domain_name: "{{ domain_name }}"
-    domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
-    domain_admin_password: "{{ domain_admin_password }}"
-    safe_mode_password: "{{ domain_admin_password }}"
-    install_dns: true
-    state: domain_controller
-  register: additional_dc_task
-  notify: Reboot Windows
+  block:
+    - name: Promote to additional domain controller
+      microsoft.ad.domain_controller:
+        dns_domain_name: "{{ domain_name }}"
+        domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+        domain_admin_password: "{{ domain_admin_password }}"
+        safe_mode_password: "{{ domain_admin_password }}"
+        install_dns: true
+        state: domain_controller
+        # REPLACES `notify: Reboot Windows`. The module's own documentation:
+        # "It is highly recommended to set reboot=true to have Ansible manage
+        # the host reboot phase as the actions done by this module puts the
+        # host in a state that cannot be handled by a subsequent task without
+        # a reboot."
+        #
+        # A handler structurally cannot do this. Promotion sets the domain
+        # hint, so by the time the handler runs the old credentials no longer
+        # authenticate, the reboot silently does not happen, and the host is
+        # left half-joined -- WinRM then answers "ntlm: the specified
+        # credentials were rejected by the server" and no retry can reach it.
+        # That is exactly how airfield's fops-dc01 failed on every deploy
+        # until the same pattern was removed from its dcpromo role.
+        reboot: true
+      register: additional_dc_task
+      # The underlying fault is a REPLICATION RACE: the domain join creates
+      # this computer's account on one DC, promotion immediately asks another
+      # -- across the ESP boundary in pp-dc03's case -- before it has
+      # replicated, and DCPromo exits 53, "a domain controller could not be
+      # contacted for the domain ... that contained an account for this
+      # computer". Transient by nature, so retry rather than build a gate
+      # around something that resolves itself in under a minute.
+      until: additional_dc_task is succeeded
+      retries: 3
+      delay: 60
+  rescue:
+    # DO NOT LEAVE A ZONE-LESS DNS SERVER ANSWERING. Stopping it turns
+    # SERVFAIL back into a timeout, which is what lets clients fall through to
+    # their secondary. This is the whole difference between "one DC did not
+    # promote" and "the segment lost DNS".
+    - name: Promotion failed — stop DNS so it cannot SERVFAIL for the segment
+      ansible.windows.win_service:
+        name: DNS
+        state: stopped
+        start_mode: disabled
+      failed_when: false
+
+    - name: Fail with the promotion error, after DNS has been made harmless
+      ansible.builtin.fail:
+        msg: |
+          {{ inventory_hostname }} failed to promote to an additional domain
+          controller after 3 attempts.
+
+          Module said: {{ additional_dc_task.msg | default('(no message registered)') }}
+
+          DNS on this host has been STOPPED and DISABLED, so its zone-less
+          server can no longer answer SERVFAIL to clients that list it first.
+          Those clients will now time out and fall through to their secondary
+          DNS, which keeps this failure confined to this host instead of
+          taking the segment's name resolution with it.
+
+          RECOVERY: fix the underlying cause and re-run. If this host is
+          half-joined and WinRM rejects credentials ("ntlm: the specified
+          credentials were rejected by the server"), Ansible cannot reach it
+          at all -- it needs a console-side demote/rejoin, or a rebuild.
