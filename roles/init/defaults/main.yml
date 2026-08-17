@@ -1,0 +1,16 @@
+---
+# init — overlay of range-development-ansible/roles/init
+#
+# The base role waits `delay: 30` + `timeout: 60` for WinRM, which is the
+# `elapsed: 90` seen in failed runs. Sixty seconds is not enough for a cold
+# Windows boot on a freshly provisioned range: on 2026-08-07, four hosts
+# (pp-eng-wkstn-5/6/7, pp-is-wkstn-3) refused 5985 and failed attempt 1 of a
+# blueprint-driven deploy even with BOOT_DELAY=180 already elapsed.
+#
+# Raising deploy.sh's BOOT_DELAY instead would be the wrong lever: it delays
+# EVERY deploy including re-runs where everything is already up. A longer wait
+# costs nothing when the host is ready -- wait_for_connection returns as soon
+# as the connection succeeds.
+init_wait_timeout: 900
+init_wait_delay: 15
+init_wait_sleep: 10
