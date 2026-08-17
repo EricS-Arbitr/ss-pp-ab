@@ -291,6 +291,24 @@ pp-syslog
 
 [splunk-forwarder]
 pp-proxy
+# SOC hunt/analyst workstations. Added 2026-08-17 -- an attacker who lands on
+# an analyst box sees everything the SOC sees and can steer the
+# investigation, so these are high-value targets and belong in the SIEM.
+# Security Onion already collects their endpoint telemetry via [windows] in
+# 75-endpoint; Splunk not having them was an inconsistency rather than a
+# decision.
+#
+# DIRECT members here rather than adding them to [workstations], following
+# pp-proxy above. [workstations] means "the simulated business's user
+# endpoints" -- it feeds nothing but this group today, but a future play
+# targeting it for scenario activity or attack simulation should not silently
+# sweep in the blue team's own tooling.
+win-hunt-1
+win-hunt-2
+win-hunt-3
+win-hunt-4
+win-hunt-5
+win-hunt-6
 
 [splunk-forwarder:children]
 domain_controllers
