@@ -1,0 +1,20 @@
+# host_vars/win-hunt-4.yml — SOC hunt/analyst workstation
+# Image: RDP_Windows_10:1.0.6 — NOT 1.1.0, which ships DHCP enabled and
+# breaks common's DSC xIPAddress with a cryptic "Not found" (the reason
+# win-hunt-1 was reverted; see PROJECT_LOG / UPSTREAM_FIXES).
+# Domain-joined via [members]; DNS is pp-dc01 so the join can resolve
+# _ldap._tcp.dc._msdcs.voltgrid.com.
+ansible_host: 10.255.240.214
+network_interfaces:
+  - name: "Ethernet0"
+    ipv4:
+      address: "10.255.240.214"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "Ethernet1"
+    ipv4:
+      address: "172.16.9.14"
+      netmask: "255.255.255.0"
+      gateway: "172.16.9.1"
+    dns:
+      - "172.16.2.7"

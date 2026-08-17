@@ -262,7 +262,7 @@ Test 7 is the one that matters. Tests 1–6 can all pass while ES produces nothi
 
 ## 11. Open decisions
 
-1. ~~**Analyst count**~~ — **RESOLVED 2026-08-17:** `pp-splunk` is approved to resize to 32 vCPU / 64 GB, sized for the >10-analyst target. Note this is headroom, not present need: `[hunt]` is still `win-hunt-1` alone, and reaching that analyst count needs additional hunt workstations (`.24`–`.29` in PP-Security are free). That remains open as a scenario-design question.
+1. ~~**Analyst count**~~ — **RESOLVED 2026-08-17:** `pp-splunk` resized to 32 vCPU / 64 GB, and `[hunt]` grown from one workstation to six (`win-hunt-1`..`6`, `172.16.9.11`–`.16`). All six are now in `[members]` and domain-joined — `win-hunt-1` never had been. Six analyst workstations does not yet reach ">10 concurrent analysts", so the search head sizing still carries headroom beyond present need; adding `win-hunt-7`..`12` at `.17`–`.19` and `.24`–`.26` would close that gap.
 2. **Retention window** — drives indexer disk; 1 TB is a placeholder.
 3. **Which data models to accelerate** — §9 proposes five, contingent on the CIM check.
 4. **Is `netfw` wired up?** It is listed as reserved. Network_Traffic has no feed without it.

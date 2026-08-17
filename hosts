@@ -94,6 +94,9 @@ is-inet
 
 # Windows hosts that join the voltgrid.com domain
 [members]
+# SOC hunt/analyst workstations. Added to [members] 2026-08-17 so analysts
+# sign in with domain credentials rather than a local account -- win-hunt-1
+# had never been joined. [members] is what the `Join Domain` play targets.
 pp-bp-wkstn-1
 pp-bp-wkstn-2
 pp-bp-wkstn-3
@@ -138,6 +141,12 @@ pp-ctl-wks-01
 pp-ctl-wks-02
 pp-ctl-wks-03
 pp-ctl-wks-04
+win-hunt-1
+win-hunt-2
+win-hunt-3
+win-hunt-4
+win-hunt-5
+win-hunt-6
 
 # is-inet is added as a direct member (NOT via :children) so it inherits
 # `DomainUsers` from group_vars/voltgrid.yml -- the `email` role loops
@@ -209,6 +218,11 @@ pp-ctl-wks-02
 pp-ctl-wks-03
 pp-ctl-wks-04
 win-hunt-1
+win-hunt-2
+win-hunt-3
+win-hunt-4
+win-hunt-5
+win-hunt-6
 
 [win11]
 pp-eng-wkstn-1
@@ -260,6 +274,11 @@ ubuntu22
 [security]
 pp-splunk
 win-hunt-1
+win-hunt-2
+win-hunt-3
+win-hunt-4
+win-hunt-5
+win-hunt-6
 
 [splunk]
 pp-splunk
@@ -282,6 +301,11 @@ workstations
 
 [hunt]
 win-hunt-1
+win-hunt-2
+win-hunt-3
+win-hunt-4
+win-hunt-5
+win-hunt-6
 
 # ------------------------------------------------------------
 # VyOS routers and firewalls (replaces old Firewall/Router primitives)

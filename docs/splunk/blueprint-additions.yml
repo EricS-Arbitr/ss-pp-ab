@@ -134,6 +134,101 @@
       ipAddress: "10.255.240.211"
       position: "FIRST"
 
+# -------------------------------------------------------------------------
+# 5-9. NEW — hunt workstations win-hunt-2 .. win-hunt-6
+# -------------------------------------------------------------------------
+# Brings the analyst estate to six, which is what makes the >10-analyst
+# sizing of pp-splunk above something other than theoretical. [hunt]
+# previously contained win-hunt-1 alone.
+#
+# Addressed .12-.16 so the hunt boxes stay contiguous with win-hunt-1 at
+# .11, rather than starting a second block at .24.
+#
+# ** IMAGE MUST BE 1.0.6, NOT 1.1.0. **
+# RDP_Windows_10:1.1.0 ships with DHCP ENABLED on the adapter, and the
+# common role's DSC xIPAddress then fails with a cryptic "Not found" from
+# CIM -- the host never gets its static address. This is recorded against
+# win-hunt-1 itself (PROJECT_LOG entry 1, UPSTREAM_FIXES 2026-05-xx), which
+# was reverted to 1.0.6 for exactly this reason and filed upstream as a
+# `common` role enhancement.
+#
+# If `common` has since gained a "disable DHCP before applying static"
+# step, 1.1.0 becomes safe and this note can go. Verify before changing it
+# -- roles/common is not in this repo (it comes from the controller's base
+# roles), so it could not be checked from here.
+#
+# Sizing: matches win-hunt-1. Confirm against its CURRENT blueprint entry
+# and align if it differs -- these should not be the odd ones out.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "win-hunt-2"
+  properties:
+    image: "RDP_Windows_10:1.0.6"
+    cpuCount: 4
+    memory: "8192"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.12"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.212"
+      position: "FIRST"
+
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "win-hunt-3"
+  properties:
+    image: "RDP_Windows_10:1.0.6"
+    cpuCount: 4
+    memory: "8192"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.13"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.213"
+      position: "FIRST"
+
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "win-hunt-4"
+  properties:
+    image: "RDP_Windows_10:1.0.6"
+    cpuCount: 4
+    memory: "8192"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.14"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.214"
+      position: "FIRST"
+
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "win-hunt-5"
+  properties:
+    image: "RDP_Windows_10:1.0.6"
+    cpuCount: 4
+    memory: "8192"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.15"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.215"
+      position: "FIRST"
+
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "win-hunt-6"
+  properties:
+    image: "RDP_Windows_10:1.0.6"
+    cpuCount: 4
+    memory: "8192"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.16"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.216"
+      position: "FIRST"
+
 # =========================================================================
 # ADDRESSING NOTES
 # =========================================================================
