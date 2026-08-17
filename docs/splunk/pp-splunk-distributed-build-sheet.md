@@ -243,7 +243,20 @@ Accelerate only the models the scenarios exercise — Authentication, Network_Tr
 
 **The range currently accelerates 16 of 17 models.** `roles/splunk-es` writes `Splunk_SA_CIM/local/datamodels.conf` from `range-development-ansible/templates/splunkapps/cim-datamodels.conf.j2`; only `Alerts` is off, and 13 of the 16 omit `acceleration.manual_rebuilds`, so they rebuild automatically rather than only building forward.
 
-Measured 2026-08-17, this costs **less than it looks**: nine models hold zero bytes, every model reported `is_inprogress=0`, and all summaries together are ~7 MB. Trimming the empty ones is tidy-up, **not** a performance fix — an IOWait alert on the live instance turned out to be post-deploy startup load, not acceleration. Do it for clarity, and do not expect it to change resource usage.
+Measured 2026-08-17: nine models held zero bytes, every model reported
+`is_inprogress=0`, and all summaries together were ~7 MB. An IOWait alert on
+the live instance turned out to be post-deploy startup load, not acceleration.
+
+**But that sample was taken with the emulated users OFF**, so it does not
+establish which models are genuinely unfed. Several that read as empty —
+Web, Email, Network_Resolution, and more of Endpoint — plausibly populate
+once `[ae]`/`[aue]` are running and simulated users start browsing, mailing
+and logging in.
+
+**Do not trim acceleration based on an idle-range observation.** Re-check
+after emulation has been running long enough to be representative, then trim
+what is still empty. Trimming now risks disabling a model that would have had
+a feed, which is a worse failure than leaving a few empty ones scanning.
 
 ---
 
@@ -279,9 +292,28 @@ Test 7 is the one that matters. Tests 1–6 can all pass while ES produces nothi
    | all CIM summaries combined | ~7 MB |
    | `vmstat wa` | 0 |
 
-   At ~1 MB/s the range generates on the order of **90 GB/day worst case**, and realistically far less since that sample included post-deploy catch-up. The default platform disk is not a constraint at this volume, and 1 TB per peer is generous rather than tight. **Throughput is not the reason to add indexers here** — the reasons are ES contention on a combined instance (§3) and replication. Worth restating whenever someone asks why two peers are needed for a range this small.
+   **THESE ARE A FLOOR, NOT A STEADY STATE.** The emulated users (`[ae]` on
+   the servers, `[aue]` on the workstations) were **not enabled** when this was
+   sampled, and they are the range's primary traffic generator — simulated
+   logons, file access, browsing and mail are exactly what feed Authentication,
+   Web, Endpoint and Change. Expect materially more once emulation runs; how
+   much more is unmeasured.
+
+   What survives the caveat: the platform disk does **178 MB/s** against a
+   measured **~1 MB/s**, so there is roughly two orders of magnitude of
+   headroom before storage throughput is the binding constraint. That margin
+   is wide enough that emulation is very unlikely to close it.
+
+   What does NOT survive: any daily-volume figure, and therefore the retention
+   sizing. **Re-measure with emulation enabled** before committing to indexer
+   disk — that is the number decision 2 actually needs.
+
+   Also note the ES-contention argument in §3 stands on its own and does not
+   depend on ingest volume: correlation searches competing with indexing on a
+   combined instance is a problem at any data rate. Do not lean on throughput
+   either way until it has been measured properly.
 3. **Which data models to accelerate** — §9 proposes five, contingent on the CIM check.
-4. ~~**Is `netfw` wired up?**~~ — **PARTLY ANSWERED 2026-08-17.** `group_vars` still describes `netfw` as "reserved for pfsense/vyatta syslog when wired up", but the Network_Traffic data model has **1 MB of accelerated summary on the live instance**, so something is populating it. Worth finding out what, and updating the group_vars comment, before assuming that model has no feed.
+4. ~~**Is `netfw` wired up?**~~ — **PARTLY ANSWERED 2026-08-17** (with emulation off; see decision 2).** `group_vars` still describes `netfw` as "reserved for pfsense/vyatta syslog when wired up", but the Network_Traffic data model has **1 MB of accelerated summary on the live instance**, so something is populating it. Worth finding out what, and updating the group_vars comment, before assuming that model has no feed.
 5. **Bucket migration** — only if this is ever applied to a range whose data matters (§6).
 
 ---
