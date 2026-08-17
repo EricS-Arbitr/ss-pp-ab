@@ -180,7 +180,9 @@ splunk_indexer
 splunk_cluster_manager
 ```
 
-`[splunk-forwarder:children]` currently enumerates `domain_controllers`, `corporate_servers`, `dmz` and `workstations`, so the new Splunk hosts are **not** in it — good. But confirm none of them land in those groups when added, or they will forward to themselves.
+`[splunk-forwarder:children]` enumerates `domain_controllers`, `corporate_servers`, `dmz` and `workstations`, so the new Splunk hosts are **not** in it — good. Confirm none of them land in those groups when added, or they will forward to themselves.
+
+The six `win-hunt-*` boxes **are** direct members of `[splunk-forwarder]` as of 2026-08-17, alongside `pp-proxy`. They are deliberately *not* in `[workstations]`: that group means "the simulated business's user endpoints", and while it feeds nothing but the forwarder group today, a future play targeting it for scenario activity or attack simulation should not silently include the blue team's own tooling.
 
 ---
 
