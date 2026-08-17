@@ -262,7 +262,7 @@ Test 7 is the one that matters. Tests 1–6 can all pass while ES produces nothi
 
 ## 11. Open decisions
 
-1. **Analyst count — the one that changes the design.** `[hunt]` is `win-hunt-1` alone. If PowerPlant stays at one or two analysts, the ES-isolation argument still holds but the search head should be **16 cores, not 32**, and this is a much smaller build. If PowerPlant is going to >10 analysts like airfield, additional hunt workstations are needed and `.24`–`.29` in PP-Security are free.
+1. ~~**Analyst count**~~ — **RESOLVED 2026-08-17:** `pp-splunk` is approved to resize to 32 vCPU / 64 GB, sized for the >10-analyst target. Note this is headroom, not present need: `[hunt]` is still `win-hunt-1` alone, and reaching that analyst count needs additional hunt workstations (`.24`–`.29` in PP-Security are free). That remains open as a scenario-design question.
 2. **Retention window** — drives indexer disk; 1 TB is a placeholder.
 3. **Which data models to accelerate** — §9 proposes five, contingent on the CIM check.
 4. **Is `netfw` wired up?** It is listed as reserved. Network_Traffic has no feed without it.
