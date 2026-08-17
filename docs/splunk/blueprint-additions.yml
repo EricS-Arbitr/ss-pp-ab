@@ -28,10 +28,10 @@
 # (roles/splunk-forwarder/templates/outputs.conf.j2), which makes this a much
 # smaller migration than the equivalent in airfield.
 #
-# ** SIZING IS DECISION 1 AND IS NOT SETTLED. **
+# ** SIZING: DECIDED 2026-08-17 (Eric) — resize pp-splunk. **
 # Current allocation is 16 vCPU / 32 GB (docs/security-onion/blueprint-
 # additions.yml records so-manager as "sized to match pp-splunk" at those
-# values).
+# values). It goes to 32 / 64 GB below.
 #
 # Splunk search concurrency is base_max_searches (6) + 1 per core, with
 # max_searches_perc reserving 50% for scheduled work -- and ES ships 100+
@@ -42,18 +42,26 @@
 #        24 |    30 |        15 |     15 | ~10
 #        32 |    38 |        19 |     19 | ~12-13
 #
-# 32 vCPU / 64 GB below is sized for the STATED TARGET of >10 concurrent
-# analysts. PowerPlant's [hunt] group currently contains win-hunt-1 and
-# nothing else, so if the analyst count is not actually growing, LEAVE THIS
-# AT 16 / 32768 and the modification becomes a no-op. Splitting the roles is
-# worth doing either way -- ES's scheduled searches contending with indexing
-# on one box is a problem at any analyst count -- but the sizing is not.
+# 32 vCPU / 64 GB is sized for the STATED TARGET of >10 concurrent analysts
+# and gives ~19 ad-hoc search slots against ES's scheduled load.
+#
+# WORTH KNOWING: PowerPlant's [hunt] group currently contains win-hunt-1 and
+# nothing else, so the analyst count this is sized for does not exist yet.
+# The resize is still the right call -- undersizing a dedicated ES search
+# head is expensive to discover later, and splitting the roles is worth
+# doing at any analyst count because ES's scheduled searches contend with
+# indexing on a combined box. But if the analyst count is NOT going to grow,
+# 16 / 32768 would serve, and the honest reason to spend the extra 16 vCPU
+# is the future headroom rather than present need.
+#
+# Reaching >10 analysts also needs more than one hunt workstation --
+# .24-.29 in PP-Security are free. See "NOT SPECIFIED HERE" below.
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "pp-splunk"
   properties:
     image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
-    cpuCount: 32                      # WAS 16 — see the note above
-    memory: "65536"                   # WAS 32768
+    cpuCount: 32                      # WAS 16 — approved 2026-08-17
+    memory: "65536"                   # WAS 32768 — approved 2026-08-17
     networkInterfaces:
     - name: "pp-security"
       ipAddress: "172.16.9.20"        # unchanged
@@ -149,12 +157,13 @@
 # PLATFORM COST OF THIS CHANGE
 # =========================================================================
 #   new VMs        3   (16 + 16 + 8 = 40 vCPU, 80 GB)
-#   pp-splunk      +16 vCPU, +32 GB  (only if decision 1 says 32 cores)
+#   pp-splunk      +16 vCPU, +32 GB  (approved 2026-08-17)
 #   -------------------------------------------------------------------
-#   total          56 vCPU / 112 GB   at the target sizing
-#                  40 vCPU /  80 GB   if pp-splunk stays at 16/32
+#   total          56 vCPU / 112 GB additional
 #
-# Worth confirming the range has that headroom before applying.
+# Confirm the range has that headroom before applying -- this is a
+# substantial ask on top of what the Security Onion grid already added
+# (1 manager + 1 search + 3 sensors = 56 vCPU / 112 GB in its own right).
 #
 # =========================================================================
 # NOT SPECIFIED HERE — AND IT MATTERS
