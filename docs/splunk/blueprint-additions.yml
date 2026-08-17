@@ -1,0 +1,197 @@
+# =========================================================================
+# blueprint-additions.yml — distributed Splunk + Enterprise Security
+# =========================================================================
+# Draft for the platform blueprint. Design and reasoning live in
+# docs/splunk/pp-splunk-distributed-build-sheet.md — read §3 (why split) and
+# §11 (open decisions) before applying, because decision 1 changes the size
+# of pp-splunk.
+#
+# ONE MODIFICATION + THREE ADDITIONS.
+#
+# This SPLITS a box that currently does three jobs. pp-splunk today runs
+# Splunk Enterprise as indexer AND search head AND Enterprise Security --
+# arbitr_pp_playbook.yaml applies both `splunk` and `splunk-es` to
+# `hosts: splunk`. After this it is a search head only and receives no data.
+#
+# Schema copied from docs/security-onion/blueprint-additions.yml, which is
+# the version that was actually applied as ARBITR_PP_1455 -- note the
+# network interface name is lowercase `pp-security`.
+# =========================================================================
+
+# -------------------------------------------------------------------------
+# 1. MODIFY AN EXISTING VM — pp-splunk becomes the dedicated ES search head
+# -------------------------------------------------------------------------
+# Address unchanged at 172.16.9.20. It stays the analyst-facing address and
+# `splunk_server_ip` currently points at it; what changes is that it stops
+# being the thing forwarders send to. See build sheet §5 -- that variable
+# has exactly one functional consumer here
+# (roles/splunk-forwarder/templates/outputs.conf.j2), which makes this a much
+# smaller migration than the equivalent in airfield.
+#
+# ** SIZING IS DECISION 1 AND IS NOT SETTLED. **
+# Current allocation is 16 vCPU / 32 GB (docs/security-onion/blueprint-
+# additions.yml records so-manager as "sized to match pp-splunk" at those
+# values).
+#
+# Splunk search concurrency is base_max_searches (6) + 1 per core, with
+# max_searches_perc reserving 50% for scheduled work -- and ES ships 100+
+# scheduled correlation searches:
+#
+#     cores | total | scheduled | ad-hoc | analysts @ ~1.5 concurrent
+#        16 |    22 |        11 |     11 | ~7
+#        24 |    30 |        15 |     15 | ~10
+#        32 |    38 |        19 |     19 | ~12-13
+#
+# 32 vCPU / 64 GB below is sized for the STATED TARGET of >10 concurrent
+# analysts. PowerPlant's [hunt] group currently contains win-hunt-1 and
+# nothing else, so if the analyst count is not actually growing, LEAVE THIS
+# AT 16 / 32768 and the modification becomes a no-op. Splitting the roles is
+# worth doing either way -- ES's scheduled searches contending with indexing
+# on one box is a problem at any analyst count -- but the sizing is not.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "pp-splunk"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 32                      # WAS 16 — see the note above
+    memory: "65536"                   # WAS 32768
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.20"        # unchanged
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.175"     # unchanged
+      position: "FIRST"
+
+# -------------------------------------------------------------------------
+# 2-3. NEW — indexer cluster peers
+# -------------------------------------------------------------------------
+# Two peers with replication factor 2 / search factor 2. Replication is the
+# smaller reason; the larger one is that CIM data model acceleration runs on
+# the INDEXING tier and is typically the dominant load in an ES deployment --
+# more than ingest. On the current single instance it competes directly with
+# the searches it exists to serve.
+#
+# A third peer becomes worthwhile past a few hundred GB/day, which this range
+# is nowhere near.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "pp-splunk-idx01"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 16
+    memory: "32768"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.21"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.209"
+      position: "FIRST"
+
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "pp-splunk-idx02"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 16
+    memory: "32768"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.22"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.210"
+      position: "FIRST"
+
+# -------------------------------------------------------------------------
+# 4. NEW — management tier
+# -------------------------------------------------------------------------
+# Cluster manager + license manager + deployment server + monitoring
+# console. All four are light singletons; splitting them costs three more
+# VMs that must come up unattended and buys nothing at this scale.
+#
+# The cluster manager is REQUIRED, not optional: indexes must be pushed to
+# the peers through its manager-apps mechanism rather than edited on peers
+# directly, and it is what makes indexer discovery available to forwarders
+# so a third peer later needs no forwarder change.
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "pp-splunk-cm"
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 8
+    memory: "16384"
+    networkInterfaces:
+    - name: "pp-security"
+      ipAddress: "172.16.9.23"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.211"
+      position: "FIRST"
+
+# =========================================================================
+# ADDRESSING NOTES
+# =========================================================================
+# PP-Security 172.16.9.0/24 currently in use:
+#   .1  pp-internal-router   .11 win-hunt-1        .20 pp-splunk
+#   .30 so-manager           .35 so-search         .40 so-sensor-corp
+#   .41 so-sensor-ot         .42 so-sensor-edge
+# .21-.29 are free and contiguous; .21/.22/.23 taken above.
+#
+# Management: current high-water is 10.255.240.208, so the three new hosts
+# continue at .209-.211.
+#
+# ** VERIFY BOTH RANGES AGAINST THE CURRENT BLUEPRINT BEFORE APPLYING. **
+# host_vars is not authoritative for what the platform has already handed
+# out. The Security Onion draft for this range collided on 10.255.240.136
+# for exactly this reason -- the collision check was clean only because it
+# compared against a stale local copy of an older blueprint. Diff the
+# CURRENT blueprint, never a local copy.
+#
+# =========================================================================
+# PLATFORM COST OF THIS CHANGE
+# =========================================================================
+#   new VMs        3   (16 + 16 + 8 = 40 vCPU, 80 GB)
+#   pp-splunk      +16 vCPU, +32 GB  (only if decision 1 says 32 cores)
+#   -------------------------------------------------------------------
+#   total          56 vCPU / 112 GB   at the target sizing
+#                  40 vCPU /  80 GB   if pp-splunk stays at 16/32
+#
+# Worth confirming the range has that headroom before applying.
+#
+# =========================================================================
+# NOT SPECIFIED HERE — AND IT MATTERS
+# =========================================================================
+# 1. DISK. The schema used by this range's applied blueprint
+#    (ARBITR_PP_1455) carries no disk property, so the platform assigns a
+#    default. Indexer storage is retention-driven and the default is
+#    unlikely to be right for two cluster peers holding replicated copies of
+#    everything. Decide a retention window, then confirm how disk is
+#    allocated on this platform -- it may need a separate resource or a
+#    different image. Build sheet decision 2.
+#
+# 2. ANALYST WORKSTATIONS. If the >10-analyst target is real, [hunt] needs
+#    more than win-hunt-1. .24-.29 in PP-Security are free. Deliberately NOT
+#    added here -- that is a scenario-design decision, not a SIEM one, and
+#    it changes the user/persona work in the range as well as the VM count.
+#
+# 3. RETIRING THE OLD DATA. pp-splunk currently holds every indexed bucket.
+#    After the split it stores none, and those buckets do not move by
+#    themselves. On a range rebuilt between exercises this is a non-issue;
+#    on a range whose data matters it needs a separate plan. Build sheet §6.
+#
+# =========================================================================
+# WHAT MUST BE TRUE BEFORE THIS IS WORTH DEPLOYING
+# =========================================================================
+# ES is already installed on pp-splunk today, and its correlation searches
+# fire off ACCELERATED DATA MODELS, not raw events. If the range's data is
+# not CIM-compliant, ES generates few notables regardless of how the
+# hardware is arranged -- and splitting the tiers will not change that.
+#
+# Check on the CURRENT single instance before building anything:
+#
+#   | tstats count from datamodel=Authentication where nodename=Authentication
+#       by sourcetype
+#
+# If that returns little or nothing, the models are not being populated and
+# the CIM/TA work (build sheet §9) is the actual bottleneck, not the
+# topology. Note also that `netfw` is documented in group_vars as "reserved
+# for pfsense/vyatta syslog when wired up", so Network_Traffic may have no
+# feed at all.
