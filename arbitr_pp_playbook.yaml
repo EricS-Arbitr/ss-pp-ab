@@ -817,3 +817,95 @@
   tags:
     - splunk-forwarder
 
+# =============================================================================
+# Management plane carries NO AD traffic — enforced, not assumed
+# =============================================================================
+# REQUIREMENT (Eric, 2026-08-17): no range-generated AD/LDAP traffic may cross
+# 10.255.240.0/20. CLAUDE.md §8 already says the management plane is
+# out-of-band and invisible in-scenario; this play makes that enforceable.
+#
+# WHY A SECOND PASS. "Strip mgmt interface from AD DNS registration" and
+# "Purge mgmt-subnet A records" both run much earlier, right after dc_status --
+# and roughly thirty plays follow them, several of which reboot a DC. A DC
+# re-registers its DNS records on every Netlogon start, so a purge in the
+# middle of the run proves nothing about the state at the end of it.
+#
+# MEASURED ON A DEPLOYED RANGE 2026-08-13, with both earlier plays having run:
+#
+#   Get-DnsServerResourceRecord -ZoneName blackstone.mil -RRType A
+#     bs-dc01  10.255.240.136
+#     bs-dc02  10.255.240.178
+#
+#   Resolve-DnsName bs-dc01.blackstone.mil -Type A
+#     172.31.2.7        <- production
+#     10.255.240.136    <- management
+#
+# Clients round-robin across both, so roughly HALF of all Kerberos, LDAP and
+# RPC traffic was crossing the management plane -- visible to trainees hunting
+# in Security Onion as 10.255.240.x in authentication flows, which is
+# out-of-scenario infrastructure they should not know exists. The SO dashboard
+# is what surfaced it: destination.ip showed the four DC management addresses
+# with counts comparable to their production ones.
+#
+# NOT fixing this with Netlogon's DnsAvoidRegisterRecords. The domain-level
+# "same as parent" records are already clean here -- blackstone.mil resolves to
+# production addresses only -- so that control addresses a problem this range
+# does not have, and a wrong mnemonic would break DC locator. Purge what is
+# demonstrably wrong, then assert it stayed gone.
+- name: Management plane — purge AD records and PROVE none remain
+  hosts: pdc
+  gather_facts: false
+  tasks:
+    - name: Remove every 10.255.240.0/20 A record from {{ domain_name }}, then recount
+      ansible.windows.win_powershell:
+        script: |
+          $zone = '{{ domain_name }}'
+          function Get-MgmtA {
+            Get-DnsServerResourceRecord -ZoneName $zone -RRType A -ErrorAction SilentlyContinue |
+              Where-Object {
+                $ip = $_.RecordData.IPv4Address.ToString()
+                if ($ip -notlike '10.255.*') { return $false }
+                $third = [int]($ip.Split('.')[2])
+                ($third -ge 240) -and ($third -le 255)
+              }
+          }
+          $stale = @(Get-MgmtA)
+          foreach ($r in $stale) {
+            Remove-DnsServerResourceRecord -ZoneName $zone -InputObject $r -Force -ErrorAction Stop
+          }
+          # Recount AFTER removing. Presence of a delete is not proof of
+          # absence -- the whole point of this play is that something may be
+          # putting them back.
+          $left = @(Get-MgmtA)
+          $names = ($stale | ForEach-Object { "$($_.HostName)=$($_.RecordData.IPv4Address)" }) -join ' '
+          $Ansible.Changed = ($stale.Count -gt 0)
+          Write-Output ("REMOVED=" + $stale.Count + " REMAINING=" + $left.Count + " " + $names)
+      register: mgmt_dns_purge
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} ({{ domain_name }}): {{ mgmt_dns_purge.output[0] }}"
+
+    - name: FAIL if any management-plane A record survived the purge
+      ansible.builtin.fail:
+        msg: |
+          {{ domain_name }} still publishes management-plane addresses after a
+          purge: {{ mgmt_dns_purge.output[0] }}
+
+          Clients resolving a DC name get both its production and its
+          10.255.240.x address and round-robin between them, so roughly half of
+          all Kerberos/LDAP/RPC traffic crosses the management plane. That
+          violates CLAUDE.md §8 and exposes out-of-scenario infrastructure to
+          anyone hunting in the SIEM.
+
+          A record that comes BACK after being deleted is being re-registered,
+          not left over. Check, on this DC:
+
+            Get-DnsClient | Select InterfaceAlias, RegisterThisConnectionsAddress
+              -> the management adapter must be False
+
+            Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
+              -> if the client setting is already False and records still
+                 return, Netlogon is registering them and needs
+                 DnsAvoidRegisterRecords set for the address record types.
+      when: "'REMAINING=0 ' not in (mgmt_dns_purge.output[0] ~ ' ')"
