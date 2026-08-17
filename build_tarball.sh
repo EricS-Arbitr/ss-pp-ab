@@ -228,7 +228,38 @@ TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)
-tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
+# THIS SCRIPT HAS TWO ALLOWLISTS. The staging section above decides what is
+# copied into $STAGE; TAR_PATHS decides what is actually packed. Adding to one
+# and not the other produces an archive that builds clean, reports the right
+# role count, and is missing the files. Assert they agree.
+for entry in *; do
+  packed=0
+  for p in "${TAR_PATHS[@]}"; do [ "$p" = "$entry" ] && packed=1 && break; done
+  if [ "$packed" -eq 0 ]; then
+    echo "ERROR: '$entry' was staged but is not in TAR_PATHS -- it would be" >&2
+    echo "       silently missing from the archive. Add it to TAR_PATHS." >&2
+    exit 1
+  fi
+done
+
+# macOS junk, stripped from the whole stage before packing.
+find "$STAGE" \( -name '.DS_Store' -o -name '._*' \) -delete 2>/dev/null || true
+
+# COPYFILE_DISABLE=1 is the load-bearing setting, NOT --no-xattrs.
+#
+# Apple's tar emits an AppleDouble "._name" companion for every file carrying
+# an extended attribute, and com.apple.provenance is set on anything
+# downloaded -- i.e. most of a checked-out repo. `--no-xattrs` does NOT
+# suppress them despite reading as though it should. Measured on this repo
+# 2026-08-17: 724 members of which 362 were junk, exactly one companion per
+# real file. Extraction is ADDITIVE, so every one of them persisted in
+# /etc/ansible on every deploy.
+#
+# Apple's `tar -tzf` HIDES AppleDouble members when listing, so macOS tar
+# cannot verify this. Check with python3 tarfile.
+COPYFILE_DISABLE=1 tar --no-xattrs \
+  --exclude='.DS_Store' --exclude='._*' \
+  -czf "$ARCHIVE" "${TAR_PATHS[@]}"
 
 echo ""
 echo "=== Archive built ==="
