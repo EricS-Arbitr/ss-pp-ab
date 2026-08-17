@@ -158,6 +158,16 @@ win-hunt-6
 # is-inet -- no play targeting is-inet consumes them.
 [voltgrid]
 is-inet
+# SOC hunt/analyst workstations. voltgrid.yml is where `domain_name` lives, and
+# BOTH the domain join and autologin's DefaultDomainName need it -- every other
+# [members] host reaches this group via [voltgrid:children], but the hunt boxes
+# are in none of those children, so they must be listed directly.
+win-hunt-1
+win-hunt-2
+win-hunt-3
+win-hunt-4
+win-hunt-5
+win-hunt-6
 
 [voltgrid:children]
 workstations

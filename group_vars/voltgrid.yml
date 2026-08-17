@@ -278,3 +278,33 @@ DomainUsers:
     password: "{{ vault_domain_user_password }}"
     groups:
       - "Domain Admins"
+  # --- SOC analysts (win-hunt-1..6) -----------------------------------
+  # Added 2026-08-17 with the hunt-workstation expansion. `groups` matches
+  # the convention every other user in this list already follows; see the
+  # note in the build sheet about that being worth revisiting range-wide
+  # rather than for six users in isolation.
+  - name: "marcus.reed"
+    fullname: "Marcus Reed"
+    password: "Simspace1!Simspace1!"
+    groups: ["Domain Admins"]
+  - name: "priya.natarajan"
+    fullname: "Priya Natarajan"
+    password: "Simspace1!Simspace1!"
+    groups: ["Domain Admins"]
+  - name: "devon.clarke"
+    fullname: "Devon Clarke"
+    password: "Simspace1!Simspace1!"
+    groups: ["Domain Admins"]
+  - name: "helena.vogt"
+    fullname: "Helena Vogt"
+    password: "Simspace1!Simspace1!"
+    groups: ["Domain Admins"]
+  - name: "omar.haddad"
+    fullname: "Omar Haddad"
+    password: "Simspace1!Simspace1!"
+    groups: ["Domain Admins"]
+  - name: "rita.okonkwo"
+    fullname: "Rita Okonkwo"
+    password: "Simspace1!Simspace1!"
+    groups: ["Domain Admins"]
+

@@ -18,3 +18,10 @@ network_interfaces:
       gateway: "172.16.9.1"
     dns:
       - "172.16.2.7"
+
+# Autologin identity. The `configure hunt` play applies the autologin role,
+# which is gated on `logon_user is defined` -- without these it has always
+# been a silent no-op on the hunt boxes. DefaultDomainName resolves from
+# `domain_name`, which these hosts now get via [voltgrid].
+logon_user: "rita.okonkwo"
+logon_user_password: "Simspace1!Simspace1!"
