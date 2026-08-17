@@ -241,6 +241,10 @@ Required add-ons: `Splunk_TA_nix`, `Splunk_TA_windows`, a Sysmon TA. pfSense and
 
 Accelerate only the models the scenarios exercise — Authentication, Network_Traffic, Endpoint, Malware, Web. Every accelerated model is continuous indexer load, and the default set is larger than what this range feeds.
 
+**The range currently accelerates 16 of 17 models.** `roles/splunk-es` writes `Splunk_SA_CIM/local/datamodels.conf` from `range-development-ansible/templates/splunkapps/cim-datamodels.conf.j2`; only `Alerts` is off, and 13 of the 16 omit `acceleration.manual_rebuilds`, so they rebuild automatically rather than only building forward.
+
+Measured 2026-08-17, this costs **less than it looks**: nine models hold zero bytes, every model reported `is_inprogress=0`, and all summaries together are ~7 MB. Trimming the empty ones is tidy-up, **not** a performance fix — an IOWait alert on the live instance turned out to be post-deploy startup load, not acceleration. Do it for clarity, and do not expect it to change resource usage.
+
 ---
 
 ## 10. Acceptance tests
@@ -265,9 +269,19 @@ Test 7 is the one that matters. Tests 1–6 can all pass while ES produces nothi
 ## 11. Open decisions
 
 1. ~~**Analyst count**~~ — **RESOLVED 2026-08-17:** `pp-splunk` resized to 32 vCPU / 64 GB, and `[hunt]` grown from one workstation to six (`win-hunt-1`..`6`, `172.16.9.11`–`.16`). All six are now in `[members]` and domain-joined — `win-hunt-1` never had been. Six analyst workstations does not yet reach ">10 concurrent analysts", so the search head sizing still carries headroom beyond present need; adding `win-hunt-7`..`12` at `.17`–`.19` and `.24`–`.26` would close that gap.
-2. **Retention window** — drives indexer disk; 1 TB is a placeholder.
+2. **Retention window** — drives indexer disk; 1 TB is a placeholder. **Measured on the live single instance 2026-08-17**, which narrows this considerably:
+
+   | | |
+   |---|---|
+   | steady-state write rate | ~1.1 MB/s (22,672 sectors / 10 s) |
+   | steady-state read rate | ~0 |
+   | platform default disk | **178 MB/s** sequential write, `dd` 512 MB direct |
+   | all CIM summaries combined | ~7 MB |
+   | `vmstat wa` | 0 |
+
+   At ~1 MB/s the range generates on the order of **90 GB/day worst case**, and realistically far less since that sample included post-deploy catch-up. The default platform disk is not a constraint at this volume, and 1 TB per peer is generous rather than tight. **Throughput is not the reason to add indexers here** — the reasons are ES contention on a combined instance (§3) and replication. Worth restating whenever someone asks why two peers are needed for a range this small.
 3. **Which data models to accelerate** — §9 proposes five, contingent on the CIM check.
-4. **Is `netfw` wired up?** It is listed as reserved. Network_Traffic has no feed without it.
+4. ~~**Is `netfw` wired up?**~~ — **PARTLY ANSWERED 2026-08-17.** `group_vars` still describes `netfw` as "reserved for pfsense/vyatta syslog when wired up", but the Network_Traffic data model has **1 MB of accelerated summary on the live instance**, so something is populating it. Worth finding out what, and updating the group_vars comment, before assuming that model has no feed.
 5. **Bucket migration** — only if this is ever applied to a range whose data matters (§6).
 
 ---
