@@ -69,17 +69,19 @@ Splitting gives ES a search head whose scheduled work does not contend with inde
 
 ## 4. Blueprint additions
 
-Three new VMs. `pp-splunk` should also be checked for explicit `cpuCount`/`memory` — airfield's equivalent had neither and silently inherited the image default.
+Three new VMs. `pp-splunk` **is** explicitly sized today at 16 vCPU / 32 GB — `docs/security-onion/blueprint-additions.yml` records `so-manager` as "sized to match pp-splunk" at those values. (Airfield's equivalent had no `cpuCount`/`memory` at all and silently inherited the image default; PowerPlant does not have that problem.)
+
+The ready-to-apply version of this section is `docs/splunk/blueprint-additions.yml`.
 
 ```yaml
 # MODIFY — pp-splunk becomes the dedicated ES search head
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "pp-splunk"
   properties:
-    cpuCount: 32                      # confirm current value; see decision 1
+    cpuCount: 32                      # currently 16 — see decision 1
     memory: "65536"
     networkInterfaces:
-    - name: "PP-Security"
+    - name: "pp-security"
       ipAddress: "172.16.9.20"        # unchanged
       prefix: 24
     managementInterface:
@@ -93,7 +95,7 @@ Three new VMs. `pp-splunk` should also be checked for explicit `cpuCount`/`memor
     cpuCount: 16
     memory: "32768"
     networkInterfaces:
-    - name: "PP-Security"
+    - name: "pp-security"
       ipAddress: "172.16.9.21"
       prefix: 24
     managementInterface:
@@ -106,7 +108,7 @@ Three new VMs. `pp-splunk` should also be checked for explicit `cpuCount`/`memor
     cpuCount: 16
     memory: "32768"
     networkInterfaces:
-    - name: "PP-Security"
+    - name: "pp-security"
       ipAddress: "172.16.9.22"
       prefix: 24
     managementInterface:
@@ -120,7 +122,7 @@ Three new VMs. `pp-splunk` should also be checked for explicit `cpuCount`/`memor
     cpuCount: 8
     memory: "16384"
     networkInterfaces:
-    - name: "PP-Security"
+    - name: "pp-security"
       ipAddress: "172.16.9.23"
       prefix: 24
     managementInterface:
