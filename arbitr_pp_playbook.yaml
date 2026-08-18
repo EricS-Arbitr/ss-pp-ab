@@ -974,25 +974,75 @@
       when: dns_debug_logging | bool
       failed_when: false
 
-    - name: Fail with the diagnostics state if the log is still empty
-      ansible.builtin.fail:
-        msg: |
-          {{ inventory_hostname }}: {{ dns_debug_log_path }} exists but is
-          {{ dns_log_stat.stat.size | default('absent') }} bytes after queries were
-          sent directly to this server, so it is not a traffic problem.
-
-          Diagnostics state as read back above. Check in particular that
-          EnableLoggingToFile is True and that at least one entry in each group
-          is True: direction (Send/Receive), transport (Udp/Tcp), contents
-          (Queries/QuestionTransactions/Update/Notifications).
-
-          If every flag reads True and the file is still empty, the DNS service
-          is holding a stale handle from before logging was enabled -- restart
-          it on this host and re-run:
-            Restart-Service DNS
+    # A stale file handle is the one cause the diagnostics state cannot show:
+    # DNS opened dns.log at service start, logging was enabled afterwards, and
+    # the running service keeps touching the old handle without writing. The
+    # fingerprint is exactly what was observed -- file present, lastwritetime
+    # advancing, size 0. Restart and retry rather than telling someone to do it
+    # by hand; a deploy that needs a manual command is a defect here.
+    - name: Restart DNS if the log is still empty (stale handle)
+      ansible.windows.win_service:
+        name: DNS
+        state: restarted
       when:
         - dns_debug_logging | bool
         - (dns_log_stat.stat.size | default(0)) == 0
+
+    - name: Re-generate DNS queries after the restart
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          Start-Sleep -Seconds 10
+          $me = '{{ hostvars[inventory_hostname].network_interfaces
+                    | rejectattr("ipv4.address", "match", "10\.255\.(24[0-9]|25[0-5])\.")
+                    | map(attribute="ipv4.address") | first }}'
+          foreach ($n in @('{{ domain_name }}', 'www.voltgrid.com', 'pp-file.{{ domain_name }}')) {
+            try { Resolve-DnsName -Name $n -Server $me -DnsOnly -ErrorAction SilentlyContinue | Out-Null } catch {}
+          }
+          Write-Output ("re-queried via " + $me)
+      changed_when: false
+      when:
+        - dns_debug_logging | bool
+        - (dns_log_stat.stat.size | default(0)) == 0
+
+    - name: Re-check the DNS log after the restart
+      ansible.windows.win_stat:
+        path: "{{ dns_debug_log_path }}"
+      register: dns_log_recheck
+      until: dns_log_recheck.stat.exists and (dns_log_recheck.stat.size | default(0)) > 0
+      retries: 6
+      delay: 10
+      failed_when: false
+      when:
+        - dns_debug_logging | bool
+        - (dns_log_stat.stat.size | default(0)) == 0
+
+    - name: Report final log state
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ dns_debug_log_path }} is
+          {{ (dns_log_recheck.stat.size | default(dns_log_stat.stat.size, true) | default(0)) }} bytes.
+      when: dns_debug_logging | bool
+
+    - name: Fail with the diagnostics state if the log is STILL empty
+      ansible.builtin.fail:
+        msg: |
+          {{ inventory_hostname }}: {{ dns_debug_log_path }} is still empty after
+          enabling every debug option, sending queries directly to this server,
+          restarting the DNS service, and sending them again.
+
+          Traffic and stale handles are both ruled out, so read the diagnostics
+          state printed earlier in this run. If EnableLoggingToFile is True and
+          every direction/transport/contents flag is True and the file is STILL
+          zero bytes, then this Windows build is not honouring file-based debug
+          logging and the source has to change -- see docs/splunk/ for the
+          alternatives (DNS Analytical channel, or Zeek dns.log from the
+          Security Onion branch, which already carries both halves of the
+          transaction).
+      when:
+        - dns_debug_logging | bool
+        - (dns_log_stat.stat.size | default(0)) == 0
+        - (dns_log_recheck.stat.size | default(0)) == 0
 
 # =============================================================================
 # Management plane — stop the DNS server PUBLISHING its own mgmt address
