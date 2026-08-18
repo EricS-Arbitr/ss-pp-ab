@@ -600,10 +600,32 @@
   tags:
     - network_discovery
 
+# =============================================================================
+# Endpoint telemetry — Sysmon
+# =============================================================================
+# Sysmon was previously applied only inside the AUE play, which made endpoint
+# telemetry a side effect of running emulated users. Measured consequence on
+# 2026-08-18: pp-file, pp-sql, pp-mail and win-hunt-1..6 had no Sysmon service
+# at all. The file server, the SQL server and the analysts' own workstations
+# produced no process, network or DNS telemetry, and nothing in the range
+# reported it -- section 7 of verify_deployment.sh checked one AUE workstation.
+#
+# Coverage is now the [sysmon] inventory group. pp-dcs-ctrl is excluded by
+# decision (see hosts). The base role installs and configures only -- no
+# reboot, no conditionals -- so it is safe to run against servers.
+- name: Endpoint telemetry — Sysmon
+  hosts: sysmon
+  gather_facts: false
+  strategy: free                # per-host install + config, no cross-host sync
+  roles:
+    - sysmon
+  tags:
+    - sysmon
+
 - name: apply AUE settings
   hosts: aue
   gather_facts: false
-  strategy: free                # each workstation reboots for chrome+sysmon
+  strategy: free                # each workstation reboots for chrome
                                 # independently -- biggest wall-clock win here
   roles:
     - disable_uac
@@ -611,7 +633,6 @@
     - autologin
     - ue
     - chrome
-    - sysmon
     - aue_agent
     - secpol
     - drainhole
@@ -621,7 +642,6 @@
     - autologin
     - ue
     - chrome
-    - sysmon
     - aue_agent
     - secpol
     - drainhole
@@ -941,6 +961,13 @@
 - name: Management plane — purge AD records and PROVE none remain
   hosts: pdc
   gather_facts: false
+  # Shares the mgmt_dns tag with the PublishAddresses play above so
+  # `--tags mgmt_dns` applies the fix AND clears the existing static records in
+  # one run. Untagged, this was reachable only via a full deploy, which meant
+  # the records could not be cleared without one.
+  tags:
+    - mgmt_dns
+    - mgmt_dns_purge
   tasks:
     - name: Remove every 10.255.240.0/20 A record from {{ domain_name }}, then recount
       ansible.windows.win_powershell:

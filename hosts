@@ -327,6 +327,37 @@ dmz
 workstations
 
 
+# ------------------------------------------------------------
+# Endpoint telemetry. Sysmon used to be applied ONLY as a side effect of
+# [aue] membership -- it sat inside that play's role list -- so "does this
+# host produce process/network/DNS telemetry" was decided by "does this host
+# run emulated users". Unrelated concerns, and the result was measurable:
+# on 2026-08-18 pp-file, pp-sql, pp-mail and all six hunt workstations had
+# no Sysmon at all, including the file and database servers that are the
+# highest-value targets in any scenario the range runs.
+#
+# This group is now the single source of truth for Sysmon coverage.
+#
+# pp-dcs-ctrl is DELIBERATELY EXCLUDED (Eric, 2026-08-18) -- it is OT process
+# equipment, not an engineering workstation that monitors OT. Do not add it
+# without asking; the same line is drawn in so_agent_endpoint_subnets.
+#
+# The DCs are included even though their image already ships Sysmon running:
+# unmanaged means their config can silently drift from the rest of the estate,
+# which for a SIEM is exactly the kind of gap nobody notices until an
+# investigation comes up empty.
+[sysmon:children]
+aue
+hunt
+
+[sysmon]
+pp-file
+pp-sql
+pp-mail
+pp-dc01
+pp-dc02
+pp-dc03
+
 [hunt]
 win-hunt-1
 win-hunt-2

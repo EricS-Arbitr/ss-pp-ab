@@ -141,8 +141,8 @@
     fail_msg: >-
       {{ splunk_verify_user }} cannot see the indexes that hold the range's
       data: {{ (visibility_result.stdout | default('(no output)')) | trim }}.
-      Expected all of {{ splunk_verify_expected_indexes | join(', ') }} with
-      more than {{ splunk_verify_event_floor }} events each. Run
+      Expected more than {{ splunk_verify_event_floor }} raw events from the
+      Sysmon source. Run
       '{{ splunk_verify_app_dir }}/bin/verify_data.sh indexes' on this host to
       see what the account CAN see. Do not relax the floor to make this pass --
       a verifier that cannot detect its own blindness is worse than none.

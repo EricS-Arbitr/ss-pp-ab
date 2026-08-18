@@ -961,3 +961,25 @@ This also explains the shape of the recurrence: the existing purge play ran at t
 **Fix (upstream)**: the base `dcpromo` / `dns` roles should set `PublishAddresses` on any DC with more than one bound address. Disabling client-side DDNS on the mgmt NIC is necessary but not sufficient, and the difference is invisible unless you check record timestamps.
 
 **Workaround in PowerPlant overlay**: new play `Management plane — restrict which addresses each DC's DNS server publishes` (tags `mgmt_dns`, `publish_addresses`), placed immediately **before** the existing purge play. It derives the production address from `network_interfaces` by rejecting anything in `10.255.240.0/20`, asserts a non-empty result (an empty `PublishAddresses` would stop the DC publishing any host record and break DC locator), writes the registry value, and restarts the DNS service so it takes effect before the purge runs. The purge becomes the assertion rather than the mechanism. `verify_deployment.sh` section 4 now checks `PublishAddresses` is set on each DC.
+
+---
+
+## 2026-08-18 · gap · arbitr_pp_playbook.yaml — Sysmon coverage was a side effect of `[aue]` membership
+
+**Symptom**: ten domain-joined Windows hosts had no Sysmon service running — `pp-file`, `pp-sql`, `pp-mail`, `pp-dcs-ctrl` and all six `win-hunt-*` workstations. The file server, the database server and the SOC's own analyst workstations produced no process, network or DNS telemetry into Splunk or Security Onion.
+
+**Detection**:
+
+```
+ansible members -m win_shell -a 'if (Get-Service Sysmon64 -EA SilentlyContinue) { "SYSMON_PRESENT" } else { "SYSMON_MISSING" }' --one-line | grep SYSMON_MISSING
+```
+
+Nothing reported it because `verify_deployment.sh` section 7 sampled a single host (`pp-bp-wkstn-1`, an AUE workstation, which had it). **A single in-group sample cannot detect a coverage gap — only a total outage.**
+
+The cause is that `sysmon` appeared exactly once in the playbook, inside the `apply AUE settings` play's role list. "Does this host produce endpoint telemetry" was therefore decided by "does this host run emulated users" — two unrelated concerns. Excluding the hunt workstations from AUE (a deliberate decision: analysts don't need emulated users) silently excluded them from telemetry as well. The `[ae]` play never included `sysmon` at all, which is why the servers were dark; the DCs only appeared healthy because their image ships Sysmon independently of Ansible.
+
+**Fix (upstream)**: the reference playbook should treat endpoint telemetry as its own concern with its own target group, not bundle it into a posture play. Any role whose absence is invisible from a single sample also needs a group-wide assertion, not a spot check.
+
+**Workaround in PowerPlant overlay**: new `[sysmon]` inventory group (children `aue`, `hunt`; direct members `pp-file`, `pp-sql`, `pp-mail`, `pp-dc01/02/03`) and a dedicated `Endpoint telemetry — Sysmon` play, tag `sysmon`. Removed from the AUE play's role and tag lists. The base role installs and configures only — no reboot, no conditionals — so it is safe against servers; the AUE play's "reboots for chrome+sysmon" comment was wrong about sysmon and has been corrected.
+
+`pp-dcs-ctrl` is **deliberately excluded** (Eric, 2026-08-18): it is OT process equipment, not an engineering workstation that monitors OT — the same line drawn in `so_agent_endpoint_subnets`. `verify_deployment.sh` section 12 asserts both group-wide coverage and that the exclusion still holds, so a future `:children` edit that sweeps it in is caught by the verifier rather than in a scenario review.

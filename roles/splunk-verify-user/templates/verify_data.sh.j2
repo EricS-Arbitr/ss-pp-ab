@@ -46,18 +46,24 @@ run() {
 }
 
 # --- can this account see the data at all --------------------------------
-# Runs FIRST and gates everything else. Asserts each index named in
-# splunk_verify_expected_indexes is visible with more than $FLOOR events.
-# Without this, a grant that silently hides 99.98% of events produces four
-# green ticks.
+# Runs FIRST and gates everything else.
+#
+# 2026-08-18, SECOND ATTEMPT. The first version of this gate used
+# `| tstats count where index=* by index` and PASSED while check_dns_src still
+# returned DNS_NO_EVENTS against 5,922 events that admin could see. tstats
+# reads index metadata; the checks it was supposed to protect run RAW searches.
+# It measured a different thing than the one it claimed to guarantee -- the
+# same transport-vs-outcome mistake it exists to prevent, committed inside the
+# fix for it.
+#
+# It now runs a raw search over the exact source the data-quality checks use,
+# so if svc_verify cannot see those events, this cannot pass.
 check_visibility() {
-  run '| tstats count where index=* by index
-       | search index IN ({{ splunk_verify_expected_indexes | join(", ") }})
-       | eval ok=if(count>{{ splunk_verify_event_floor }}, 1, 0)
-       | stats sum(ok) AS visible, count AS found, sum(count) AS events
-       | eval want={{ splunk_verify_expected_indexes | length }}
-       | eval r=if(visible==want, "VISIBILITY_OK_" . events . "_events_in_" . found . "_indexes",
-                   "VISIBILITY_FAIL_" . visible . "_of_" . want . "_indexes_above_floor_" . events . "_events")
+  run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+       | stats count AS e
+       | eval r=if(e>{{ splunk_verify_event_floor }},
+                   "VISIBILITY_OK_" . e . "_raw_events",
+                   "VISIBILITY_FAIL_" . e . "_raw_events_below_floor_{{ splunk_verify_event_floor }}")
        | fields r'
 }
 

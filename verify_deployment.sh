@@ -107,6 +107,25 @@ check_pf_shell() {
   fi
 }
 
+# Like check_pf_shell, but prints the returned token on PASS as well as FAIL.
+#
+# The data-quality checks embed their event counts in the token
+# (DNS_SRC_OK_5920_events, not DNS_SRC_OK). A passing check that hides its
+# count is precisely how PROC_CIM_OK passed on 13 of ~406,000 events and
+# printed a green tick on 2026-08-18. If the number is the evidence, the
+# number has to be on screen.
+check_pf_shell_token() {
+  local host="$1" cmd="$2" expect="$3" label="$4"
+  local out tok
+  out=$(A "$host" -m ansible.builtin.shell -a "$cmd" --one-line)
+  tok=$(echo "$out" | grep -oE '[A-Z][A-Z0-9_]{4,}' | tail -1)
+  if echo "$out" | grep -qE "$expect"; then
+    pass "$label [${tok:-?}]"
+  else
+    fail "$label [${tok:-no token}]" "$out"
+  fi
+}
+
 count_ps_predicate() {
   local group="$1" ps="$2" expect="$3"
   A "$group" -m ansible.windows.win_shell -a "$ps" --one-line \
@@ -630,24 +649,24 @@ else
   # events and all four checks below still returned clean OK tokens -- one of
   # them passed on 13 events. A restricted account emits well-formed tokens, so
   # nothing downstream is trustworthy until this passes.
-  check_pf_shell pp-splunk \
+  check_pf_shell_token pp-splunk \
     "$VERIFY_DATA visibility" \
     'VISIBILITY_OK' \
     "pp-splunk: verifier account can see the indexes holding the data"
 
-  check_pf_shell pp-splunk \
+  check_pf_shell_token pp-splunk \
     "$VERIFY_DATA apps" \
     'SYSMON_ADDONS_OK' \
     "pp-splunk: exactly one Sysmon add-on installed (two collide and null CIM fields)"
 
   # DNS_NO_EVENTS also fails this, deliberately: a SIEM with no DNS telemetry
   # over 7 days is a finding, not a pass. Read the token to tell them apart.
-  check_pf_shell pp-splunk \
+  check_pf_shell_token pp-splunk \
     "$VERIFY_DATA dns_src" \
     'DNS_SRC_OK' \
     "pp-splunk: every Sysmon DnsQuery event has src mapped (ES DNS panels group by it)"
 
-  check_pf_shell pp-splunk \
+  check_pf_shell_token pp-splunk \
     "$VERIFY_DATA proc_cim" \
     'PROC_CIM_OK' \
     "pp-splunk: ProcessCreate carries process + parent_process_* (the collided fields)"
@@ -655,7 +674,7 @@ else
   # Can fail while dns_src passes: search-time config does not retroactively
   # repair summaries built while the mapping was broken. That means rebuild
   # the acceleration, not that the add-ons are wrong.
-  check_pf_shell pp-splunk \
+  check_pf_shell_token pp-splunk \
     "$VERIFY_DATA dm_src" \
     'DM_SRC_OK' \
     "pp-splunk: Network_Resolution acceleration contains src (else rebuild acceleration)"
@@ -694,14 +713,6 @@ else
     fail "hunt: $hunt_uf/$hunt_total running SplunkForwarder"
   fi
 
-  hunt_sysmon=$(count_ps_predicate hunt \
-    '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
-    '\(stdout\)[[:space:]]+Running')
-  if [ "$hunt_sysmon" -eq "$hunt_total" ]; then
-    pass "hunt: $hunt_sysmon/$hunt_total running Sysmon64"
-  else
-    fail "hunt: $hunt_sysmon/$hunt_total running Sysmon64"
-  fi
 
   # PowerShell single quotes: the outer bash string must be double-quoted to
   # carry the registry path's spaces, so the inner quoting cannot also be
@@ -714,6 +725,39 @@ else
   else
     fail "hunt: $hunt_autologon/$hunt_total configured for autologin"
   fi
+fi
+
+# =========================================================================
+# 12. Endpoint telemetry coverage
+# =========================================================================
+# Checks the WHOLE [sysmon] group, not one sample host. Section 7 asserted
+# Sysmon on pp-bp-wkstn-1 and passed for months while pp-file, pp-sql, pp-mail
+# and all six hunt workstations had no Sysmon service at all -- a single
+# in-group sample cannot detect a coverage gap, only a total outage.
+# =========================================================================
+section "12. Endpoint telemetry coverage"
+
+sysmon_total=$(n_hosts sysmon)
+if [ "$sysmon_total" -eq 0 ]; then
+  fail "sysmon: 0 hosts in inventory — the [sysmon] group is missing or empty"
+else
+  sysmon_running=$(count_ps_predicate sysmon \
+    '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
+    '\(stdout\)[[:space:]]+Running')
+  if [ "$sysmon_running" -eq "$sysmon_total" ]; then
+    pass "sysmon: $sysmon_running/$sysmon_total hosts running Sysmon64"
+  else
+    fail "sysmon: $sysmon_running/$sysmon_total hosts running Sysmon64"
+  fi
+fi
+
+# pp-dcs-ctrl is OT process equipment and excluded by decision (Eric,
+# 2026-08-18). Assert the exclusion holds, so a future :children edit that
+# quietly sweeps it in gets caught here rather than in a scenario review.
+if ansible sysmon --list-hosts 2>/dev/null | grep -qw pp-dcs-ctrl; then
+  fail "sysmon: pp-dcs-ctrl is in the [sysmon] group — it is excluded by decision"
+else
+  pass "sysmon: pp-dcs-ctrl correctly excluded (OT process equipment)"
 fi
 
 # =========================================================================
