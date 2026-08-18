@@ -57,3 +57,14 @@ splunk_verify_window: "-7d"
 # Measured 2026-08-18 over 7 days: ~406,000 Sysmon events. The broken state was
 # 74. A floor of 1000 is unambiguous against both.
 splunk_verify_event_floor: 1000
+
+# Whether a blind verification account FAILS the deploy.
+#
+# True is correct and is the default: shipping a range whose verifier reports
+# green while seeing 0.02% of the data is worse than shipping late, and this is
+# the only place that failure is detectable before someone trusts a result.
+#
+# Set false ONLY to unblock an unrelated deploy while the grant is being fixed.
+# While it is false, every check in section 10 of verify_deployment.sh is
+# unverified -- not passing, unverified. Do not read them as green.
+splunk_verify_fail_on_blind: true

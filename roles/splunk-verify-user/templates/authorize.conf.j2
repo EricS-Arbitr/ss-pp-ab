@@ -14,11 +14,18 @@
 # something the built-in `user` role contributes. The settings below override
 # the candidates explicitly rather than relying on inheritance to be permissive:
 #
-#   srchTimeWin = 0    an inherited cap silently CLAMPS the time range -- a
-#                      -7d search returns a couple of minutes of data and no
-#                      warning. 0 = unlimited.
+#   srchTimeWin = 0    an inherited cap silently CLAMPS the time range.
+#                      RULED OUT 2026-08-18: setting it changed 74 events to
+#                      85. Kept because it costs nothing and removes a variable.
 #   search = enabled   granted explicitly rather than assumed from `user`.
 #   srchDiskQuota      100 MB was tight for multi-hundred-thousand-event scans.
+#   srchFilter = *     THE CURRENT HYPOTHESIS. A search filter restricts RAW
+#                      events while `| tstats` bypasses it entirely -- which is
+#                      precisely the asymmetry measured here: tstats reported
+#                      406,052 Sysmon events, a raw search over the same window
+#                      and source reported 85. Splunk unions search filters
+#                      across a role and the roles it imports, so `*` on this
+#                      role should widen whatever `user` contributes.
 #
 # The visibility gate in verify_data.sh is what proves this actually worked;
 # these values are a hypothesis, that check is the measurement.
@@ -29,6 +36,7 @@ search = enabled
 srchIndexesAllowed = *
 srchIndexesDefault = *
 srchTimeWin = 0
+srchFilter = *
 srchJobsQuota = 5
 rtSrchJobsQuota = 0
 srchDiskQuota = 500

@@ -23,7 +23,7 @@
 #      account can see the indexes that hold the data BEFORE any of the
 #      data-quality claims are believable.
 #
-# Usage: verify_data.sh {visibility|indexes|apps|dns_src|proc_cim|dm_src|all}
+# Usage: verify_data.sh {visibility|indexes|whatsee|apps|dns_src|proc_cim|dm_src|all}
 
 set -u
 
@@ -65,6 +65,24 @@ check_visibility() {
                    "VISIBILITY_OK_" . e . "_raw_events",
                    "VISIBILITY_FAIL_" . e . "_raw_events_below_floor_{{ splunk_verify_event_floor }}")
        | fields r'
+}
+
+# --- what CAN this account see, and from when -----------------------------
+# The diagnostic that discriminates the three ways a grant goes wrong, in one
+# search. Run it when check_visibility fails:
+#
+#   narrow time span   -> an inherited srchTimeWin is clamping the range
+#   few hosts/indexes  -> an inherited srchFilter is restricting events
+#   nothing at all     -> index permissions
+#
+# Deliberately raw, not tstats: tstats bypasses search filters, which is how
+# the first version of the visibility gate passed while the account was blind.
+check_whatsee() {
+  run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+       | stats count AS n, min(_time) AS oldest, max(_time) AS newest by index, host
+       | eval oldest=strftime(oldest, "%Y-%m-%d %H:%M:%S"),
+              newest=strftime(newest, "%Y-%m-%d %H:%M:%S")
+       | sort - n'
 }
 
 # --- raw escape hatch ----------------------------------------------------
@@ -127,10 +145,11 @@ check_dm_src() {
 case "${1:-all}" in
   visibility) check_visibility ;;
   indexes)    check_indexes ;;
+  whatsee)    check_whatsee ;;
   apps)       check_apps ;;
   dns_src)    check_dns_src ;;
   proc_cim)   check_proc_cim ;;
   dm_src)     check_dm_src ;;
   all)        check_visibility; check_apps; check_dns_src; check_proc_cim; check_dm_src ;;
-  *)          echo "usage: $0 {visibility|indexes|apps|dns_src|proc_cim|dm_src|all}"; exit 2 ;;
+  *)          echo "usage: $0 {visibility|indexes|whatsee|apps|dns_src|proc_cim|dm_src|all}"; exit 2 ;;
 esac

@@ -138,6 +138,7 @@
   ansible.builtin.assert:
     that:
       - "'VISIBILITY_OK' in (visibility_result.stdout | default(''))"
+    quiet: false
     fail_msg: >-
       {{ splunk_verify_user }} cannot see the indexes that hold the range's
       data: {{ (visibility_result.stdout | default('(no output)')) | trim }}.
@@ -152,3 +153,17 @@
       {{ verify_smoke.results
          | selectattr('item.check', 'equalto', 'visibility')
          | list | first | default({}) }}
+  ignore_errors: "{{ not splunk_verify_fail_on_blind }}"
+
+- name: WARN — verification results are NOT trustworthy
+  ansible.builtin.debug:
+    msg: >-
+      splunk_verify_fail_on_blind is false and {{ splunk_verify_user }} cannot
+      see the range's data. Section 10 of verify_deployment.sh will still print
+      tokens, and they are MEANINGLESS. Treat those checks as unverified, not
+      as passing, until the grant is fixed.
+  when:
+    - not splunk_verify_fail_on_blind
+    - "'VISIBILITY_OK' not in (verify_smoke.results
+       | selectattr('item.check', 'equalto', 'visibility')
+       | map(attribute='stdout') | join(' '))"
