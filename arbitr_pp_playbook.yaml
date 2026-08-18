@@ -906,68 +906,93 @@
     - dns_logging
     - dns
   tasks:
-    - name: Enable DNS Server debug logging to file
+    # -All rather than a hand-picked flag set. The first version enabled
+    # Queries/Answers/QuestionTransactions/Send/Receive/Udp/Tcp explicitly and
+    # produced a file that DNS kept touching at size 0 on all three DCs --
+    # logging on, no packet class actually selected. The GUI exposes four
+    # independent axes (direction, transport, contents, packet TYPE) and the
+    # cmdlet's parameter names do not map onto them obviously enough to guess.
+    # -All turns on every axis; trim later against a known-working baseline
+    # rather than guessing forward from a broken one.
+    - name: Enable DNS Server debug logging
       ansible.windows.win_powershell:
         script: |
-          $before = Get-DnsServerDiagnostics
-          $want = @{
-            Queries              = $true   # the query itself
-            Answers              = $true   # and what came back -- needed for record_type
-            QuestionTransactions = $true
-            ReceivePackets       = $true
-            SendPackets          = $true
-            UdpPackets           = $true
-            TcpPackets           = $true
-            EnableLoggingToFile  = $true
-          }
-          $needsChange = $false
-          foreach ($k in $want.Keys) {
-            if ($before.$k -ne $want[$k]) { $needsChange = $true }
-          }
-          if ($before.LogFilePath -ne '{{ dns_debug_log_path }}') { $needsChange = $true }
-
-          if ($needsChange) {
-            Set-DnsServerDiagnostics `
-              -Queries $true -Answers $true -QuestionTransactions $true `
-              -ReceivePackets $true -SendPackets $true `
-              -UdpPackets $true -TcpPackets $true `
-              -EnableLoggingToFile $true `
-              -EnableLogFileRollover $true `
-              -LogFilePath '{{ dns_debug_log_path }}' `
-              -MaxMBFileSize {{ dns_debug_log_max_bytes }} `
-              -ErrorAction Stop
-            $Ansible.Changed = $true
-          } else {
-            $Ansible.Changed = $false
-          }
-          $after = Get-DnsServerDiagnostics
-          Write-Output ("LoggingToFile=" + $after.EnableLoggingToFile +
-                        " Queries=" + $after.Queries +
-                        " Answers=" + $after.Answers +
-                        " Path=" + $after.LogFilePath)
-      register: dns_diag
+          Set-DnsServerDiagnostics -All $true -ErrorAction Stop
+          Set-DnsServerDiagnostics `
+            -EnableLoggingToFile $true `
+            -EnableLogFileRollover $true `
+            -LogFilePath '{{ dns_debug_log_path }}' `
+            -MaxMBFileSize {{ dns_debug_log_max_bytes }} `
+            -ErrorAction Stop
+          $Ansible.Changed = $true
       when: dns_debug_logging | bool
 
-    # Configuration accepted is not the same as a file appearing. DNS writes
-    # the log lazily, so allow a few seconds of real query traffic before
-    # asserting -- and assert the FILE, because that is what the forwarder
-    # reads. A silently-absent file would send the forwarder to monitor a path
-    # that never exists, which reports no error anywhere.
-    - name: Wait for the DNS log file to actually be written
+    # REPORTS BEFORE IT GATES. The first version put this after the wait, so
+    # when the wait failed the state that would have explained it never
+    # printed. Diagnostic output must never sit behind the assertion it exists
+    # to diagnose.
+    - name: Read back the resulting diagnostics state
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          $d = Get-DnsServerDiagnostics
+          Write-Output (($d | Format-List | Out-String).Trim())
+      register: dns_diag
+      changed_when: false
+      when: dns_debug_logging | bool
+
+    - name: Report diagnostics state
+      ansible.builtin.debug:
+        msg: "{{ (dns_diag.output[0] | default('')) .split('\n') }}"
+      when: dns_debug_logging | bool
+
+    # Guarantee there is something to log. An idle DNS server writes nothing,
+    # and "no traffic" would be indistinguishable from "logging misconfigured"
+    # -- the same trap the SO mirror check fell into before it generated its
+    # own ICMP. Query THIS server specifically so the record must land here.
+    - name: Generate DNS queries against this server so the log has content
+      ansible.windows.win_powershell:
+        script: |
+          $Ansible.Changed = $false
+          $me = '{{ hostvars[inventory_hostname].network_interfaces
+                    | rejectattr("ipv4.address", "match", "10\.255\.(24[0-9]|25[0-5])\.")
+                    | map(attribute="ipv4.address") | first }}'
+          foreach ($n in @('{{ domain_name }}', 'www.voltgrid.com', 'pp-file.{{ domain_name }}')) {
+            try { Resolve-DnsName -Name $n -Server $me -DnsOnly -ErrorAction SilentlyContinue | Out-Null } catch {}
+          }
+          Write-Output ("queried via " + $me)
+      changed_when: false
+      when: dns_debug_logging | bool
+
+    - name: Wait for the DNS log file to contain records
       ansible.windows.win_stat:
         path: "{{ dns_debug_log_path }}"
       register: dns_log_stat
       until: dns_log_stat.stat.exists and (dns_log_stat.stat.size | default(0)) > 0
-      retries: 12
+      retries: 6
       delay: 10
       when: dns_debug_logging | bool
+      failed_when: false
 
-    - name: Report
-      ansible.builtin.debug:
-        msg: >-
-          {{ inventory_hostname }}: {{ dns_diag.output[0] | default('skipped') }}
-          — log is {{ (dns_log_stat.stat.size | default(0)) }} bytes.
-      when: dns_debug_logging | bool
+    - name: Fail with the diagnostics state if the log is still empty
+      ansible.builtin.fail:
+        msg: |
+          {{ inventory_hostname }}: {{ dns_debug_log_path }} exists but is
+          {{ dns_log_stat.stat.size | default('absent') }} bytes after queries were
+          sent directly to this server, so it is not a traffic problem.
+
+          Diagnostics state as read back above. Check in particular that
+          EnableLoggingToFile is True and that at least one entry in each group
+          is True: direction (Send/Receive), transport (Udp/Tcp), contents
+          (Queries/QuestionTransactions/Update/Notifications).
+
+          If every flag reads True and the file is still empty, the DNS service
+          is holding a stale handle from before logging was enabled -- restart
+          it on this host and re-run:
+            Restart-Service DNS
+      when:
+        - dns_debug_logging | bool
+        - (dns_log_stat.stat.size | default(0)) == 0
 
 # =============================================================================
 # Management plane — stop the DNS server PUBLISHING its own mgmt address
