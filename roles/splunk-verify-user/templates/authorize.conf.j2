@@ -1,0 +1,20 @@
+### Managed by Ansible — roles/splunk-verify-user. Do not edit on the host.
+#
+# Least-privilege role for verify_deployment.sh. Inherits `user` (search, plus
+# read on globally-shared knowledge objects such as the CIM data models), adds
+# only the REST reads needed to assert which add-ons are installed, and grants
+# no write, no delete, no admin.
+#
+# srchIndexesAllowed = * is deliberate: the verifier has to see every index the
+# range writes to, or a missing index would read as a passing check.
+
+[role_{{ splunk_verify_role }}]
+importRoles = user
+srchIndexesAllowed = *
+srchIndexesDefault = *
+srchJobsQuota = 5
+rtSrchJobsQuota = 0
+srchDiskQuota = 100
+{% for cap in splunk_verify_capabilities %}
+{{ cap }} = enabled
+{% endfor %}

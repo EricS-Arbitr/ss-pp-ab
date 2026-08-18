@@ -1,0 +1,127 @@
+---
+# =========================================================================
+# splunk-verify-user — least-privilege Splunk account for verify_deployment.sh
+# =========================================================================
+# Runs after splunk-es so the CIM data models exist before the smoke test at
+# the bottom queries one. See defaults/main.yml for why this exists.
+# =========================================================================
+
+- name: Create the verification app directories
+  ansible.builtin.file:
+    path: "{{ splunk_verify_app_dir }}/{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - local
+    - bin
+
+# A dedicated app rather than system/local so the whole grant is one
+# removable directory and never merges with Splunk's shipped authorize.conf.
+- name: Define the scoped verification role
+  ansible.builtin.template:
+    src: authorize.conf.j2
+    dest: "{{ splunk_verify_app_dir }}/local/authorize.conf"
+    mode: '0644'
+  register: verify_authorize
+
+# authorize.conf is read at startup; the role must exist before a user can be
+# assigned to it, so this restart cannot be deferred to the end of the play.
+- name: Restart Splunk so the new role is loaded
+  ansible.builtin.shell: /opt/splunk/bin/splunk restart
+  when: verify_authorize.changed
+  changed_when: true
+
+- name: Wait for the Splunk REST API after the role reload
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:8089/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: verify_api_check
+  retries: 20
+  delay: 15
+  until: verify_api_check.status == 200
+
+- name: Create or update the verification account
+  ansible.builtin.shell: |
+    set -o pipefail
+    if /opt/splunk/bin/splunk list user -auth '{{ splunk_admin }}:{{ splunk_admin_password }}' \
+         | grep -qw '{{ splunk_verify_user }}'; then
+      /opt/splunk/bin/splunk edit user '{{ splunk_verify_user }}' \
+        -password '{{ splunk_verify_password }}' -role '{{ splunk_verify_role }}' \
+        -auth '{{ splunk_admin }}:{{ splunk_admin_password }}' >/dev/null
+      echo UPDATED
+    else
+      /opt/splunk/bin/splunk add user '{{ splunk_verify_user }}' \
+        -password '{{ splunk_verify_password }}' -role '{{ splunk_verify_role }}' \
+        -auth '{{ splunk_admin }}:{{ splunk_admin_password }}' >/dev/null
+      echo CREATED
+    fi
+  args:
+    executable: /bin/bash
+  register: verify_account
+  changed_when: "'CREATED' in verify_account.stdout"
+  no_log: true
+
+# Owned by the ansible SSH user, not root: verify_deployment.sh runs ad-hoc
+# `ansible -m shell` WITHOUT become (see the other checks in section 7), so a
+# root-only file would make every data-quality check fail on a read error and
+# look exactly like a mapping failure.
+- name: Write the credentials file the runner reads
+  ansible.builtin.copy:
+    content: "{{ splunk_verify_user }}:{{ splunk_verify_password }}"
+    dest: "{{ splunk_verify_auth_file }}"
+    owner: "{{ ansible_user }}"
+    mode: '0600'
+  no_log: true
+
+- name: Install the data-quality search runner
+  ansible.builtin.template:
+    src: verify_data.sh.j2
+    dest: "{{ splunk_verify_app_dir }}/bin/verify_data.sh"
+    mode: '0755'
+
+# --------------------------------------------------------------------------
+# Smoke test: prove the ACCOUNT works, not that the data is good.
+#
+# Deliberately does not fail on DM_SRC_EMPTY or DNS_NO_EVENTS -- a freshly
+# built range legitimately has no accelerated summaries and little traffic.
+# What must hold is that every search SHAPE runs and returns a token, which
+# is what proves the capability grant is correct. If a capability name is
+# wrong the deploy fails here, loudly, instead of surfacing days later as an
+# unexplained verification failure.
+# --------------------------------------------------------------------------
+- name: Run each verification check once as the scoped account
+  ansible.builtin.shell: "{{ splunk_verify_app_dir }}/bin/verify_data.sh {{ item.check }}"
+  become: true
+  become_user: "{{ ansible_user }}"
+  loop:
+    - { check: apps,     token: 'SYSMON_ADDONS_' }
+    - { check: dns_src,  token: 'DNS_' }
+    - { check: proc_cim, token: 'PROC_' }
+    - { check: dm_src,   token: 'DM_SRC_' }
+  loop_control:
+    label: "{{ item.check }}"
+  register: verify_smoke
+  changed_when: false
+  failed_when: false
+
+- name: Assert every check shape returned a recognised token
+  ansible.builtin.assert:
+    that:
+      - item.item.token in (item.stdout | default(''))
+    fail_msg: >-
+      verify_data.sh {{ item.item.check }} returned
+      '{{ (item.stdout | default('') ~ ' ' ~ item.stderr | default('')) | trim | truncate(300) }}'
+      instead of a {{ item.item.token }}* token. Either the
+      {{ splunk_verify_role }} role is missing a capability
+      ({{ splunk_verify_capabilities | join(', ') }}), or
+      {{ splunk_verify_user }} cannot see the index or data model the check
+      queries. Fix the grant -- do NOT hand the verifier the admin account.
+    success_msg: "{{ item.item.check }}: {{ (item.stdout | default('')) | trim | truncate(80) }}"
+  loop: "{{ verify_smoke.results }}"
+  loop_control:
+    label: "{{ item.item.check }}"

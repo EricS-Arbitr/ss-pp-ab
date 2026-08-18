@@ -1,0 +1,92 @@
+#!/bin/bash
+### Managed by Ansible — roles/splunk-verify-user. Do not edit on the host.
+#
+# Runs the Splunk data-quality assertions and prints a single unambiguous
+# token per check. verify_deployment.sh greps for the OK token.
+#
+# The searches live HERE rather than inline in verify_deployment.sh for two
+# reasons: SPL is full of double quotes that do not survive being passed
+# through `ansible -m shell -a "..."`, and keeping them on the host means the
+# credential is read from a 0600 file instead of appearing on the ansible
+# command line or in the verifier's -v output.
+#
+# Usage: verify_data.sh {apps|dns_src|proc_cim|dm_src|all}
+
+set -u
+
+SPLUNK=/opt/splunk/bin/splunk
+AUTH_FILE="{{ splunk_verify_auth_file }}"
+WINDOW="{{ splunk_verify_window }}"
+
+if [ ! -r "$AUTH_FILE" ]; then
+  echo "VERIFY_AUTH_FILE_MISSING"
+  exit 1
+fi
+# NOTE: -auth places the credential in pp-splunk's own process table for the
+# life of the search. Acceptable here -- it is a search-only account on the
+# host where splunkd already runs -- but it is why this account is scoped
+# rather than admin.
+AUTH="$(cat "$AUTH_FILE")"
+
+run() {
+  "$SPLUNK" search "$1" -auth "$AUTH" \
+    -earliest_time "$WINDOW" -latest_time now -maxout 0 -preview false 2>&1
+}
+
+# --- exactly one Sysmon add-on may be installed --------------------------
+# Two add-ons map the same CIM fields under different attribute names, so
+# Splunk executes both and the conditional EVALs null out the unconditional
+# aliases. See roles/splunk-es/defaults/main.yml.
+check_apps() {
+  run '| rest /services/apps/local
+       | search title=*sysmon*
+       | stats count AS n, values(title) AS apps
+       | eval r=if(n==1, "SYSMON_ADDONS_OK",
+                   "SYSMON_ADDONS_BAD_" . n . "_" . mvjoin(apps, "+"))
+       | fields r'
+}
+
+# --- Sysmon DnsQuery events must carry src -------------------------------
+# EVAL-src in Splunk_TA_microsoft_sysmon covers EventCode 22 explicitly.
+# ES's DNS panels group by src, so an unmapped src blanks every panel while
+# the event counts still populate -- which is exactly how this was missed.
+check_dns_src() {
+  run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=22
+       | stats count AS e, count(src) AS s
+       | eval r=case(e==0, "DNS_NO_EVENTS",
+                     s==e, "DNS_SRC_OK",
+                     true(), "DNS_SRC_FAIL_" . s . "_of_" . e)
+       | fields r'
+}
+
+# --- ProcessCreate must carry the four fields the two add-ons collided on -
+check_proc_cim() {
+  run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1
+       | stats count AS e, count(process) AS p, count(parent_process_path) AS pp,
+               count(parent_process_guid) AS pg, count(parent_process_id) AS pi
+       | eval r=case(e==0, "PROC_NO_EVENTS",
+                     (p==e AND pp==e AND pg==e AND pi==e), "PROC_CIM_OK",
+                     true(), "PROC_CIM_FAIL_p" . p . "_pp" . pp . "_pg" . pg
+                             . "_pi" . pi . "_of" . e)
+       | fields r'
+}
+
+# --- the accelerated data model must actually contain src ----------------
+# Search-time config does NOT retroactively repair summaries built while the
+# mapping was broken, so this can fail while check_dns_src passes. That means
+# the acceleration needs a rebuild, not that the add-ons are wrong.
+check_dm_src() {
+  run '| tstats count from datamodel=Network_Resolution by Network_Resolution.src
+       | stats count AS rows
+       | eval r=if(rows>0, "DM_SRC_OK", "DM_SRC_EMPTY")
+       | fields r'
+}
+
+case "${1:-all}" in
+  apps)     check_apps ;;
+  dns_src)  check_dns_src ;;
+  proc_cim) check_proc_cim ;;
+  dm_src)   check_dm_src ;;
+  all)      check_apps; check_dns_src; check_proc_cim; check_dm_src ;;
+  *)        echo "usage: $0 {apps|dns_src|proc_cim|dm_src|all}"; exit 2 ;;
+esac

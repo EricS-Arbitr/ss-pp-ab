@@ -417,12 +417,18 @@ check_pf_shell pp-syslog \
   'OK_ESTAB' \
   "pp-syslog UF has ESTABLISHED connection to indexer :9997"
 
-# Total forwarder count -- Linux UFs (~5) + Windows UFs (~40+) once
-# the rollout is done. Floor 30 confirms the Windows batch landed.
+# Total forwarder count, derived from the inventory rather than a constant.
+# The previous hardcoded floor of 30 was set before win-hunt-2..6 joined
+# [splunk-forwarder] on 2026-08-17: it would have kept passing while five new
+# hosts silently failed to forward, because 30 was already satisfied without
+# them. A stale threshold is a check that stops checking. 10% margin absorbs
+# UFs mid-reconnect.
+uf_expected=$(n_hosts splunk-forwarder)
+uf_floor=$(( uf_expected * 9 / 10 ))
 check_pf_shell pp-splunk \
-  'c=$(ss -ant | grep ":9997 " | grep -c ESTAB); [ "$c" -ge 30 ] && echo "OK_UFS_$c" || echo "LOW_UFS_$c"' \
+  "c=\$(ss -ant | grep ':9997 ' | grep -c ESTAB); [ \"\$c\" -ge $uf_floor ] && echo \"OK_UFS_\$c\" || echo \"LOW_UFS_\$c\"" \
   'OK_UFS_' \
-  "pp-splunk: >= 30 UFs ESTABLISHED on :9997 (Linux + Windows rollout done)"
+  "pp-splunk: >= $uf_floor of $uf_expected inventoried UFs ESTABLISHED on :9997"
 
 # Windows UF service spot check on one workstation + one DC.
 check_ps pp-bp-wkstn-1 \
@@ -581,6 +587,112 @@ check_pf_shell is-inet \
   'docker exec email getent passwd bob.burke 2>&1 | head -1' \
   'bob.burke' \
   "is-inet: bob.burke unix user exists in email container (mailbox provisioned)"
+
+# =========================================================================
+# 10. SOC tier — Splunk data quality
+# =========================================================================
+# Section 7 proves splunkd is up, ports are listening and forwarders hold
+# sockets. It does NOT prove events parse. Every check in section 7 passed
+# for the entire period two Sysmon add-ons were nulling each other's CIM
+# fields -- ES's DNS panels were blank while event counts climbed, and
+# nothing here noticed. Sockets are not evidence of normalisation.
+#
+# These checks assert the outcome: that searches return correctly mapped
+# fields. They run as svc_verify (roles/splunk-verify-user), a search-only
+# account, so the verifier never holds the admin credential. The SPL lives
+# on pp-splunk in the runner rather than inline here -- it is full of double
+# quotes that do not survive `ansible -m shell -a "..."`.
+# =========================================================================
+section "10. SOC tier — Splunk data quality"
+
+VERIFY_DATA=/opt/splunk/etc/apps/arbitr_verify/bin/verify_data.sh
+
+if ! A pp-splunk -m ansible.builtin.shell \
+     -a "test -x $VERIFY_DATA && echo RUNNER_OK" --one-line | grep -q RUNNER_OK; then
+  fail "pp-splunk: data-quality runner missing at $VERIFY_DATA"
+  note "Deploy predates roles/splunk-verify-user — re-run with --tags splunk-verify-user"
+else
+
+  check_pf_shell pp-splunk \
+    "$VERIFY_DATA apps" \
+    'SYSMON_ADDONS_OK' \
+    "pp-splunk: exactly one Sysmon add-on installed (two collide and null CIM fields)"
+
+  # DNS_NO_EVENTS also fails this, deliberately: a SIEM with no DNS telemetry
+  # over 7 days is a finding, not a pass. Read the token to tell them apart.
+  check_pf_shell pp-splunk \
+    "$VERIFY_DATA dns_src" \
+    'DNS_SRC_OK' \
+    "pp-splunk: every Sysmon DnsQuery event has src mapped (ES DNS panels group by it)"
+
+  check_pf_shell pp-splunk \
+    "$VERIFY_DATA proc_cim" \
+    'PROC_CIM_OK' \
+    "pp-splunk: ProcessCreate carries process + parent_process_* (the collided fields)"
+
+  # Can fail while dns_src passes: search-time config does not retroactively
+  # repair summaries built while the mapping was broken. That means rebuild
+  # the acceleration, not that the add-ons are wrong.
+  check_pf_shell pp-splunk \
+    "$VERIFY_DATA dm_src" \
+    'DM_SRC_OK' \
+    "pp-splunk: Network_Resolution acceleration contains src (else rebuild acceleration)"
+
+fi
+
+# =========================================================================
+# 11. SOC hunt workstations
+# =========================================================================
+# win-hunt-1..6. Added to [members], [voltgrid] and [splunk-forwarder] on
+# 2026-08-17; nothing verified them until now. An analyst box that is not
+# domain-joined, or not forwarding, degrades the SOC silently -- the range
+# still looks healthy because every other tier is fine.
+# =========================================================================
+section "11. SOC hunt workstations"
+
+hunt_total=$(n_hosts hunt)
+if [ "$hunt_total" -eq 0 ]; then
+  note "hunt: 0 hosts in inventory (skipping)"
+else
+  hunt_joined=$(count_ps_predicate hunt \
+    '(Get-WmiObject Win32_ComputerSystem).PartOfDomain' \
+    '\(stdout\)[[:space:]]+True')
+  if [ "$hunt_joined" -eq "$hunt_total" ]; then
+    pass "hunt: $hunt_joined/$hunt_total domain-joined to voltgrid.com"
+  else
+    fail "hunt: $hunt_joined/$hunt_total domain-joined to voltgrid.com"
+  fi
+
+  hunt_uf=$(count_ps_predicate hunt \
+    '(Get-Service SplunkForwarder -ErrorAction SilentlyContinue).Status' \
+    '\(stdout\)[[:space:]]+Running')
+  if [ "$hunt_uf" -eq "$hunt_total" ]; then
+    pass "hunt: $hunt_uf/$hunt_total running SplunkForwarder"
+  else
+    fail "hunt: $hunt_uf/$hunt_total running SplunkForwarder"
+  fi
+
+  hunt_sysmon=$(count_ps_predicate hunt \
+    '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
+    '\(stdout\)[[:space:]]+Running')
+  if [ "$hunt_sysmon" -eq "$hunt_total" ]; then
+    pass "hunt: $hunt_sysmon/$hunt_total running Sysmon64"
+  else
+    fail "hunt: $hunt_sysmon/$hunt_total running Sysmon64"
+  fi
+
+  # PowerShell single quotes: the outer bash string must be double-quoted to
+  # carry the registry path's spaces, so the inner quoting cannot also be
+  # double or `ansible -a "..."` would break on it.
+  hunt_autologon=$(count_ps_predicate hunt \
+    "(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon').AutoAdminLogon" \
+    '\(stdout\)[[:space:]]+1')
+  if [ "$hunt_autologon" -eq "$hunt_total" ]; then
+    pass "hunt: $hunt_autologon/$hunt_total configured for autologin"
+  else
+    fail "hunt: $hunt_autologon/$hunt_total configured for autologin"
+  fi
+fi
 
 # =========================================================================
 # Summary

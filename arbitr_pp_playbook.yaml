@@ -660,9 +660,13 @@
   roles:
     - splunk
     - splunk-es
+    # Must follow splunk-es: the smoke test at the end of this role queries a
+    # CIM data model, which does not exist until ES is installed.
+    - splunk-verify-user
   tags:
     - splunk
     - splunk-es
+    - splunk-verify-user
 
 - name: global_dns
   hosts: global_dns

@@ -1,0 +1,45 @@
+---
+# =========================================================================
+# splunk-verify-user role defaults
+# =========================================================================
+# Creates a scoped, search-only Splunk account that verify_deployment.sh
+# uses to assert DATA QUALITY rather than transport.
+#
+# Why this role exists: section 7 of verify_deployment.sh checks that splunkd
+# is active, that :9997/:8000/:8089 are listening, and that forwarders hold
+# ESTABLISHED sockets. Every one of those passed for the entire period two
+# Sysmon add-ons were nulling each other's CIM fields (see
+# roles/splunk-es/defaults/main.yml). Sockets are not evidence that events
+# parse. Asserting that requires running searches, and running searches
+# requires credentials -- hence a dedicated least-privilege account instead
+# of handing the verifier the admin password.
+# =========================================================================
+
+splunk_verify_user: svc_verify
+splunk_verify_role: arbitr_verify
+
+# Self-contained app so the role definition is removable in one directory and
+# never collides with Splunk's shipped authorize.conf.
+splunk_verify_app: arbitr_verify
+splunk_verify_app_dir: "/opt/splunk/etc/apps/{{ splunk_verify_app }}"
+
+# Read by the runner script on pp-splunk. Mode 0600, root-owned: the point of
+# the file is to keep the credential off the ansible command line, out of
+# verify_deployment.sh, and out of the verifier's own -v output.
+splunk_verify_auth_file: "{{ splunk_verify_app_dir }}/local/.auth"
+
+# Capabilities beyond the built-in `user` role. Kept explicit so the grant is
+# reviewable:
+#   rest_apps_view       -> `| rest /services/apps/local` (which add-ons are installed)
+#   rest_properties_get  -> reading configuration via REST
+# The role ASSERTS each search shape actually runs after creation, so a wrong
+# or renamed capability fails the deploy here rather than surfacing later as a
+# mysterious verification failure.
+splunk_verify_capabilities:
+  - rest_apps_view
+  - rest_properties_get
+
+# How far back the data-quality searches look. Sysmon DNS volume is low while
+# emulated users are off, so a 24h window can legitimately find zero events;
+# 7d keeps "no data" from masquerading as "broken mapping".
+splunk_verify_window: "-7d"

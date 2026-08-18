@@ -21,6 +21,14 @@ splunk_password: "simspace1"
 splunk_server_ip: "172.16.9.20"          # pp-splunk's PP-Security IP
 splunk_forwarder_port: "9997"
 
+# Scoped, search-only account used by verify_deployment.sh section 10 so the
+# verifier never needs the admin credential. Role definition and capability
+# grant live in roles/splunk-verify-user/. Kept here in plaintext to match the
+# existing convention above -- this repo has no vault; moving ALL Splunk
+# credentials behind one is a separate decision, not a side effect of adding
+# a verification account.
+splunk_verify_password: "simspace1"
+
 # Central syslog collector. All Linux/VyOS/pfSense hosts forward to this IP.
 # pp-syslog runs rsyslog listening on UDP+TCP 514, writes per-host files at
 # /var/log/remote/<hostname>/syslog.log, and the Splunk UF on pp-syslog
