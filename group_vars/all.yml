@@ -29,6 +29,35 @@ splunk_forwarder_port: "9997"
 # a verification account.
 splunk_verify_password: "simspace1"
 
+# --- Windows DNS Server query logging (pp-dc01/02/03) ---------------------
+# Splunk_TA_windows ships NO input for the modern
+# Microsoft-Windows-DNS-Server/Analytical ETW channel. Its only per-query
+# mechanism is the legacy file-based debug log, read with MonitorNoHandle
+# (the input type for files a service holds open exclusively):
+#
+#   [MonitorNoHandle://$WINDIR\System32\Dns\dns.log]
+#   sourcetype = MSAD:NT6:DNS
+#
+# WHY BOTHER, given Sysmon already logs DNS: Sysmon's EventCode 22 records the
+# querying process but NOT which server answered, and carries no message_type
+# or record_type. Those are properties of the transaction the server sees and
+# the client cannot. Measured 2026-08-18: DNS.message_type was "unknown" for
+# 100% of 4,461 events, which blanks every ES DNS panel that filters on it.
+# The two sources are complementary -- Sysmon says which process asked, the DC
+# says what was asked and answered.
+#
+# COST: DNS debug logging is not free. It writes every query to disk on a
+# domain controller. Bounded below by size cap + rollover; check the file size
+# after a day of real traffic before enabling emulated users.
+dns_debug_logging: true
+
+# UNIT AMBIGUITY: despite the name, Set-DnsServerDiagnostics -MaxMBFileSize
+# takes a value in BYTES in most documented examples. 500000000 is ~477 MB if
+# bytes. If this range ever shows a dns.log far larger or smaller than that,
+# the parameter was interpreted the other way -- verify before trusting the cap.
+dns_debug_log_max_bytes: 500000000
+dns_debug_log_path: 'C:\Windows\System32\dns\dns.log'
+
 # Central syslog collector. All Linux/VyOS/pfSense hosts forward to this IP.
 # pp-syslog runs rsyslog listening on UDP+TCP 514, writes per-host files at
 # /var/log/remote/<hostname>/syslog.log, and the Splunk UF on pp-syslog

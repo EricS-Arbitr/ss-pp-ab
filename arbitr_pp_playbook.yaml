@@ -882,6 +882,94 @@
 # does not have, and a wrong mnemonic would break DC locator. Purge what is
 # demonstrably wrong, then assert it stayed gone.
 # =============================================================================
+# DNS Server query logging — the half Sysmon cannot see
+# =============================================================================
+# Sysmon EventCode 22 records DNS queries WITH the querying process, which is
+# its unique value. What it cannot record is which server answered, the message
+# type, or the record type -- those are properties of the transaction as the
+# SERVER sees it. Measured 2026-08-18 on this range: DNS.message_type was
+# "unknown" for 100% of events in Network_Resolution, and DNS.dest was empty,
+# because no add-on can supply from Sysmon what Sysmon does not capture.
+#
+# WHY THE LEGACY DEBUG LOG AND NOT THE ANALYTICAL CHANNEL. The modern
+# Microsoft-Windows-DNS-Server/Analytical ETW channel is the better source, but
+# Splunk_TA_windows 9.0.1 ships NO input for it -- verified by unpacking the
+# add-on. Its only per-query mechanism is
+# [MonitorNoHandle://$WINDIR\System32\Dns\dns.log], so that is what the
+# forwarder template now enables for DCs, and this play produces the file it
+# reads. Using a source the installed add-on already parses beats introducing
+# one nothing understands.
+- name: DNS Server query logging on the domain controllers
+  hosts: domain_controllers
+  gather_facts: false
+  tags:
+    - dns_logging
+    - dns
+  tasks:
+    - name: Enable DNS Server debug logging to file
+      ansible.windows.win_powershell:
+        script: |
+          $before = Get-DnsServerDiagnostics
+          $want = @{
+            Queries              = $true   # the query itself
+            Answers              = $true   # and what came back -- needed for record_type
+            QuestionTransactions = $true
+            ReceivePackets       = $true
+            SendPackets          = $true
+            UdpPackets           = $true
+            TcpPackets           = $true
+            EnableLoggingToFile  = $true
+          }
+          $needsChange = $false
+          foreach ($k in $want.Keys) {
+            if ($before.$k -ne $want[$k]) { $needsChange = $true }
+          }
+          if ($before.LogFilePath -ne '{{ dns_debug_log_path }}') { $needsChange = $true }
+
+          if ($needsChange) {
+            Set-DnsServerDiagnostics `
+              -Queries $true -Answers $true -QuestionTransactions $true `
+              -ReceivePackets $true -SendPackets $true `
+              -UdpPackets $true -TcpPackets $true `
+              -EnableLoggingToFile $true `
+              -EnableLogFileRollover $true `
+              -LogFilePath '{{ dns_debug_log_path }}' `
+              -MaxMBFileSize {{ dns_debug_log_max_bytes }} `
+              -ErrorAction Stop
+            $Ansible.Changed = $true
+          } else {
+            $Ansible.Changed = $false
+          }
+          $after = Get-DnsServerDiagnostics
+          Write-Output ("LoggingToFile=" + $after.EnableLoggingToFile +
+                        " Queries=" + $after.Queries +
+                        " Answers=" + $after.Answers +
+                        " Path=" + $after.LogFilePath)
+      register: dns_diag
+      when: dns_debug_logging | bool
+
+    # Configuration accepted is not the same as a file appearing. DNS writes
+    # the log lazily, so allow a few seconds of real query traffic before
+    # asserting -- and assert the FILE, because that is what the forwarder
+    # reads. A silently-absent file would send the forwarder to monitor a path
+    # that never exists, which reports no error anywhere.
+    - name: Wait for the DNS log file to actually be written
+      ansible.windows.win_stat:
+        path: "{{ dns_debug_log_path }}"
+      register: dns_log_stat
+      until: dns_log_stat.stat.exists and (dns_log_stat.stat.size | default(0)) > 0
+      retries: 12
+      delay: 10
+      when: dns_debug_logging | bool
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ dns_diag.output[0] | default('skipped') }}
+          — log is {{ (dns_log_stat.stat.size | default(0)) }} bytes.
+      when: dns_debug_logging | bool
+
+# =============================================================================
 # Management plane — stop the DNS server PUBLISHING its own mgmt address
 # =============================================================================
 # MEASURED 2026-08-18. The purge play below removed all three 10.255.240.x A
