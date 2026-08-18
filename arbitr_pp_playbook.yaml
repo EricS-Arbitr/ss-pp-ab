@@ -658,15 +658,20 @@
   gather_facts: true
   become: true
   roles:
-    - splunk
-    - splunk-es
+    - role: splunk
+      tags: ['splunk_core']
+    - role: splunk-es
+      tags: ['splunk-es']
     # Must follow splunk-es: the smoke test at the end of this role queries a
     # CIM data model, which does not exist until ES is installed.
-    - splunk-verify-user
+    - role: splunk-verify-user
+      tags: ['splunk-verify-user']
+  # `--tags splunk` still runs all three. The per-role tags above make each one
+  # runnable alone, which matters on an already-deployed range: play-level tags
+  # apply to every role in the play, so without these, applying just the
+  # verification account would drag in splunk-es and re-run essinstall.
   tags:
     - splunk
-    - splunk-es
-    - splunk-verify-user
 
 - name: global_dns
   hosts: global_dns
