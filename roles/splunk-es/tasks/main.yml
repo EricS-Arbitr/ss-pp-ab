@@ -29,24 +29,108 @@
   delegate_to: localhost
   register: splunk_apps
 
+# The installers share comes from the controller base image, not from this
+# repo, so this glob is the ONLY thing deciding which add-ons a range runs.
+# splunk_apps_exclude (roles/splunk-es/defaults/main.yml) filters it; see that
+# file for why TA-microsoft-sysmon must not be installed alongside
+# Splunk_TA_microsoft_sysmon.
+- name: Select Splunk apps to install, excluding conflicting add-ons
+  ansible.builtin.set_fact:
+    splunk_apps_selected: >-
+      {{ splunk_apps.files
+         | rejectattr('path', 'match', splunk_apps_exclude_re)
+         | list }}
+  vars:
+    # regex_escape so dots in filenames are literal, not wildcards.
+    splunk_apps_exclude_re: >-
+      ^.*/({{ splunk_apps_exclude | map('regex_escape') | join('|') }})$
+
+- name: Report which Splunk apps were excluded
+  ansible.builtin.debug:
+    msg: >-
+      Installing {{ splunk_apps_selected | length }} of
+      {{ splunk_apps.files | length }} app tarballs. Excluded:
+      {{ (splunk_apps.files | map(attribute='path') | map('basename') | list)
+         | difference(splunk_apps_selected | map(attribute='path') | map('basename') | list)
+         | join(', ') | default('none', true) }}
+
+# A tarball named in splunk_apps_exclude that is not present in the share is a
+# silent no-op, and the next person would never know the filter had stopped
+# matching. Fail loudly instead -- the filenames encode versions and WILL drift.
+- name: Every excluded tarball must actually exist in the installers share
+  ansible.builtin.assert:
+    that:
+      - item in (splunk_apps.files | map(attribute='path') | map('basename') | list)
+    fail_msg: >-
+      splunk_apps_exclude names '{{ item }}' but no such tarball exists in
+      {{ ansible_installers }}/splunk/apps/. The share has been updated and the
+      exclusion no longer matches -- re-check which Sysmon add-ons are present
+      before deploying, or the conflicting one will be installed again.
+  loop: "{{ splunk_apps_exclude }}"
+
 - name: Copy Splunk Apps to Staging Directory
   ansible.builtin.copy:
     src: "{{ item.path }}"
     dest: "{{ staging_dir_linux }}/splunk/apps/"
     mode: '0644'
-  with_items: "{{ splunk_apps.files }}"
-  when: splunk_apps.matched > 0
+  with_items: "{{ splunk_apps_selected }}"
+  when: splunk_apps_selected | length > 0
 
 - name: Install Splunk Apps
   ansible.builtin.shell: >
     /opt/splunk/bin/splunk install app {{ staging_dir_linux }}/splunk/apps/{{ item.path | basename }}
     -auth {{ splunk_admin }}:{{ splunk_admin_password }} -update true
-  with_items: "{{ splunk_apps.files }}"
+  with_items: "{{ splunk_apps_selected }}"
   register: install_apps_result
   retries: 6
   delay: 20
   until: install_apps_result.rc == 0
   changed_when: install_apps_result.rc == 0
+
+# Excluding the tarball only helps a FRESH range. A range deployed before this
+# fix already has the conflicting app on disk, and re-running the play would
+# otherwise leave it there.
+- name: Read the app list Splunk actually has installed
+  ansible.builtin.shell: >
+    set -o pipefail && /opt/splunk/bin/splunk display app
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }} | awk '{print $1}'
+  args:
+    executable: /bin/bash
+  register: installed_apps
+  changed_when: false
+
+- name: Remove conflicting Splunk apps left over from an earlier deploy
+  ansible.builtin.shell: >
+    /opt/splunk/bin/splunk remove app {{ item }}
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
+  loop: "{{ splunk_apps_forbidden }}"
+  when: item in installed_apps.stdout_lines
+  register: remove_conflicting
+  changed_when: remove_conflicting.rc == 0
+  notify: Restart Splunk Service
+
+- name: Re-read the app list after any removal
+  ansible.builtin.shell: >
+    set -o pipefail && /opt/splunk/bin/splunk display app
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }} | awk '{print $1}'
+  args:
+    executable: /bin/bash
+  register: installed_apps_after
+  changed_when: false
+
+# Assert the OUTCOME -- that the app set is right -- not that the install
+# command ran. "splunk install app returned 0" was true throughout the period
+# when two Sysmon add-ons were fighting over the same CIM fields.
+- name: Assert no conflicting Splunk app is installed
+  ansible.builtin.assert:
+    that:
+      - splunk_apps_forbidden | intersect(installed_apps_after.stdout_lines) | length == 0
+    fail_msg: >-
+      Conflicting Splunk app(s) still installed:
+      {{ splunk_apps_forbidden | intersect(installed_apps_after.stdout_lines) | join(', ') }}.
+      These duplicate the CIM mappings in Splunk_TA_microsoft_sysmon and will
+      null out fields for the event codes their case() statements do not cover.
+    success_msg: "App set verified: no conflicting Sysmon add-ons installed."
 
 - name: Copy Enterprise Security App
   ansible.builtin.copy:

@@ -1,0 +1,44 @@
+---
+# =========================================================================
+# splunk-es role defaults
+# =========================================================================
+# The role installs every *.tg* it finds in {{ ansible_installers }}/splunk/apps/.
+# That directory ships with the controller base image, NOT with this repo, so
+# the range's entire Splunk content layer was previously whatever happened to
+# be sitting in it. These two lists put that decision under version control.
+# =========================================================================
+
+# Tarballs in the installers share that must NOT be installed.
+#
+# WARNING: the tarball names are inverted relative to the app names. Match on
+# the VERSION, not on the filename:
+#
+#   splunk-add-on-for-sysmon_402.tgz            -> Splunk_TA_microsoft_sysmon 4.0.2  (Splunk, KEEP)
+#   splunk-add-on-for-microsoft-sysmon_1062.tgz -> TA-microsoft-sysmon       10.6.2  (community, EXCLUDE)
+#
+# Both add-ons map Sysmon to CIM, and installing both does not produce a clean
+# override -- they define the SAME target fields under DIFFERENT attribute
+# names, so Splunk merges both and executes both:
+#
+#   TA-microsoft-sysmon        FIELDALIAS-app = Image AS app
+#   Splunk_TA_microsoft_sysmon EVAL-app       = case( EventCode="3", Image )
+#
+# Field aliases resolve before calculated fields, so the unconditional alias
+# sets the field and the conditional EVAL then overwrites it -- with null,
+# whenever the case() has no matching branch. The result is CIM fields that
+# populate for some event codes and silently blank for others (observed
+# 2026-08-18: Sysmon EventCode 22 produced query and answer correctly while
+# src stayed empty, despite EVAL-src explicitly covering EventCode 22).
+#
+# Eight target fields collide this way: app, process, file_path, dest_host,
+# src_host, parent_process_id, parent_process_guid, parent_process_path.
+splunk_apps_exclude:
+  - splunk-add-on-for-microsoft-sysmon_1062.tgz
+
+# App directory names that must not be present after this role runs.
+# Excluding the tarball stops a FRESH range from installing it; this list also
+# cleans up ranges deployed before the exclusion existed, and is asserted at
+# the end of the role so "the install ran" is never mistaken for "the right
+# apps are installed".
+splunk_apps_forbidden:
+  - TA-microsoft-sysmon
