@@ -91,12 +91,17 @@
 # built range legitimately has no accelerated summaries and little traffic.
 #
 # 2026-08-18: it DOES now fail on VISIBILITY_FAIL. The original version of this
-# task asserted only that each search returned a recognised token, and a
-# severely restricted account returns well-formed tokens perfectly well --
-# svc_verify saw 74 of ~406,000 Sysmon events and PROC_CIM_OK passed on 13 of
+# task asserted only that each search returned a recognised token, and a search
+# returning almost no data returns well-formed tokens perfectly well -- the
+# account appeared to see 85 of 454,659 events and PROC_CIM_OK passed on 13 of
 # them. Asserting the shape of a response is not asserting its content; that
-# was the same transport-vs-outcome error these checks exist to catch, made
-# one layer down inside the checker itself.
+# was the same transport-vs-outcome error these checks exist to catch, made one
+# layer down inside the checker itself.
+#
+# The 85 turned out to be a `splunk search` CLI artefact rather than a grant
+# problem (see authorize.conf.j2), and the runner now uses REST. The gate stays
+# regardless: it is what made the discrepancy visible at all, and it is what
+# will catch the next one whatever its cause.
 # --------------------------------------------------------------------------
 - name: Run each verification check once as the scoped account
   ansible.builtin.shell: "{{ splunk_verify_app_dir }}/bin/verify_data.sh {{ item.check }}"

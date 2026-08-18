@@ -40,9 +40,42 @@ fi
 # where splunkd already runs -- but it is why this account is scoped, not admin.
 AUTH="$(cat "$AUTH_FILE")"
 
+if ! command -v curl >/dev/null 2>&1; then
+  echo "VERIFY_CURL_MISSING"
+  exit 1
+fi
+
+# THE SEARCH IS RUN OVER REST, NOT THROUGH `splunk search`.
+#
+# Measured 2026-08-18, and it invalidated four rounds of diagnosis. The same
+# search, same 7-day window, same index, same source:
+#
+#   admin      via Splunk Web   454,659 events
+#   admin      via `splunk search` CLI      85 events
+#   svc_verify via `splunk search` CLI      85 events
+#
+# Same account through two interfaces gives a 5,000x difference; two accounts
+# through the same interface agree exactly. The CLI is the variable and the
+# grant was never broken -- srchIndexesAllowed, srchFilter and srchTimeWin were
+# all ruled out one at a time while the actual cause sat in how the search was
+# being invoked.
+#
+# The lesson is the method, not the setting: every comparison up to that point
+# varied the account AND the interface at once, so none of them could attribute
+# the difference to either. One controlled comparison settled it immediately.
+#
+# REST also removes the reasons the CLI was awkward here: no shell quoting of
+# SPL, no ~60 lines of "Permission denied" on stderr from a non-root caller,
+# and real HTTP status codes instead of a bare exit code.
 run() {
-  "$SPLUNK" search "$1" -auth "$AUTH" \
-    -earliest_time "$WINDOW" -latest_time now -maxout 0 -preview false 2>/dev/null
+  # Credentials go in via a curl config on stdin, NOT -u, so they never appear
+  # in pp-splunk's process table.
+  printf 'user = "%s"\n' "$AUTH" | curl -sS -k -K - \
+    --url "https://127.0.0.1:8089/services/search/jobs/export" \
+    --data-urlencode "search=$1" \
+    --data-urlencode "earliest_time=$WINDOW" \
+    --data-urlencode "latest_time=now" \
+    --data-urlencode "output_mode=csv" 2>/dev/null
 }
 
 # --- can this account see the data at all --------------------------------

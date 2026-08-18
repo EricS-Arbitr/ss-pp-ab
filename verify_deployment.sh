@@ -474,7 +474,9 @@ check_ps pp-dc01 \
   "pp-dc01: SplunkForwarder service running"
 
 # Sysmon spot check -- proves the sysmon role landed the config +
-# started Sysmon64 service. Sysmon events land in index=windows via UF.
+# started Sysmon64 service. Sysmon events land in index=sysmon via UF --
+# MEASURED 2026-08-18: all 454,659 of them, none in index=windows. The
+# previous comment here said windows and was wrong.
 check_ps pp-bp-wkstn-1 \
   '(Get-Service Sysmon64 -ErrorAction SilentlyContinue).Status' \
   '\(stdout\)[[:space:]]+Running' \

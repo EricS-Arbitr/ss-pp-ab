@@ -8,31 +8,32 @@
 # srchIndexesAllowed = * is deliberate: the verifier has to see every index the
 # range writes to, or a missing index reads as a passing check.
 #
-# 2026-08-18. svc_verify sees ~85 of 454,659 Sysmon events. Ruled out BY
-# MEASUREMENT, not by reasoning -- each of these was a hypothesis I shipped
-# before checking, and each was wrong:
+# 2026-08-18. This role was blamed for four rounds for a problem it never had.
 #
-#   index permissions   `| rest /services/authorization/roles/arbitr_verify`
-#                       shows srchIndexesAllowed = * AND
-#                       imported_srchIndexesAllowed = *. All 454,659 events
-#                       live in ONE index (sysmon), which the account reads.
-#   srchFilter          BOTH srchFilter and imported_srchFilter are EMPTY.
-#                       There is no search filter to widen. The `srchFilter = *`
-#                       briefly added here was removed -- it fixed nothing and
-#                       carrying a workaround for a non-existent problem is the
-#                       same mistake as overlaying config for the sourcetype
-#                       rename.
-#   srchTimeWin         the role inherits -1 (unlimited) from `user`, and the
-#                       account already saw only 74 events BEFORE any value was
-#                       set here. Setting 0 was doubly wrong: it did not help,
-#                       and 0 is MORE restrictive than the -1 it overrode.
-#                       Corrected to -1.
+# svc_verify appeared to see ~85 of 454,659 Sysmon events, and index
+# permissions, srchFilter and srchTimeWin were each hypothesised, shipped and
+# then ruled out by measurement. The actual cause was outside authorize.conf
+# entirely: every svc_verify reading came from `splunk search` on the CLI and
+# every admin reading from Splunk Web. Running the identical search as ADMIN on
+# the CLI also returned 85. Same interface, two accounts, identical result --
+# the grant was correct throughout.
 #
-# What has NOT been controlled for: every svc_verify measurement was taken
-# through `splunk search` on the CLI, and every admin measurement through
-# Splunk Web. That comparison varies the account AND the interface at once, so
-# it cannot attribute the difference to either. Run the identical CLI search as
-# admin before treating this as an authorization problem at all.
+# The values below are therefore explicit declarations, not fixes. They are
+# kept because an authorization grant should state what it allows rather than
+# inherit it silently, but none of them changed the numbers:
+#
+#   search = enabled   granted explicitly rather than assumed from `user`.
+#   srchTimeWin = -1   unlimited. `user` already supplies -1; an earlier
+#                      version set 0 here, which is MORE restrictive than the
+#                      value it overrode.
+#   srchIndexes*  = *  the verifier must see every index the range writes to,
+#                      or a missing index reads as a passing check.
+#   srchDiskQuota      headroom for multi-hundred-thousand-event scans.
+#
+# verify_data.sh now runs its searches over REST for this reason. If this role
+# is ever suspected again, run the controlled comparison FIRST: the same search
+# as two accounts through one interface, then one account through two
+# interfaces.
 
 [role_{{ splunk_verify_role }}]
 importRoles = user
