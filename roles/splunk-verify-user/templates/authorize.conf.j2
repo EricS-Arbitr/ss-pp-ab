@@ -8,35 +8,38 @@
 # srchIndexesAllowed = * is deliberate: the verifier has to see every index the
 # range writes to, or a missing index reads as a passing check.
 #
-# 2026-08-18: svc_verify could see 74 of ~406,000 Sysmon events with this stanza
-# loading correctly (btool confirmed srchIndexesAllowed = * was in the merged
-# role). btool does NOT expand importRoles, so the restriction is coming from
-# something the built-in `user` role contributes. The settings below override
-# the candidates explicitly rather than relying on inheritance to be permissive:
+# 2026-08-18. svc_verify sees ~85 of 454,659 Sysmon events. Ruled out BY
+# MEASUREMENT, not by reasoning -- each of these was a hypothesis I shipped
+# before checking, and each was wrong:
 #
-#   srchTimeWin = 0    an inherited cap silently CLAMPS the time range.
-#                      RULED OUT 2026-08-18: setting it changed 74 events to
-#                      85. Kept because it costs nothing and removes a variable.
-#   search = enabled   granted explicitly rather than assumed from `user`.
-#   srchDiskQuota      100 MB was tight for multi-hundred-thousand-event scans.
-#   srchFilter = *     THE CURRENT HYPOTHESIS. A search filter restricts RAW
-#                      events while `| tstats` bypasses it entirely -- which is
-#                      precisely the asymmetry measured here: tstats reported
-#                      406,052 Sysmon events, a raw search over the same window
-#                      and source reported 85. Splunk unions search filters
-#                      across a role and the roles it imports, so `*` on this
-#                      role should widen whatever `user` contributes.
+#   index permissions   `| rest /services/authorization/roles/arbitr_verify`
+#                       shows srchIndexesAllowed = * AND
+#                       imported_srchIndexesAllowed = *. All 454,659 events
+#                       live in ONE index (sysmon), which the account reads.
+#   srchFilter          BOTH srchFilter and imported_srchFilter are EMPTY.
+#                       There is no search filter to widen. The `srchFilter = *`
+#                       briefly added here was removed -- it fixed nothing and
+#                       carrying a workaround for a non-existent problem is the
+#                       same mistake as overlaying config for the sourcetype
+#                       rename.
+#   srchTimeWin         the role inherits -1 (unlimited) from `user`, and the
+#                       account already saw only 74 events BEFORE any value was
+#                       set here. Setting 0 was doubly wrong: it did not help,
+#                       and 0 is MORE restrictive than the -1 it overrode.
+#                       Corrected to -1.
 #
-# The visibility gate in verify_data.sh is what proves this actually worked;
-# these values are a hypothesis, that check is the measurement.
+# What has NOT been controlled for: every svc_verify measurement was taken
+# through `splunk search` on the CLI, and every admin measurement through
+# Splunk Web. That comparison varies the account AND the interface at once, so
+# it cannot attribute the difference to either. Run the identical CLI search as
+# admin before treating this as an authorization problem at all.
 
 [role_{{ splunk_verify_role }}]
 importRoles = user
 search = enabled
 srchIndexesAllowed = *
 srchIndexesDefault = *
-srchTimeWin = 0
-srchFilter = *
+srchTimeWin = -1
 srchJobsQuota = 5
 rtSrchJobsQuota = 0
 srchDiskQuota = 500
