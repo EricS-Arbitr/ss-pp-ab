@@ -6,15 +6,32 @@
 # no write, no delete, no admin.
 #
 # srchIndexesAllowed = * is deliberate: the verifier has to see every index the
-# range writes to, or a missing index would read as a passing check.
+# range writes to, or a missing index reads as a passing check.
+#
+# 2026-08-18: svc_verify could see 74 of ~406,000 Sysmon events with this stanza
+# loading correctly (btool confirmed srchIndexesAllowed = * was in the merged
+# role). btool does NOT expand importRoles, so the restriction is coming from
+# something the built-in `user` role contributes. The settings below override
+# the candidates explicitly rather than relying on inheritance to be permissive:
+#
+#   srchTimeWin = 0    an inherited cap silently CLAMPS the time range -- a
+#                      -7d search returns a couple of minutes of data and no
+#                      warning. 0 = unlimited.
+#   search = enabled   granted explicitly rather than assumed from `user`.
+#   srchDiskQuota      100 MB was tight for multi-hundred-thousand-event scans.
+#
+# The visibility gate in verify_data.sh is what proves this actually worked;
+# these values are a hypothesis, that check is the measurement.
 
 [role_{{ splunk_verify_role }}]
 importRoles = user
+search = enabled
 srchIndexesAllowed = *
 srchIndexesDefault = *
+srchTimeWin = 0
 srchJobsQuota = 5
 rtSrchJobsQuota = 0
-srchDiskQuota = 100
+srchDiskQuota = 500
 {% for cap in splunk_verify_capabilities %}
 {{ cap }} = enabled
 {% endfor %}

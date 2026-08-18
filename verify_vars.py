@@ -48,8 +48,14 @@ REF_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)")
 TOP_KEY_RE = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:", re.MULTILINE)
 REGISTER_RE = re.compile(r"^\s*register:\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*$", re.MULTILINE)
 LOOP_VAR_RE = re.compile(r"^\s*loop_var:\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*$", re.MULTILINE)
+# Matches both the short form `set_fact:` and the FQCN form
+# `ansible.builtin.set_fact:`. Without the optional prefix, every set_fact
+# written FQCN-style was invisible here and its keys reported as undefined
+# Jinja vars -- which quietly grew the "expected warnings" list and diluted
+# the signal this check exists to give. (Found 2026-08-18 via dc_prod_ip and
+# splunk_apps_selected.)
 SET_FACT_BLOCK_RE = re.compile(
-    r"^\s*set_fact:\s*\n((?:[ \t]+\S.*\n)+)",
+    r"^\s*(?:ansible\.builtin\.)?set_fact:\s*\n((?:[ \t]+\S.*\n)+)",
     re.MULTILINE,
 )
 SF_KEY_RE = re.compile(r"^[ \t]+([a-zA-Z_][a-zA-Z0-9_]*)\s*:")

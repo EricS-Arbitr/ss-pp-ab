@@ -4,13 +4,26 @@
 # Runs the Splunk data-quality assertions and prints a single unambiguous
 # token per check. verify_deployment.sh greps for the OK token.
 #
-# The searches live HERE rather than inline in verify_deployment.sh for two
-# reasons: SPL is full of double quotes that do not survive being passed
-# through `ansible -m shell -a "..."`, and keeping them on the host means the
-# credential is read from a 0600 file instead of appearing on the ansible
-# command line or in the verifier's -v output.
+# The searches live HERE rather than inline in verify_deployment.sh because SPL
+# is full of double quotes that do not survive `ansible -m shell -a "..."`, and
+# because keeping them on the host means the credential is read from a 0600
+# file instead of appearing on the ansible command line or in -v output.
 #
-# Usage: verify_data.sh {apps|dns_src|proc_cim|dm_src|all}
+# 2026-08-18: two defects fixed after this shipped.
+#
+#   1. The Splunk CLI, run as a non-root user, emits ~60 lines of
+#      "Permission denied" trying to write /opt/splunk/var/log. The greps still
+#      matched, but -v output was unreadable. run() now discards stderr.
+#
+#   2. THE IMPORTANT ONE. svc_verify could see 74 of ~406,000 Sysmon events and
+#      every check still returned a clean OK token -- PROC_CIM_OK passed on 13
+#      events, 0.2% of one day. A restricted account returns well-formed tokens
+#      perfectly well, so "the search ran" was being read as "the data is good".
+#      Every token now carries its event count, and check_visibility asserts the
+#      account can see the indexes that hold the data BEFORE any of the
+#      data-quality claims are believable.
+#
+# Usage: verify_data.sh {visibility|indexes|apps|dns_src|proc_cim|dm_src|all}
 
 set -u
 
@@ -23,14 +36,37 @@ if [ ! -r "$AUTH_FILE" ]; then
   exit 1
 fi
 # NOTE: -auth places the credential in pp-splunk's own process table for the
-# life of the search. Acceptable here -- it is a search-only account on the
-# host where splunkd already runs -- but it is why this account is scoped
-# rather than admin.
+# life of the search. Acceptable -- it is a search-only account on the host
+# where splunkd already runs -- but it is why this account is scoped, not admin.
 AUTH="$(cat "$AUTH_FILE")"
 
 run() {
   "$SPLUNK" search "$1" -auth "$AUTH" \
-    -earliest_time "$WINDOW" -latest_time now -maxout 0 -preview false 2>&1
+    -earliest_time "$WINDOW" -latest_time now -maxout 0 -preview false 2>/dev/null
+}
+
+# --- can this account see the data at all --------------------------------
+# Runs FIRST and gates everything else. Asserts each index named in
+# splunk_verify_expected_indexes is visible with more than $FLOOR events.
+# Without this, a grant that silently hides 99.98% of events produces four
+# green ticks.
+check_visibility() {
+  run '| tstats count where index=* by index
+       | search index IN ({{ splunk_verify_expected_indexes | join(", ") }})
+       | eval ok=if(count>{{ splunk_verify_event_floor }}, 1, 0)
+       | stats sum(ok) AS visible, count AS found, sum(count) AS events
+       | eval want={{ splunk_verify_expected_indexes | length }}
+       | eval r=if(visible==want, "VISIBILITY_OK_" . events . "_events_in_" . found . "_indexes",
+                   "VISIBILITY_FAIL_" . visible . "_of_" . want . "_indexes_above_floor_" . events . "_events")
+       | fields r'
+}
+
+# --- raw escape hatch ----------------------------------------------------
+# Dumps every index this account can actually see. Not a pass/fail check --
+# it is what you run when check_visibility fails and you need to know WHAT the
+# account sees rather than that it sees too little.
+check_indexes() {
+  run '| tstats count where index=* by index | sort - count'
 }
 
 # --- exactly one Sysmon add-on may be installed --------------------------
@@ -47,14 +83,14 @@ check_apps() {
 }
 
 # --- Sysmon DnsQuery events must carry src -------------------------------
-# EVAL-src in Splunk_TA_microsoft_sysmon covers EventCode 22 explicitly.
-# ES's DNS panels group by src, so an unmapped src blanks every panel while
-# the event counts still populate -- which is exactly how this was missed.
+# EVAL-src in Splunk_TA_microsoft_sysmon covers EventCode 22 explicitly. ES's
+# DNS panels group by src, so an unmapped src blanks every panel while event
+# counts still populate -- which is how this was originally missed.
 check_dns_src() {
   run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=22
        | stats count AS e, count(src) AS s
        | eval r=case(e==0, "DNS_NO_EVENTS",
-                     s==e, "DNS_SRC_OK",
+                     s==e, "DNS_SRC_OK_" . e . "_events",
                      true(), "DNS_SRC_FAIL_" . s . "_of_" . e)
        | fields r'
 }
@@ -65,7 +101,7 @@ check_proc_cim() {
        | stats count AS e, count(process) AS p, count(parent_process_path) AS pp,
                count(parent_process_guid) AS pg, count(parent_process_id) AS pi
        | eval r=case(e==0, "PROC_NO_EVENTS",
-                     (p==e AND pp==e AND pg==e AND pi==e), "PROC_CIM_OK",
+                     (p==e AND pp==e AND pg==e AND pi==e), "PROC_CIM_OK_" . e . "_events",
                      true(), "PROC_CIM_FAIL_p" . p . "_pp" . pp . "_pg" . pg
                              . "_pi" . pi . "_of" . e)
        | fields r'
@@ -77,16 +113,18 @@ check_proc_cim() {
 # the acceleration needs a rebuild, not that the add-ons are wrong.
 check_dm_src() {
   run '| tstats count from datamodel=Network_Resolution by Network_Resolution.src
-       | stats count AS rows
-       | eval r=if(rows>0, "DM_SRC_OK", "DM_SRC_EMPTY")
+       | stats count AS rows, sum(count) AS events
+       | eval r=if(rows>0, "DM_SRC_OK_" . rows . "_sources", "DM_SRC_EMPTY")
        | fields r'
 }
 
 case "${1:-all}" in
-  apps)     check_apps ;;
-  dns_src)  check_dns_src ;;
-  proc_cim) check_proc_cim ;;
-  dm_src)   check_dm_src ;;
-  all)      check_apps; check_dns_src; check_proc_cim; check_dm_src ;;
-  *)        echo "usage: $0 {apps|dns_src|proc_cim|dm_src|all}"; exit 2 ;;
+  visibility) check_visibility ;;
+  indexes)    check_indexes ;;
+  apps)       check_apps ;;
+  dns_src)    check_dns_src ;;
+  proc_cim)   check_proc_cim ;;
+  dm_src)     check_dm_src ;;
+  all)        check_visibility; check_apps; check_dns_src; check_proc_cim; check_dm_src ;;
+  *)          echo "usage: $0 {visibility|indexes|apps|dns_src|proc_cim|dm_src|all}"; exit 2 ;;
 esac

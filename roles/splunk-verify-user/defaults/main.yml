@@ -43,3 +43,19 @@ splunk_verify_capabilities:
 # emulated users are off, so a 24h window can legitimately find zero events;
 # 7d keeps "no data" from masquerading as "broken mapping".
 splunk_verify_window: "-7d"
+
+# --- visibility gate ------------------------------------------------------
+# Indexes the verification account MUST be able to see, with more than
+# splunk_verify_event_floor events each, before any data-quality claim is
+# believable. Deliberately NOT derived from group_vars/all.yml `indices` --
+# that list includes reserved-but-empty indexes (mail), which would make the
+# gate fail for the wrong reason.
+#
+# Measured 2026-08-18 over 7 days: windows 482,345 / sysmon 406,052. A floor of
+# 1000 is far below either and far above the 74 events a restricted svc_verify
+# saw while every check still returned a clean OK token.
+splunk_verify_expected_indexes:
+  - windows
+  - sysmon
+
+splunk_verify_event_floor: 1000

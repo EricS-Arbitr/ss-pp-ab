@@ -38,13 +38,17 @@ syslog_server_ip: "172.16.2.9"           # pp-syslog's PP-Services IP
 # Splunk indices created by the splunk role on pp-splunk.
 # Grouped by CIM data model / log volume: Sysmon is split out from
 # the rest of the Windows event logs because of volume + security value.
+# Volumes MEASURED on pp-splunk 2026-08-18 over 7 days. Three of these were
+# annotated "Currently unused" and are not -- the comments predated the syslog
+# and Squid wiring. Corrected here because roles/splunk-verify-user's visibility
+# gate needs to know which indexes genuinely carry data.
 indices:
-  - name: "windows"       # All Win event logs (System/Security/Application/Firewall/PowerShell + Sysmon) — matches forwarder template
-  - name: "sysmon"        # Currently unused; forwarder sends Sysmon to "windows". Kept for future split.
-  - name: "linux"         # Linux syslog (also receives Squid until forwarder template is overridden)
-  - name: "netfw"         # Currently unused; reserved for pfsense/vyatta syslog when wired up
-  - name: "proxy"         # Currently unused; Squid goes to "linux" via forwarder template
-  - name: "mail"          # Currently unused; reserved for Exchange when wired up
+  - name: "windows"       # 482,345 / 7d — Win event logs (System/Security/Application/Firewall/PowerShell)
+  - name: "sysmon"        # 406,052 / 7d — Sysmon; ACTIVE, not unused
+  - name: "linux"         # 330,082 / 7d — Linux syslog
+  - name: "netfw"         # 432,247 / 7d — pfSense/VyOS syslog via pp-syslog; ACTIVE, not unused
+  - name: "proxy"         # 151,403 / 7d — Squid access logs; ACTIVE, not unused
+  - name: "mail"          #       0 / 7d — still reserved for Exchange when wired up
 
 
 

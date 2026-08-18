@@ -329,6 +329,19 @@ check_ps pp-dc01 \
   '\(stdout\)[[:space:]]+OK_CLEAN' \
   "pp-dc01: no 10.255.240.x A records in voltgrid.com zone (mgmt DDNS scrubbed)"
 
+# The purge above is a safety net, not the mechanism. A multihomed Windows DNS
+# server republishes a STATIC host record for every bound address on each
+# service start, which is why the records returned a day after a successful
+# deploy with RegisterThisConnectionsAddress already False on the mgmt NIC.
+# PublishAddresses is what actually withholds the management address; assert it
+# is set, or the purge is destined to be undone again.
+for dc in pp-dc01 pp-dc02 pp-dc03; do
+  check_ps "$dc" \
+    '(Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\DNS\Parameters" -Name PublishAddresses -EA SilentlyContinue).PublishAddresses' \
+    '\(stdout\)[[:space:]]+[0-9]' \
+    "$dc: DNS server PublishAddresses is set (withholds the mgmt address)"
+done
+
 # =========================================================================
 # 5. File services
 # =========================================================================
@@ -612,6 +625,15 @@ if ! A pp-splunk -m ansible.builtin.shell \
   fail "pp-splunk: data-quality runner missing at $VERIFY_DATA"
   note "Deploy predates roles/splunk-verify-user — re-run with --tags splunk-verify-user"
 else
+
+  # MUST come first. On 2026-08-18 svc_verify could see 74 of ~406,000 Sysmon
+  # events and all four checks below still returned clean OK tokens -- one of
+  # them passed on 13 events. A restricted account emits well-formed tokens, so
+  # nothing downstream is trustworthy until this passes.
+  check_pf_shell pp-splunk \
+    "$VERIFY_DATA visibility" \
+    'VISIBILITY_OK' \
+    "pp-splunk: verifier account can see the indexes holding the data"
 
   check_pf_shell pp-splunk \
     "$VERIFY_DATA apps" \

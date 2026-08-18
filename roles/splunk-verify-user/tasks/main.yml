@@ -89,20 +89,25 @@
 #
 # Deliberately does not fail on DM_SRC_EMPTY or DNS_NO_EVENTS -- a freshly
 # built range legitimately has no accelerated summaries and little traffic.
-# What must hold is that every search SHAPE runs and returns a token, which
-# is what proves the capability grant is correct. If a capability name is
-# wrong the deploy fails here, loudly, instead of surfacing days later as an
-# unexplained verification failure.
+#
+# 2026-08-18: it DOES now fail on VISIBILITY_FAIL. The original version of this
+# task asserted only that each search returned a recognised token, and a
+# severely restricted account returns well-formed tokens perfectly well --
+# svc_verify saw 74 of ~406,000 Sysmon events and PROC_CIM_OK passed on 13 of
+# them. Asserting the shape of a response is not asserting its content; that
+# was the same transport-vs-outcome error these checks exist to catch, made
+# one layer down inside the checker itself.
 # --------------------------------------------------------------------------
 - name: Run each verification check once as the scoped account
   ansible.builtin.shell: "{{ splunk_verify_app_dir }}/bin/verify_data.sh {{ item.check }}"
   become: true
   become_user: "{{ ansible_user }}"
   loop:
-    - { check: apps,     token: 'SYSMON_ADDONS_' }
-    - { check: dns_src,  token: 'DNS_' }
-    - { check: proc_cim, token: 'PROC_' }
-    - { check: dm_src,   token: 'DM_SRC_' }
+    - { check: visibility, token: 'VISIBILITY_' }
+    - { check: apps,       token: 'SYSMON_ADDONS_' }
+    - { check: dns_src,    token: 'DNS_' }
+    - { check: proc_cim,   token: 'PROC_' }
+    - { check: dm_src,     token: 'DM_SRC_' }
   loop_control:
     label: "{{ item.check }}"
   register: verify_smoke
@@ -125,3 +130,25 @@
   loop: "{{ verify_smoke.results }}"
   loop_control:
     label: "{{ item.item.check }}"
+
+# Separate from the shape assertion above, and deliberately blunt: if the
+# account cannot see the indexes that hold the data, every other check in
+# section 10 of verify_deployment.sh is meaningless and must not be trusted.
+- name: Assert the verification account is not blind
+  ansible.builtin.assert:
+    that:
+      - "'VISIBILITY_OK' in (visibility_result.stdout | default(''))"
+    fail_msg: >-
+      {{ splunk_verify_user }} cannot see the indexes that hold the range's
+      data: {{ (visibility_result.stdout | default('(no output)')) | trim }}.
+      Expected all of {{ splunk_verify_expected_indexes | join(', ') }} with
+      more than {{ splunk_verify_event_floor }} events each. Run
+      '{{ splunk_verify_app_dir }}/bin/verify_data.sh indexes' on this host to
+      see what the account CAN see. Do not relax the floor to make this pass --
+      a verifier that cannot detect its own blindness is worse than none.
+    success_msg: "Visibility gate: {{ (visibility_result.stdout | default('')) | trim }}"
+  vars:
+    visibility_result: >-
+      {{ verify_smoke.results
+         | selectattr('item.check', 'equalto', 'visibility')
+         | list | first | default({}) }}

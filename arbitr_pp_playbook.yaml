@@ -861,6 +861,83 @@
 # production addresses only -- so that control addresses a problem this range
 # does not have, and a wrong mnemonic would break DC locator. Purge what is
 # demonstrably wrong, then assert it stayed gone.
+# =============================================================================
+# Management plane — stop the DNS server PUBLISHING its own mgmt address
+# =============================================================================
+# MEASURED 2026-08-18. The purge play below removed all three 10.255.240.x A
+# records during the previous full deploy and the deploy succeeded, which means
+# REMAINING was 0 at the end of it. They were back within a day, and:
+#
+#   Get-DnsServerResourceRecord -ZoneName voltgrid.com -RRType A
+#     pp-dc01 10.255.240.109 TS=        <- EMPTY timestamp
+#     pp-dc02 10.255.240.154 TS=
+#     pp-dc03 10.255.240.203 TS=
+#
+# An empty timestamp means the record is STATIC, not dynamically registered.
+# That matters because it explains why the existing fix could not work:
+# RegisterThisConnectionsAddress governs DYNAMIC client registration only, and
+# it is already correctly False on Ethernet0 (the mgmt NIC) on all three DCs.
+# The records were never coming from the DNS client.
+#
+# They come from the DNS SERVER. A multihomed Windows DNS server publishes a
+# host record for every address bound to it, into the zones it is authoritative
+# for, as static records -- on every service start. PublishAddresses restricts
+# that to a named list, and was NOT SET on any of the three DCs.
+#
+# This play makes the purge below a SAFETY NET rather than the mechanism. Purge
+# alone was whack-a-mole: correct at the end of every deploy, wrong a day later.
+- name: Management plane — restrict which addresses each DC's DNS server publishes
+  hosts: domain_controllers
+  gather_facts: false
+  tags:
+    - mgmt_dns
+    - publish_addresses
+  tasks:
+    # Derived from host_vars rather than hardcoded: the production NIC is
+    # whichever interface is NOT in the 10.255.240.0/20 management plane.
+    - name: Derive this DC's production address from host_vars
+      ansible.builtin.set_fact:
+        dc_prod_ip: >-
+          {{ network_interfaces
+             | rejectattr('ipv4.address', 'match', '10\.255\.(24[0-9]|25[0-5])\.')
+             | map(attribute='ipv4.address')
+             | list | first | default('') }}
+
+    # A blank result would write an empty PublishAddresses and stop the DC
+    # publishing ANY host record, breaking DC locator. Fail instead.
+    - name: A production address must have been identified
+      ansible.builtin.assert:
+        that:
+          - dc_prod_ip | length > 0
+        fail_msg: >-
+          Could not identify a non-management address for {{ inventory_hostname }}
+          from network_interfaces. Writing PublishAddresses without one would stop
+          this DC publishing any host record at all and break DC locator. Check
+          host_vars/{{ inventory_hostname }}.yml.
+
+    - name: Publish only the production address, never the management one
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\DNS\Parameters
+        name: PublishAddresses
+        data: "{{ dc_prod_ip }}"
+        type: string
+      register: publish_addresses
+
+    # The value is read when the DNS server starts, so without this the change
+    # takes effect at the next reboot -- i.e. the purge below would still find
+    # records this run and the play would look ineffective.
+    - name: Restart DNS so PublishAddresses takes effect before the purge
+      ansible.windows.win_service:
+        name: DNS
+        state: restarted
+      when: publish_addresses.changed
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: DNS server will publish {{ dc_prod_ip }} only
+          (management address withheld).
+
 - name: Management plane — purge AD records and PROVE none remain
   hosts: pdc
   gather_facts: false

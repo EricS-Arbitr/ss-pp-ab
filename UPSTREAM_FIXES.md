@@ -893,3 +893,71 @@ Hostname stays at factory `pfSense.home.arpa` because the platform's hostname-vi
 3. **Wait for the platform fix** — preferred, since options 1 and 2 each introduce other maintenance burden.
 
 Per the status update at the top of this entry (2026-07-08), every fresh-range deploy since 2026-07-02 has been unaffected. Retain the reproducer methodology (minimal blueprint, 3-MAC sequential pattern as diagnostic evidence) in case this recurs with a future image variant.
+
+---
+
+## 2026-08-18 · gap · roles/splunk-es — installs every tarball in the installers share, including two conflicting Sysmon add-ons
+
+**Symptom**: Splunk ES's DNS dashboards showed populated event counts (2,939 messages, 153 unique queries) with **every panel returning "No search results returned"** and Unique sources = 0. `| tstats count from datamodel=Network_Resolution by sourcetype` returned 2,939 for `XmlWinEventLog`; splitting by `Network_Resolution.src` returned zero rows.
+
+**Detection**: `| rest /services/apps/local | search title=*sysmon*` returned TWO add-ons:
+
+```
+Splunk_TA_microsoft_sysmon   4.0.2    (Splunk official)
+TA-microsoft-sysmon         10.6.2    (community)
+```
+
+Both define the same CIM target fields under **different attribute names**, so `btool` reports no conflict and Splunk executes both:
+
+```
+TA-microsoft-sysmon         FIELDALIAS-app = Image AS app
+Splunk_TA_microsoft_sysmon  EVAL-app       = case( EventCode="3", Image )
+```
+
+Field aliases resolve at step 4 of search-time processing, calculated fields at step 5. The unconditional alias sets the field; the conditional EVAL then overwrites it — with **null** wherever the `case()` has no matching branch. Eight fields collided: `app`, `process`, `file_path`, `dest_host`, `src_host`, `parent_process_id`, `parent_process_guid`, `parent_process_path`.
+
+Two dead ends worth recording, because both looked right:
+* `Splunk_TA_windows` renames every `XmlWinEventLog:*` sourcetype to bare `XmlWinEventLog`, and a renamed sourcetype discards the original's search-time config. This is **intended** behaviour (deliberate consolidation in TA_windows 8.x+), and both Sysmon add-ons already accommodate it by keying their CIM mappings on `[source::XmlWinEventLog:Microsoft-Windows-Sysmon/Operational]`, which survives the rename. Overlaying config or suppressing the rename would both have been workarounds for a non-problem.
+* The tarball filenames are **inverted** relative to the app names. Match on version, never on the name:
+
+```
+splunk-add-on-for-sysmon_402.tgz            -> Splunk_TA_microsoft_sysmon 4.0.2   KEEP
+splunk-add-on-for-microsoft-sysmon_1062.tgz -> TA-microsoft-sysmon       10.6.2   EXCLUDE
+```
+
+**Fix (upstream)**: `roles/splunk-es/tasks/main.yml` globs `{{ ansible_installers }}/splunk/apps/*.tg*` and installs everything it finds. That directory ships with the RC_NG_Ansible base image and is not version-controlled, so the range's entire Splunk content layer is whatever happens to be sitting in it. The role should take an explicit allow/deny list and assert the resulting app set, rather than trusting a directory glob. The base image should also not ship two add-ons for the same data source.
+
+**Workaround in PowerPlant overlay**: `roles/splunk-es/defaults/main.yml` adds `splunk_apps_exclude` (filters the install glob) and `splunk_apps_forbidden` (removes leftovers on already-deployed ranges, then **asserts** the app set after install). An excluded tarball that is absent from the share now fails loudly, since the filenames encode versions and will drift on a base-image update.
+
+**Verified**: `count(src)` on Sysmon EventCode 22 went from 0/2,939 to **5,920/5,920** after removing the duplicate; `PROC_CIM` fields likewise populate on every ProcessCreate event.
+
+---
+
+## 2026-08-18 · bug · Management-plane DNS — the DNS *server* republishes static mgmt A records; `RegisterThisConnectionsAddress` cannot stop it
+
+**Symptom**: `10.255.240.x` A records for pp-dc01/02/03 present in the `voltgrid.com` zone, causing clients to round-robin roughly half of all Kerberos/LDAP/RPC traffic across the out-of-band management plane. This violates CLAUDE.md §8 and exposes out-of-scenario infrastructure to anyone hunting in the SIEM.
+
+This is **not** the 2026-05-27 DDNS entry recurring. That fix is present and correct:
+
+```
+pp-dc01: Ethernet0 10.255.240.109 Register=False   Ethernet1 172.16.2.7 Register=True
+pp-dc02: Ethernet0 10.255.240.154 Register=False   Ethernet1 172.16.2.8 Register=True
+pp-dc03: Ethernet0 10.255.240.203 Register=False   Ethernet1 192.168.100.5 Register=True
+```
+
+**Detection**: the record timestamps are what separate the two causes.
+
+```
+Get-DnsServerResourceRecord -ZoneName voltgrid.com -RRType A | ... $_.Timestamp
+  pp-dc01 10.255.240.109 TS=
+  pp-dc02 10.255.240.154 TS=
+  pp-dc03 10.255.240.203 TS=
+```
+
+An **empty timestamp means the record is static**. `RegisterThisConnectionsAddress` governs dynamic *client* registration only, so it was never going to remove these — it was the right setting on the right adapter, addressing a mechanism that was not in play. A multihomed Windows DNS server publishes a host record for **every address bound to it**, into the zones it is authoritative for, as static records, on each service start. `PublishAddresses` restricts that to a named list and was `NOT SET` on all three DCs.
+
+This also explains the shape of the recurrence: the existing purge play ran at the end of the previous full deploy and the deploy succeeded (that play `fail`s if any record survives), so `REMAINING=0` was true at the end of it — and the records were back within a day. Purge-only is correct at the end of every deploy and wrong shortly after.
+
+**Fix (upstream)**: the base `dcpromo` / `dns` roles should set `PublishAddresses` on any DC with more than one bound address. Disabling client-side DDNS on the mgmt NIC is necessary but not sufficient, and the difference is invisible unless you check record timestamps.
+
+**Workaround in PowerPlant overlay**: new play `Management plane — restrict which addresses each DC's DNS server publishes` (tags `mgmt_dns`, `publish_addresses`), placed immediately **before** the existing purge play. It derives the production address from `network_interfaces` by rejecting anything in `10.255.240.0/20`, asserts a non-empty result (an empty `PublishAddresses` would stop the DC publishing any host record and break DC locator), writes the registry value, and restarts the DNS service so it takes effect before the purge runs. The purge becomes the assertion rather than the mechanism. `verify_deployment.sh` section 4 now checks `PublishAddresses` is set on each DC.
