@@ -118,7 +118,9 @@ check_pf_shell_token() {
   local host="$1" cmd="$2" expect="$3" label="$4"
   local out tok
   out=$(A "$host" -m ansible.builtin.shell -a "$cmd" --one-line)
-  tok=$(echo "$out" | grep -oE '[A-Z][A-Z0-9_]{4,}' | tail -1)
+  # Token bodies carry lowercase words (VISIBILITY_OK_529374_raw_events), so
+  # the class must admit them or the count is truncated at the first one.
+  tok=$(echo "$out" | grep -oE '[A-Z][A-Za-z0-9_]{4,}' | tail -1)
   if echo "$out" | grep -qE "$expect"; then
     pass "$label [${tok:-?}]"
   else
@@ -171,14 +173,35 @@ for rtr in pp-internal-router site-edge-router pp-corp-router; do
 done
 
 # eBGP edge -- pp-isp-router <-> pp-external-firewall.
+#
+# Asserts the STATE, not the uptime. The previous version matched
+# `Establ|[0-9]+:[0-9]+:[0-9]+` against `show ip bgp summary`, which was wrong
+# in both halves:
+#
+#   * "Establ" never appears in summary output. FRR prints the PREFIX COUNT in
+#     the State/PfxRcd column when a session is up, and only prints a state
+#     name (Idle / Active / Connect / OpenSent) when it is DOWN. So the literal
+#     it looked for is the one string that cannot be there on success.
+#   * The HH:MM:SS alternative matched the Up/Down column -- but FRR only uses
+#     that format below 24 hours. At a day it switches to `1d00h25m`, at a week
+#     to `2w3d04h`.
+#
+# Net effect: the check passed for the first 24 hours after a session came up
+# and false-failed forever after. Caught 2026-08-18 at 1d00h25m uptime with
+# both sessions perfectly healthy (1468/1474 messages exchanged).
+#
+# `show ip bgp neighbors` prints "BGP state = Established" explicitly, in every
+# FRR version, with no time dependence. Both hosts have exactly one peer
+# ("Total number of neighbors 1"), so matching one Established line is
+# unambiguous here; add a count if a second session is ever introduced.
 check_vyos pp-isp-router \
-  "show ip bgp summary" \
-  'Establ|[0-9]+:[0-9]+:[0-9]+' \
+  "show ip bgp neighbors" \
+  'BGP state = Established' \
   "pp-isp-router: eBGP session Established (peer pp-external-firewall)"
 
 check_pf_shell pp-external-firewall \
-  'vtysh -c "show ip bgp summary"' \
-  'Establ|[0-9]+:[0-9]+:[0-9]+' \
+  'vtysh -c "show ip bgp neighbors"' \
+  'BGP state = Established' \
   "pp-external-firewall: eBGP session Established (peer pp-isp-router)"
 
 # OSPF between the two firewalls -- feeds corp routes into eBGP via
