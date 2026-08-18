@@ -165,13 +165,32 @@ check_proc_cim() {
 }
 
 # --- the accelerated data model must actually contain src ----------------
-# Search-time config does NOT retroactively repair summaries built while the
+# Search-time config does NOT retroactively repair summaries built while a
 # mapping was broken, so this can fail while check_dns_src passes. That means
 # the acceleration needs a rebuild, not that the add-ons are wrong.
+#
+# FIELD PATH, 2026-08-18. The first version asked for `Network_Resolution.src`
+# and reported DM_SRC_EMPTY for days against a completely healthy acceleration.
+# tstats qualifies fields by DATASET, not by model, and this model's root
+# dataset is `DNS` -- `Network_Resolution.src` names a dataset that does not
+# exist, so it returned zero rows no matter what the data looked like. It even
+# survived a full acceleration rebuild, because there was nothing to fix.
+#
+# This is the third check in this file whose failure mode was "asks a question
+# that cannot be answered": the visibility gate measured index metadata while
+# guarding raw searches, the DNS check ran through a CLI that truncated, and
+# this one used a field path with no referent. THE RULE THAT WOULD HAVE CAUGHT
+# ALL THREE: before trusting a check to report a bad state, run it against a
+# known-GOOD state and confirm it passes. An assertion that has never returned
+# true is not a check, it is a constant.
+#
+# summariesonly=t is deliberate: this check exists to assert the ACCELERATION
+# specifically. Without it tstats falls back to raw data and would pass while
+# the summaries were empty -- which is the exact condition it is here to catch.
 check_dm_src() {
-  run '| tstats count from datamodel=Network_Resolution by Network_Resolution.src
+  run '| tstats summariesonly=t count from datamodel=Network_Resolution.DNS by DNS.src
        | stats count AS rows, sum(count) AS events
-       | eval r=if(rows>0, "DM_SRC_OK_" . rows . "_sources", "DM_SRC_EMPTY")
+       | eval r=if(rows>0, "DM_SRC_OK_" . rows . "_sources_" . events . "_events", "DM_SRC_EMPTY")
        | fields r'
 }
 
