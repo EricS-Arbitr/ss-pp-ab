@@ -906,23 +906,25 @@
     - dns_logging
     - dns
   tasks:
-    # -All rather than a hand-picked flag set. The first version enabled
-    # Queries/Answers/QuestionTransactions/Send/Receive/Udp/Tcp explicitly and
-    # produced a file that DNS kept touching at size 0 on all three DCs --
-    # logging on, no packet class actually selected. The GUI exposes four
-    # independent axes (direction, transport, contents, packet TYPE) and the
-    # cmdlet's parameter names do not map onto them obviously enough to guess.
-    # -All turns on every axis; trim later against a known-working baseline
-    # rather than guessing forward from a broken one.
+    # Explicit flag set, trimmed against the known-working baseline that -All
+    # established. FullPackets is the important one to leave OFF: it appends a
+    # full hex dump of every packet and was the bulk of the 646 KB/20s observed
+    # with everything on. The summary line per packet is what
+    # Splunk_TA_windows's MSAD:NT6:DNS parsing reads.
     - name: Enable DNS Server debug logging
       ansible.windows.win_powershell:
         script: |
-          Set-DnsServerDiagnostics -All $true -ErrorAction Stop
           Set-DnsServerDiagnostics `
+            -Queries $true -Answers $true -QuestionTransactions $true `
+            -UnmatchedResponse $true `
+            -SendPackets $true -ReceivePackets $true `
+            -UdpPackets $true -TcpPackets $true `
+            -FullPackets $false `
+            -Notifications $false -Update $false `
             -EnableLoggingToFile $true `
             -EnableLogFileRollover $true `
             -LogFilePath '{{ dns_debug_log_path }}' `
-            -MaxMBFileSize {{ dns_debug_log_max_bytes }} `
+            -MaxMBFileSize {{ dns_debug_log_max_mb }} `
             -ErrorAction Stop
           $Ansible.Changed = $true
       when: dns_debug_logging | bool
@@ -968,7 +970,10 @@
       ansible.windows.win_stat:
         path: "{{ dns_debug_log_path }}"
       register: dns_log_stat
-      until: dns_log_stat.stat.exists and (dns_log_stat.stat.size | default(0)) > 0
+      # > min_bytes, not > 0. A byte-interpreted cap would hold the file under
+      # ~500 bytes, so this assertion catches the unit confusion returning as
+      # well as catching logging being off entirely.
+      until: dns_log_stat.stat.exists and (dns_log_stat.stat.size | default(0)) > (dns_debug_log_min_bytes | int)
       retries: 6
       delay: 10
       when: dns_debug_logging | bool
@@ -986,7 +991,7 @@
         state: restarted
       when:
         - dns_debug_logging | bool
-        - (dns_log_stat.stat.size | default(0)) == 0
+        - (dns_log_stat.stat.size | default(0)) <= (dns_debug_log_min_bytes | int)
 
     - name: Re-generate DNS queries after the restart
       ansible.windows.win_powershell:
@@ -1003,19 +1008,19 @@
       changed_when: false
       when:
         - dns_debug_logging | bool
-        - (dns_log_stat.stat.size | default(0)) == 0
+        - (dns_log_stat.stat.size | default(0)) <= (dns_debug_log_min_bytes | int)
 
     - name: Re-check the DNS log after the restart
       ansible.windows.win_stat:
         path: "{{ dns_debug_log_path }}"
       register: dns_log_recheck
-      until: dns_log_recheck.stat.exists and (dns_log_recheck.stat.size | default(0)) > 0
+      until: dns_log_recheck.stat.exists and (dns_log_recheck.stat.size | default(0)) > (dns_debug_log_min_bytes | int)
       retries: 6
       delay: 10
       failed_when: false
       when:
         - dns_debug_logging | bool
-        - (dns_log_stat.stat.size | default(0)) == 0
+        - (dns_log_stat.stat.size | default(0)) <= (dns_debug_log_min_bytes | int)
 
     - name: Report final log state
       ansible.builtin.debug:
@@ -1041,8 +1046,8 @@
           transaction).
       when:
         - dns_debug_logging | bool
-        - (dns_log_stat.stat.size | default(0)) == 0
-        - (dns_log_recheck.stat.size | default(0)) == 0
+        - (dns_log_stat.stat.size | default(0)) <= (dns_debug_log_min_bytes | int)
+        - (dns_log_recheck.stat.size | default(0)) <= (dns_debug_log_min_bytes | int)
 
 # =============================================================================
 # Management plane — stop the DNS server PUBLISHING its own mgmt address

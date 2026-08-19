@@ -51,12 +51,20 @@ splunk_verify_password: "simspace1"
 # after a day of real traffic before enabling emulated users.
 dns_debug_logging: true
 
-# UNIT AMBIGUITY: despite the name, Set-DnsServerDiagnostics -MaxMBFileSize
-# takes a value in BYTES in most documented examples. 500000000 is ~477 MB if
-# bytes. If this range ever shows a dns.log far larger or smaller than that,
-# the parameter was interpreted the other way -- verify before trusting the cap.
-dns_debug_log_max_bytes: 500000000
-dns_debug_log_path: 'C:\Windows\System32\dns\dns.log'
+# UNIT RESOLVED 2026-08-18, the hard way. -MaxMBFileSize is MEGABYTES, as its
+# name says. Setting it to 500000000 (on the assumption it took bytes) made DNS
+# truncate dns.log on every write: file present, lastwritetime advancing, size
+# permanently 0, on all three DCs, through three enable attempts and a service
+# restart. Disabling rollover proved it -- the log filled to 646 KB in twenty
+# seconds. The arithmetic confirms the unit: if the field were bytes, 500000000
+# is ~477 MB and a 646 KB file could never trip the threshold.
+dns_debug_log_max_mb: 500
+
+# Minimum bytes the log must reach after generated traffic. Deliberately well
+# above any plausible byte-interpretation of the cap above: if a future edit
+# reintroduces the unit confusion, the file cannot exceed the cap and this
+# assertion fails instead of silently logging nothing.
+dns_debug_log_min_bytes: 50000
 
 # Central syslog collector. All Linux/VyOS/pfSense hosts forward to this IP.
 # pp-syslog runs rsyslog listening on UDP+TCP 514, writes per-host files at
