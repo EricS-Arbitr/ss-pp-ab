@@ -136,19 +136,41 @@
   become: yes
   when: rsyslog_config_deployed.changed
 
-# The Linux path registered its three config templates and never acted on them
-# either, so outputs.conf could be rewritten -- including the 2026-08-19
-# repoint from a single indexer to the cluster -- while the running forwarder
-# kept using the old target. Same defect as the Windows path, found at the same
-# time.
-- name: Restart the forwarder if any config changed
+# Same design as the Windows path: restart on OUTCOME, not on change.
+#
+# The Linux path never restarted at all -- three templates registered, none
+# acted on -- so pp-syslog, pp-proxy and pp-www reported clean runs while
+# holding the pre-cutover target. Gating on change would not have been enough
+# either: once a template is correct and the process is stale, nothing ever
+# triggers again.
+- name: Is the forwarder actually connected to an indexer?
+  ansible.builtin.shell: |
+    ss -ant state established 2>/dev/null \
+      | grep -cE '({{ splunk_indexers | map('regex_escape') | join('|') }}):{{ splunk_forwarder_port }}' || true
+  become: true
+  register: lin_uf_conn
+  changed_when: false
+
+- name: Restart the forwarder
   ansible.builtin.command: /opt/splunkforwarder/bin/splunk restart
   become: true
   register: lin_uf_restart
   changed_when: true
   when: >-
-    inputs_conf_stat.changed or outputs_conf_stat.changed
+    (lin_uf_conn.stdout | trim | int) == 0
+    or inputs_conf_stat.changed or outputs_conf_stat.changed
     or limits_conf_stat.changed
+
+- name: The forwarder must end up connected to an indexer
+  ansible.builtin.shell: |
+    ss -ant state established 2>/dev/null \
+      | grep -cE '({{ splunk_indexers | map('regex_escape') | join('|') }}):{{ splunk_forwarder_port }}' || true
+  become: true
+  register: lin_uf_conn_after
+  changed_when: false
+  until: (lin_uf_conn_after.stdout | trim | int) > 0
+  retries: 12
+  delay: 10
 
 - name: Check if Splunk has been started before
   ansible.builtin.stat:
