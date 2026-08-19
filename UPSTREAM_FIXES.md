@@ -983,3 +983,45 @@ The cause is that `sysmon` appeared exactly once in the playbook, inside the `ap
 **Workaround in PowerPlant overlay**: new `[sysmon]` inventory group (children `aue`, `hunt`; direct members `pp-file`, `pp-sql`, `pp-mail`, `pp-dc01/02/03`) and a dedicated `Endpoint telemetry — Sysmon` play, tag `sysmon`. Removed from the AUE play's role and tag lists. The base role installs and configures only — no reboot, no conditionals — so it is safe against servers; the AUE play's "reboots for chrome+sysmon" comment was wrong about sysmon and has been corrected.
 
 `pp-dcs-ctrl` is **deliberately excluded** (Eric, 2026-08-18): it is OT process equipment, not an engineering workstation that monitors OT — the same line drawn in `so_agent_endpoint_subnets`. `verify_deployment.sh` section 12 asserts both group-wide coverage and that the exclusion still holds, so a future `:children` edit that sweeps it in is caught by the verifier rather than in a scenario review.
+
+---
+
+## 2026-08-18 · bug · roles/splunk-forwarder/tasks/windows.yml — config templates copied but the forwarder is never restarted
+
+**Symptom**: a changed `inputs.conf` reaches the host and the running forwarder never reads it. Surfaced while adding a DNS Server log input: the stanza was verifiably on disk on all three DCs, the input was correct, and zero events arrived. `splunkd.log` showed the forwarder had last read its inputs at a much earlier timestamp.
+
+**Detection**: compare the file on disk against what splunkd reports loading.
+
+```
+Get-Content "C:\Program Files\SplunkUniversalForwarder\etc\system\local\inputs.conf" -Tail 12
+Select-String -Path "...\var\log\splunk\splunkd.log" -Pattern "MonitorNoHandle|dns.log" | Select-Object -Last 15
+```
+
+**Fix (upstream)**: `windows.yml` registers `inputs_conf_stat`, `outputs_conf_stat` and `limits_conf_stat` and never acts on any of them. The only restart in the role is a `win_reboot` gated on the *installer* changing, so on an existing host a config change silently takes effect at the next unrelated reboot. Any role that templates a service's configuration must restart or reload that service on change.
+
+**Workaround in PowerPlant overlay**: added a `win_service: SplunkForwarder state=restarted` task conditioned on any of the three registered results changing, skipped when the installer just changed since the existing reboot covers that.
+
+---
+
+## 2026-08-18 · gap · Windows DNS Server query logging is not collected by default
+
+**Symptom**: `Network_Resolution` was fed exclusively by Sysmon EventCode 22, which records the querying process but not which server answered. Result: `message_type` and `dest` were `"unknown"` for 100% of events, and every Splunk ES DNS panel filtering on `DNS.message_type=Query` returned nothing while the key indicators populated normally.
+
+**Detection**:
+
+```
+| tstats summariesonly=t count from datamodel=Network_Resolution.DNS by DNS.message_type, DNS.dest
+  -> unknown / unknown / 4461
+```
+
+Confirmed not fixable by add-on choice: unpacking both Sysmon add-ons showed `TA-microsoft-sysmon` maps neither `message_type` nor `record_type`, and `Splunk_TA_microsoft_sysmon` ships only a `record_type` lookup. No add-on can supply from Sysmon what Sysmon never captured.
+
+**Fix (upstream)**: the reference playbook should enable DNS Server query logging on domain controllers and collect it. `Splunk_TA_windows` already parses and fully CIM-maps the debug log — `message_type`, `src`, `dest`, `query`, `record_type`, `reply_code`, plus the `network resolution dns` tags — so this needs no custom content, only the input.
+
+**Workaround in PowerPlant overlay**: new play (tag `dns_logging`) enables debug logging via `Set-DnsServerDiagnostics` on `[domain_controllers]`, plus a DC-scoped `[monitor://]` stanza in the forwarder template. Three traps worth recording:
+
+1. **`-MaxMBFileSize` is MEGABYTES.** Setting it to `500000000` on the assumption it took bytes made DNS truncate the log on every write — file present, `lastwritetime` advancing, size permanently 0, surviving three enable attempts and a service restart. Disabling rollover proved it: the log filled to 646 KB in twenty seconds.
+2. **Use `[monitor://]`, not `[MonitorNoHandle://]`.** The add-on ships the latter (disabled), and the assumption that DNS holds `dns.log` open exclusively is false on this build — `Get-Content` reads it fine. `MonitorNoHandle` loaded cleanly, captured nothing, reported no error, and declares only `disabled` and `index` as parameters, so its `sourcetype` was silently ignored as well.
+3. **`FullPackets` off.** `-All $true` includes it, and it appends a full hex dump per packet — 11 MB on `pp-dc01` within the hour. `Splunk_TA_windows` parses the summary line, not the dump.
+
+**Verified**: `Query` 16,647 + `Response` 5,103 across three DCs in 24h, with real `dest`, `record_type` and `reply_code`. Asserted by `verify_deployment.sh` section 10.

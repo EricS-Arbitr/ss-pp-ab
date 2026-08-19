@@ -23,7 +23,7 @@
 #      account can see the indexes that hold the data BEFORE any of the
 #      data-quality claims are believable.
 #
-# Usage: verify_data.sh {visibility|indexes|whatsee|apps|dns_src|proc_cim|dm_src|all}
+# Usage: verify_data.sh {visibility|indexes|whatsee|apps|dns_src|proc_cim|dm_src|dns_server|all}
 
 set -u
 
@@ -194,6 +194,32 @@ check_dm_src() {
        | fields r'
 }
 
+# --- server-side DNS must be reaching Network_Resolution ------------------
+# Sysmon's DnsQuery event records the querying PROCESS but not which server
+# answered, the message type or the record type -- so Network_Resolution fed by
+# Sysmon alone shows message_type="unknown" and dest="unknown" for 100% of
+# events, and every ES DNS panel filtering on those returns nothing while the
+# key indicators populate. That was the original symptom on this range.
+#
+# The DC debug logs supply what Sysmon cannot. Asserting BOTH message types
+# matters: Query alone would mean the answer side is missing, which is where
+# reply_code and record_type live.
+#
+# VALIDATED AGAINST A KNOWN-GOOD STATE BEFORE SHIPPING, which is the rule the
+# three earlier checks in this file broke. Measured over 24h at the time of
+# writing: Query 16,647 + Response 5,103 = 21,750 across three DCs, so this
+# passes on the current range and is therefore capable of returning true.
+check_dns_server() {
+  run '| tstats summariesonly=t count from datamodel=Network_Resolution.DNS
+         where DNS.message_type!="unknown" by DNS.message_type
+       | stats sum(count) AS e, count AS types
+       | eval r=case(types==0, "DNSSRV_NO_SERVER_EVENTS",
+                     (types>=2 AND e>{{ splunk_verify_event_floor }}),
+                       "DNSSRV_OK_" . e . "_events_" . types . "_types",
+                     true(), "DNSSRV_FAIL_" . e . "_events_" . types . "_types")
+       | fields r'
+}
+
 case "${1:-all}" in
   visibility) check_visibility ;;
   indexes)    check_indexes ;;
@@ -202,6 +228,7 @@ case "${1:-all}" in
   dns_src)    check_dns_src ;;
   proc_cim)   check_proc_cim ;;
   dm_src)     check_dm_src ;;
-  all)        check_visibility; check_apps; check_dns_src; check_proc_cim; check_dm_src ;;
-  *)          echo "usage: $0 {visibility|indexes|whatsee|apps|dns_src|proc_cim|dm_src|all}"; exit 2 ;;
+  dns_server) check_dns_server ;;
+  all)        check_visibility; check_apps; check_dns_src; check_proc_cim; check_dm_src; check_dns_server ;;
+  *)          echo "usage: $0 {visibility|indexes|whatsee|apps|dns_src|proc_cim|dm_src|dns_server|all}"; exit 2 ;;
 esac

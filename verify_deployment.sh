@@ -696,6 +696,15 @@ else
     'PROC_CIM_OK' \
     "pp-splunk: ProcessCreate carries process + parent_process_* (the collided fields)"
 
+  # Server-side DNS. Sysmon records the querying process but never which server
+  # answered, so Network_Resolution fed by Sysmon alone is 100% message_type
+  # "unknown" -- which blanks every ES DNS panel that filters on it while the
+  # key indicators still populate. The DC debug logs supply the other half.
+  check_pf_shell_token pp-splunk \
+    "$VERIFY_DATA dns_server" \
+    'DNSSRV_OK' \
+    "pp-splunk: DC DNS logs reach Network_Resolution with Query AND Response"
+
   # Can fail while dns_src passes: search-time config does not retroactively
   # repair summaries built while the mapping was broken. That means rebuild
   # the acceleration, not that the add-ons are wrong.
