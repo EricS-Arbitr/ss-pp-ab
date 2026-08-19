@@ -136,13 +136,24 @@
 
 # Assert from the MANAGER's view, not this peer's. A peer holding the config is
 # transport; the manager listing it Up is the outcome.
+#
+# Greps the HOSTNAME, not the IP. The first version searched for the peer's
+# address and `show cluster-status` lists peers by name, so it returned 0
+# against a completely healthy cluster and retried for three minutes before
+# blaming the peers. Predicate validated against real output captured
+# 2026-08-19:
+#
+#    pp-splunk-idx01 <GUID> default
+#         Searchable YES
+#         Status  Up
+#         Bucket Count=6
 - name: The cluster manager must list this peer as Up
   ansible.builtin.shell: |
     set -o pipefail
     /opt/splunk/bin/splunk show cluster-status \
       -auth '{{ splunk_admin }}:{{ splunk_admin_password }}' 2>/dev/null \
-      | grep -A3 '{{ hostvars[inventory_hostname].network_interfaces[1].ipv4.address }}' \
-      | grep -c 'Up' || true
+      | grep -A3 '{{ inventory_hostname }}' \
+      | grep -c 'Status  *Up' || true
   args:
     executable: /bin/bash
   delegate_to: "{{ groups['splunk_cluster_manager'][0] }}"
@@ -151,6 +162,27 @@
   until: (idx_peer_up.stdout | trim | int) > 0
   retries: 12
   delay: 15
+
+# The factors are the actual outcome of a clustered build. Peers can be Up while
+# nothing replicates -- that is exactly what a locally-defined index or a
+# missing [replication_port://] produces, and both look healthy peer-by-peer.
+# run_once because it is a property of the cluster, not of a host.
+- name: The cluster must report both factors met
+  ansible.builtin.shell: |
+    set -o pipefail
+    /opt/splunk/bin/splunk show cluster-status \
+      -auth '{{ splunk_admin }}:{{ splunk_admin_password }}' 2>/dev/null \
+      | grep -cE '(Replication|Search) factor met' || true
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['splunk_cluster_manager'][0] }}"
+  run_once: true
+  register: idx_factors
+  changed_when: false
+  until: (idx_factors.stdout | trim | int) >= 2
+  retries: 12
+  delay: 15
+  failed_when: (idx_factors.stdout | trim | int) < 2
 
 - name: Report peer state
   ansible.builtin.debug:
