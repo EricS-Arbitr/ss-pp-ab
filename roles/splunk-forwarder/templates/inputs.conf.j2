@@ -30,14 +30,23 @@ renderXml = 1
 sourcetype = XmlWinEventLog:Powershell
 {% if 'domain_controllers' in group_names and (dns_debug_logging | default(false) | bool) %}
 ###### DNS Server query logging — domain controllers only ######
-# MonitorNoHandle, not monitor: the DNS service holds dns.log open exclusively
-# and an ordinary file monitor cannot read it. This is the input type
-# Splunk_TA_windows itself ships for this file, and MSAD:NT6:DNS is the
-# sourcetype its props.conf parses.
+# A PLAIN monitor, not MonitorNoHandle.
+#
+# Splunk_TA_windows ships this file as [MonitorNoHandle://...] and I copied
+# that, writing "the DNS service holds dns.log open exclusively" into the
+# comments as though it were established. It is not true on this build:
+# `Get-Content C:\Windows\System32\dns\dns.log` reads it fine. The add-on's
+# stanza ships disabled and looks like a conservative legacy default.
+#
+# The cost of that assumption was real. MonitorNoHandle is a modular input
+# backed by a filter driver; it loaded cleanly, captured nothing, and reported
+# no error. It also declares only `disabled` and `index` as parameters, so the
+# sourcetype below would have been silently ignored -- meaning even a working
+# capture would not have been findable by the name the props.conf keys on.
 #
 # Scoped to DCs deliberately -- the other 45 Windows hosts have no DNS server
 # and would monitor a path that never exists, which reports no error anywhere.
-[MonitorNoHandle://{{ dns_debug_log_path }}]
+[monitor://{{ dns_debug_log_path }}]
 disabled = 0
 index = windows
 sourcetype = MSAD:NT6:DNS
