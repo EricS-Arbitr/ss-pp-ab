@@ -914,6 +914,7 @@
     - name: Enable DNS Server debug logging
       ansible.windows.win_powershell:
         script: |
+          $before = Get-DnsServerDiagnostics
           Set-DnsServerDiagnostics `
             -Queries $true -Answers $true -QuestionTransactions $true `
             -UnmatchedResponse $true `
@@ -926,7 +927,20 @@
             -LogFilePath '{{ dns_debug_log_path }}' `
             -MaxMBFileSize {{ dns_debug_log_max_mb }} `
             -ErrorAction Stop
-          $Ansible.Changed = $true
+          $after = Get-DnsServerDiagnostics
+          # Report change honestly. An always-changed task would restart DNS on
+          # every single run, and a never-changed one would never re-hook the
+          # log after an input change. Compare the fields this task actually
+          # sets.
+          $differs = $false
+          foreach ($k in @('Queries','Answers','QuestionTransactions','UnmatchedResponse',
+                           'SendPackets','ReceivePackets','UdpPackets','TcpPackets',
+                           'FullPackets','Notifications','Update','EnableLoggingToFile',
+                           'EnableLogFileRollover','LogFilePath','MaxMBFileSize')) {
+            if ($before.$k -ne $after.$k) { $differs = $true }
+          }
+          $Ansible.Changed = $differs
+      register: dns_diag_set
       when: dns_debug_logging | bool
 
     # REPORTS BEFORE IT GATES. The first version put this after the wait, so
@@ -985,13 +999,31 @@
     # fingerprint is exactly what was observed -- file present, lastwritetime
     # advancing, size 0. Restart and retry rather than telling someone to do it
     # by hand; a deploy that needs a manual command is a defect here.
-    - name: Restart DNS if the log is still empty (stale handle)
+    # ORDERING REQUIREMENT — DO NOT MOVE THIS PLAY BEFORE splunk-forwarder.
+    #
+    # MonitorNoHandle does not read the file the way a normal monitor does. It
+    # installs a filter-driver hook that captures data AS IT IS WRITTEN, which
+    # is how it reads a file the DNS service holds exclusively. The hook must
+    # exist when the writer OPENS the handle.
+    #
+    # Measured 2026-08-18: with the input deployed and the forwarder restarted,
+    # zero events arrived, because DNS was still writing through a handle it
+    # had opened before the input existed. splunkd.log showed
+    # "No stanzas found for scheme MonitorNoHandle" on the earlier restarts and
+    # the stanza loading only on the later one. Restarting DNS afterwards fixed
+    # it immediately.
+    #
+    # So DNS must be restarted AFTER the forwarder input is in place. This play
+    # runs after the splunk-forwarder play, which makes a full deploy correct;
+    # the restart below covers settings changes and incremental runs.
+    - name: Restart DNS so it reopens the log with the MonitorNoHandle hook active
       ansible.windows.win_service:
         name: DNS
         state: restarted
       when:
         - dns_debug_logging | bool
-        - (dns_log_stat.stat.size | default(0)) <= (dns_debug_log_min_bytes | int)
+        - (dns_diag_set is changed) or
+          ((dns_log_stat.stat.size | default(0)) <= (dns_debug_log_min_bytes | int))
 
     - name: Re-generate DNS queries after the restart
       ansible.windows.win_powershell:
