@@ -79,6 +79,11 @@
 # Assert Splunk agrees it is a manager, from its own REST view rather than from
 # the file we just wrote. Writing config is transport; the running instance
 # reporting the mode is the outcome.
+# SPLUNK REPORTS THE LEGACY TERM. server.conf takes `mode = manager` -- the
+# spec file on the host documents exactly that -- but /services/cluster/config
+# reports it back as "master". Both are accepted here because the API and the
+# config file genuinely disagree, and matching only "manager" produced an
+# assertion that could never be true against a correctly configured manager.
 - name: Splunk must report itself as the cluster manager
   ansible.builtin.uri:
     url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/cluster/config?output_mode=json"
@@ -92,10 +97,16 @@
   register: cm_mode
   retries: 10
   delay: 10
-  until: >-
-    '"mode":"manager"' in (cm_mode.content | default('') | regex_replace('\s+', ''))
-  failed_when: >-
-    '"mode":"manager"' not in (cm_mode.content | default('') | regex_replace('\s+', ''))
+  until: (cm_mode.json.entry[0].content.mode | default('')) in ['manager', 'master']
+  failed_when: (cm_mode.json.entry[0].content.mode | default('')) not in ['manager', 'master']
+
+- name: Report the manager's own view of itself
+  ansible.builtin.debug:
+    msg: >-
+      mode={{ cm_mode.json.entry[0].content.mode }}
+      label={{ cm_mode.json.entry[0].content.cluster_label }}
+      rf={{ cm_mode.json.entry[0].content.replication_factor }}
+      sf={{ cm_mode.json.entry[0].content.search_factor }}
 
 # --- the indexes app, pushed to peers via the bundle ----------------------
 - name: Create the cluster indexes app

@@ -45,6 +45,11 @@
 # answers regardless of cluster role -- so the check passed while the manager
 # had an empty [clustering] stanza, and the peers failed with "Could not
 # contact manager" one task later.
+# SPLUNK REPORTS THE LEGACY TERM. server.conf takes `mode = manager` -- the
+# spec file on the host documents exactly that -- but /services/cluster/config
+# reports it back as "master". Both are accepted here because the API and the
+# config file genuinely disagree, and matching only "manager" produced an
+# assertion that could never be true against a correctly configured manager.
 - name: Wait for the cluster manager to be in manager mode
   ansible.builtin.uri:
     url: "https://{{ splunk_cluster_manager_ip }}:{{ splunk_mgmt_port }}/services/cluster/config?output_mode=json"
@@ -58,8 +63,7 @@
   register: idx_cm_mode
   retries: 30
   delay: 10
-  until: >-
-    '"mode":"manager"' in (idx_cm_mode.content | default('') | regex_replace('\s+', ''))
+  until: (idx_cm_mode.json.entry[0].content.mode | default('')) in ['manager', 'master']
 
 - name: Configure the [clustering] stanza for peer mode
   community.general.ini_file:
