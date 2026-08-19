@@ -52,17 +52,37 @@
 
 # The three templates above were registered and never acted on, so a config
 # change reached disk and the running forwarder never read it. Adding a DNS
-# input and seeing nothing arrive in Splunk is what surfaced this -- the input
-# was correct and simply not loaded.
+# input and seeing nothing arrive in Splunk is what surfaced that.
+#
+# NOT win_service. `state: restarted` fails on every Windows host with
+# "Cannot stop SplunkForwarder service on computer '.'" -- the .NET
+# ServiceController cannot stop this service cleanly. Splunk's own binary
+# manages its lifecycle correctly, and this is the failure mode that matters
+# most on a cutover: the template writes the new indexer list, the restart
+# fails, and the estate keeps forwarding to an address that no longer receives
+# while the config on disk says otherwise.
 #
 # Skipped when the installer just changed, because the reboot below covers it.
 - name: Restart the forwarder if any config changed
-  ansible.windows.win_service:
-    name: SplunkForwarder
-    state: restarted
+  ansible.windows.win_shell: |
+    & '{{ splunk_forwarder_win_dir }}\bin\splunk.exe' restart
+  register: uf_restart
+  changed_when: true
   when:
     - splunk_install_result is not changed
     - inputs_conf_stat.changed or outputs_conf_stat.changed or limits_conf_stat.changed
+
+# Assert the OUTCOME. `splunk restart` exiting 0 is not the same as the service
+# being back up, and a forwarder that is down forwards nothing just as quietly
+# as one pointed at the wrong address.
+- name: The forwarder service must be running after the restart
+  ansible.windows.win_service:
+    name: SplunkForwarder
+  register: uf_state
+  until: uf_state.state == 'running'
+  retries: 12
+  delay: 10
+  when: uf_restart is changed
 
 - name: "Define the splunk services"
   set_fact:

@@ -136,6 +136,20 @@
   become: yes
   when: rsyslog_config_deployed.changed
 
+# The Linux path registered its three config templates and never acted on them
+# either, so outputs.conf could be rewritten -- including the 2026-08-19
+# repoint from a single indexer to the cluster -- while the running forwarder
+# kept using the old target. Same defect as the Windows path, found at the same
+# time.
+- name: Restart the forwarder if any config changed
+  ansible.builtin.command: /opt/splunkforwarder/bin/splunk restart
+  become: true
+  register: lin_uf_restart
+  changed_when: true
+  when: >-
+    inputs_conf_stat.changed or outputs_conf_stat.changed
+    or limits_conf_stat.changed
+
 - name: Check if Splunk has been started before
   ansible.builtin.stat:
     path: "/opt/splunkforwarder/etc/splunk-launch.conf"
