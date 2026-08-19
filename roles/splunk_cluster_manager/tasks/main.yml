@@ -7,6 +7,13 @@
 # full, and `splunk edit cluster-config` writes the [clustering] stanza into
 # that same file -- so a base-role run without this role behind it silently
 # strips the cluster configuration.
+#
+# NO no_log ON THESE TASKS, deliberately. They pass -auth on the command line,
+# and an earlier version hid that with no_log -- which censored the failure
+# output of the one task that failed and cost a round trip to diagnose. The
+# credential is splunk_admin_password, already plaintext in group_vars/all.yml
+# and in the repo, so no_log protected nothing real and blinded the thing that
+# mattered. Same reasoning in roles/splunk_indexer.
 # =========================================================================
 
 - name: Wait for the Splunk REST API before configuring the cluster
@@ -30,7 +37,6 @@
   register: cm_current
   changed_when: false
   failed_when: false
-  no_log: true
 
 # `edit cluster-config` is not idempotent in the useful sense -- it always
 # reports success and always requires a restart afterwards. Gate on the mode
@@ -46,7 +52,6 @@
     -auth {{ splunk_admin }}:{{ splunk_admin_password }}
   when: "'mode:manager' not in (cm_current.stdout | default('') | regex_replace('\\s+', ''))"
   register: cm_configured
-  no_log: true
 
 - name: Restart Splunk to apply cluster-manager mode
   ansible.builtin.command: /opt/splunk/bin/splunk restart
@@ -91,7 +96,6 @@
   when: cm_indexes is changed
   register: cm_bundle
   changed_when: true
-  no_log: true
 
 - name: Report cluster manager state
   ansible.builtin.debug:

@@ -1,0 +1,17 @@
+---
+# Cluster peers must NOT define indexes locally.
+#
+# The base `splunk` role loops `indices` through `splunk add index`, which
+# writes /opt/splunk/etc/system/local/indexes.conf. On a clustered peer that is
+# actively harmful: system/local takes precedence over app configuration, so a
+# local stanza OVERRIDES the cluster bundle's definition of the same index --
+# including its `repFactor = auto`.
+#
+# The failure mode is quiet and bad. The index exists and accepts data, so
+# everything looks healthy, but its buckets are not replicated. `show
+# cluster-status` still reports the replication and search factors met, because
+# there are no replicated buckets for it to be short on.
+#
+# Indexes for the cluster live in ONE place: the manager-apps bundle on
+# pp-splunk-cm (roles/splunk_cluster_manager/templates/indexes.conf.j2).
+indices: []

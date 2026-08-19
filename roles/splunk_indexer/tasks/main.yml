@@ -10,6 +10,17 @@
 # correct on a peer and is deliberately left alone here.
 # =========================================================================
 
+# An earlier deploy ran the base role with a populated `indices`, which wrote
+# system/local/indexes.conf on the peers. That file OVERRIDES the cluster
+# bundle for the same stanza, including repFactor -- the index then works and
+# is silently unreplicated. group_vars/splunk_indexer.yml stops it being
+# created; this removes what is already there.
+- name: Remove locally-defined indexes so the cluster bundle is authoritative
+  ansible.builtin.file:
+    path: /opt/splunk/etc/system/local/indexes.conf
+    state: absent
+  register: idx_local_indexes
+
 - name: Wait for the Splunk REST API before joining the cluster
   ansible.builtin.uri:
     url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/server/info"
@@ -48,7 +59,6 @@
   register: idx_current
   changed_when: false
   failed_when: false
-  no_log: true
 
 - name: Join the cluster as a peer
   ansible.builtin.command: >-
@@ -60,22 +70,10 @@
     -auth {{ splunk_admin }}:{{ splunk_admin_password }}
   when: "'mode:peer' not in (idx_current.stdout | default('') | regex_replace('\\s+', ''))"
   register: idx_configured
-  no_log: true
-
-- name: Enable receiving on {{ splunk_indexer_receiving_port }}
-  ansible.builtin.command: >-
-    /opt/splunk/bin/splunk enable listen {{ splunk_indexer_receiving_port }}
-    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
-  register: idx_listen
-  changed_when: "'already' not in (idx_listen.stdout | default('') | lower)"
-  failed_when:
-    - idx_listen.rc != 0
-    - "'already' not in (idx_listen.stdout | default('') | lower)"
-  no_log: true
 
 - name: Restart Splunk to apply peer mode
   ansible.builtin.command: /opt/splunk/bin/splunk restart
-  when: idx_configured is changed
+  when: (idx_configured is changed) or (idx_local_indexes is changed)
   changed_when: true
 
 - name: Wait for the REST API after the restart
@@ -91,6 +89,20 @@
   retries: 30
   delay: 10
   until: idx_api2.status == 200
+
+# The base role's inputs.conf declares [splunktcp://9997]. An earlier version
+# of this role also ran `splunk enable listen 9997`, which is redundant and
+# failed on the second run because the listener already existed -- with the
+# message on stderr, which the failed_when did not check. Assert the port is
+# open instead of re-issuing a command whose success says nothing.
+- name: The receiving port must actually be listening
+  ansible.builtin.shell: |
+    ss -lnt | grep -c ':{{ splunk_indexer_receiving_port }} ' || true
+  register: idx_listening
+  changed_when: false
+  until: (idx_listening.stdout | trim | int) > 0
+  retries: 12
+  delay: 10
 
 # Assert from the MANAGER's view, not this peer's. A peer reporting itself
 # configured is transport; the manager listing it Up is the outcome. This is
@@ -110,7 +122,6 @@
   until: (idx_peer_up.stdout | trim | int) > 0
   retries: 12
   delay: 15
-  no_log: true
 
 - name: Report peer state
   ansible.builtin.debug:
