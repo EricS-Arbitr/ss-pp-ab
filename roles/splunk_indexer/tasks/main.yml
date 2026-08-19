@@ -81,13 +81,23 @@
     label: "{{ item.k }}"
   register: idx_clustering
 
-# The replication listener is a bare stanza with no keys — how peers stream
-# buckets to each other. Without it a peer joins and then cannot replicate,
-# which shows up as the replication factor never being met.
+# The replication listener is a BARE stanza -- no keys -- which is how peers
+# stream buckets to each other. Without it a peer joins successfully and then
+# cannot replicate, presenting as the replication factor never being met rather
+# than as a configuration error.
+#
+# lineinfile rather than ini_file: ini_file refuses a section with no options
+# ("Parameter 'value(s)' must be defined"), and the alternative was to invent a
+# key just to satisfy the module. Writing an unverified key into a vendor's
+# config to work around a module constraint is how you get a setting nobody can
+# explain later. The regexp makes it idempotent and replaces the stanza if the
+# port ever changes.
 - name: Open the replication port
-  community.general.ini_file:
+  ansible.builtin.lineinfile:
     path: /opt/splunk/etc/system/local/server.conf
-    section: "replication_port://{{ splunk_replication_port }}"
+    line: "[replication_port://{{ splunk_replication_port }}]"
+    regexp: '^\[replication_port://'
+    state: present
     mode: '0600'
   register: idx_replport
 
