@@ -50,6 +50,20 @@
     dest: "{{ splunk_forwarder_win_dir }}/etc/system/local/limits.conf"
   register: limits_conf_stat
 
+# The three templates above were registered and never acted on, so a config
+# change reached disk and the running forwarder never read it. Adding a DNS
+# input and seeing nothing arrive in Splunk is what surfaced this -- the input
+# was correct and simply not loaded.
+#
+# Skipped when the installer just changed, because the reboot below covers it.
+- name: Restart the forwarder if any config changed
+  ansible.windows.win_service:
+    name: SplunkForwarder
+    state: restarted
+  when:
+    - splunk_install_result is not changed
+    - inputs_conf_stat.changed or outputs_conf_stat.changed or limits_conf_stat.changed
+
 - name: "Define the splunk services"
   set_fact:
     splunk_service: "SplunkForwarder"
