@@ -66,6 +66,11 @@ dns_debug_log_max_mb: 500
 # assertion fails instead of silently logging nothing.
 dns_debug_log_min_bytes: 50000
 
+# The path DNS writes to and the forwarder monitors. Both sides must agree --
+# the play sets LogFilePath to this and win_inputs.conf.j2 points
+# MonitorNoHandle at the same value, so they cannot drift apart.
+dns_debug_log_path: 'C:\Windows\System32\dns\dns.log'
+
 # Central syslog collector. All Linux/VyOS/pfSense hosts forward to this IP.
 # pp-syslog runs rsyslog listening on UDP+TCP 514, writes per-host files at
 # /var/log/remote/<hostname>/syslog.log, and the Splunk UF on pp-syslog
