@@ -1,0 +1,8 @@
+---
+# A search head stores no indexed data.
+#
+# Same reasoning as group_vars/splunk_indexer.yml: the base `splunk` role loops
+# `indices` through `splunk add index`, which would create local indexes on a
+# host that should be searching the peers, not indexing. On a search head those
+# local indexes shadow the cluster's and quietly answer searches with nothing.
+indices: []

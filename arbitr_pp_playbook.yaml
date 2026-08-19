@@ -673,36 +673,15 @@
     - chrome
     - autologin
 
-- name: splunk server
-  hosts: splunk
-  gather_facts: true
-  become: true
-  roles:
-    - role: splunk
-      tags: ['splunk_core']
-    - role: splunk-es
-      tags: ['splunk-es']
-    # Must follow splunk-es: the smoke test at the end of this role queries a
-    # CIM data model, which does not exist until ES is installed.
-    - role: splunk-verify-user
-      tags: ['splunk-verify-user']
-  # `--tags splunk` still runs all three. The per-role tags above make each one
-  # runnable alone, which matters on an already-deployed range: play-level tags
-  # apply to every role in the play, so without these, applying just the
-  # verification account would drag in splunk-es and re-run essinstall.
-  tags:
-    - splunk
-
 # =============================================================================
 # Distributed Splunk — cluster manager, then peers
 # =============================================================================
 # Build sheet: docs/splunk/pp-splunk-distributed-build-sheet.md
 #
-# STAGE 1 ONLY. This builds the cluster alongside the working single instance;
-# it does not touch pp-splunk, does not repoint any forwarder, and does not
-# retire splunk_server_ip. The existing `splunk server` play above keeps
-# running exactly as before. Cutover is a separate, deliberate step taken once
-# the cluster demonstrably receives data.
+# Cutover completed 2026-08-19. pp-splunk is now the dedicated ES search head
+# (play below), forwarders point at the peers, and splunk_server_ip is retired.
+# The cluster was verified healthy -- both peers Up, both factors met -- BEFORE
+# any forwarder was repointed.
 #
 # The base `splunk` role and the tier role are in the SAME play on purpose and
 # share the play's tags. The base role templates
@@ -734,6 +713,42 @@
   tags:
     - splunk_cluster
     - splunk_idx
+
+# =============================================================================
+# Splunk search head — the cutover
+# =============================================================================
+# MOVED HERE DELIBERATELY. This play used to sit ahead of the cluster plays,
+# where pp-splunk was a self-contained single instance and order did not
+# matter. As a search head it must join a manager that is already in manager
+# mode -- a search head that joins early is configured but never registers, and
+# neither side reports an error.
+#
+# CUTOVER SEMANTICS: pp-splunk stops indexing. It keeps 172.16.9.20 and stays
+# the analyst-facing address, but stores no data and stops accepting forwarder
+# connections. Buckets previously indexed here become unsearchable; confirmed
+# acceptable 2026-08-19 -- development phase, no customer data.
+- name: Splunk search head
+  hosts: splunk_search_head
+  gather_facts: true
+  become: true
+  roles:
+    - splunk
+    - splunk_search_head
+    # Must follow splunk_search_head: ES is installed on a host that is already
+    # a cluster search head, so its data models resolve against the peers.
+    - role: splunk-es
+      tags: ['splunk-es']
+    # Must follow splunk-es: the smoke test at the end of this role queries a
+    # CIM data model, which does not exist until ES is installed.
+    - role: splunk-verify-user
+      tags: ['splunk-verify-user']
+  # The base role and splunk_search_head share the play tags on purpose. The
+  # base role rewrites server.conf in full and the [clustering] stanza lives in
+  # it, so running the base role without the tier role behind it silently
+  # strips the search head's cluster configuration.
+  tags:
+    - splunk
+    - splunk_sh
 
 - name: global_dns
   hosts: global_dns
@@ -884,7 +899,7 @@
   become: true
   roles:
     - role: splunk-forwarder
-      when: splunk_server_ip is defined
+      when: splunk_indexers is defined and (splunk_indexers | length) > 0
   tags:
     - splunk-forwarder
 

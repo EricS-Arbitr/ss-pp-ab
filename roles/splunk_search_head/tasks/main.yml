@@ -1,0 +1,130 @@
+---
+# =========================================================================
+# splunk_search_head — convert pp-splunk into a dedicated ES search head
+# =========================================================================
+# Runs AFTER the cluster manager and indexer plays. A search head that joins
+# before the manager is in manager mode is configured but never registers, and
+# nothing on either side reports an error.
+#
+# Cluster configuration is written as server.conf STATE with ini_file, for the
+# reasons recorded in roles/splunk_cluster_manager: `splunk edit cluster-config`
+# returns success while leaving [clustering] empty, and `show cluster-config`
+# is not a valid subcommand on this build.
+# =========================================================================
+
+- name: Wait for the Splunk REST API
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: sh_api
+  retries: 30
+  delay: 10
+  until: sh_api.status == 200
+
+# server.conf takes mode = manager; /services/cluster/config reports it back as
+# the legacy "master". Both accepted -- the API and the config file genuinely
+# disagree on this build.
+- name: Wait for the cluster manager to be in manager mode
+  ansible.builtin.uri:
+    url: "https://{{ splunk_cluster_manager_ip }}:{{ splunk_mgmt_port }}/services/cluster/config?output_mode=json"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: sh_cm_mode
+  retries: 30
+  delay: 10
+  until: (sh_cm_mode.json.entry[0].content.mode | default('')) in ['manager', 'master']
+
+- name: Remove locally-defined indexes so the peers are authoritative
+  ansible.builtin.file:
+    path: /opt/splunk/etc/system/local/indexes.conf
+    state: absent
+  register: sh_local_indexes
+
+- name: Configure the [clustering] stanza for search-head mode
+  community.general.ini_file:
+    path: /opt/splunk/etc/system/local/server.conf
+    section: clustering
+    option: "{{ item.k }}"
+    value: "{{ item.v }}"
+    mode: '0600'
+    no_extra_spaces: true
+  loop:
+    - { k: 'mode',         v: 'searchhead' }
+    - { k: 'manager_uri',  v: 'https://{{ splunk_cluster_manager_ip }}:{{ splunk_mgmt_port }}' }
+    - { k: 'pass4SymmKey', v: '{{ splunk_cluster_secret }}' }
+  loop_control:
+    label: "{{ item.k }}"
+  register: sh_clustering
+
+# A search head must not accept forwarder data. The base `splunk` role's
+# inputs.conf opens [splunktcp://9997] on every host it touches, which is
+# correct on a peer and wrong here -- forwarders that still hold the old
+# address would keep delivering to a host that no longer indexes, and the data
+# would land nowhere visible.
+- name: Stop accepting forwarder data on this host
+  community.general.ini_file:
+    path: /opt/splunk/etc/system/local/inputs.conf
+    section: "splunktcp://{{ splunk_sh_receiving_port }}"
+    option: disabled
+    value: "1"
+    mode: '0644'
+    no_extra_spaces: true
+  register: sh_receiving
+
+- name: Restart Splunk to apply search-head mode
+  ansible.builtin.command: /opt/splunk/bin/splunk restart
+  when: >-
+    (sh_clustering is changed) or (sh_receiving is changed)
+    or (sh_local_indexes is changed)
+  changed_when: true
+
+- name: Wait for the REST API after the restart
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: sh_api2
+  retries: 30
+  delay: 10
+  until: sh_api2.status == 200
+
+# THE OUTCOME: this search head can actually search both peers. Holding the
+# config is transport; distributed search listing the peers is the thing ES
+# depends on. Asserted structurally -- entry count -- rather than on field
+# names I have not observed on this build.
+- name: The search head must see both indexers as distributed search peers
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/search/distributed/peers?output_mode=json&count=0"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: sh_peers
+  retries: 20
+  delay: 15
+  until: (sh_peers.json.entry | default([]) | length) >= (groups['splunk_indexer'] | length)
+  failed_when: (sh_peers.json.entry | default([]) | length) < (groups['splunk_indexer'] | length)
+
+- name: Report search head state
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: search head for '{{ splunk_cluster_label }}',
+      {{ sh_peers.json.entry | length }} distributed search peers,
+      receiving on {{ splunk_sh_receiving_port }} DISABLED (stores no data).

@@ -35,7 +35,7 @@ Variables for this role are defined in:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| splunk_server_ip | Yes* | IP address of the Splunk indexer (*role only runs when defined) |
+| splunk_indexers | Yes* | List of indexer IPs the forwarder load-balances across (*play only runs when defined and non-empty). Replaced splunk_server_ip 2026-08-19. |
 | splunk_forwarder_port | Yes | Port to connect to Splunk on |
 | splunk_user | Yes | User to install forwarder on linux machines |
 | splunk_Password | Yes | Password for user on linux forwarder machines |
@@ -66,7 +66,9 @@ splunk_forwarder_admin_password: "simspace1"
 ```
 group_vars/site.yml
 ```yaml
-splunk_server_ip: "172.16.3.20"
+splunk_indexers:
+  - "172.16.9.21"
+  - "172.16.9.22"
 splunk_forwarder_port: "9997"
 splunk_user: "admin"
 splunk_password: "simspace1"

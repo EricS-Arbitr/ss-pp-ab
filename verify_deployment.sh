@@ -48,6 +48,10 @@ note()    { printf "  ${D}%s${N}\n" "$1"; }
 
 A() { ansible "$@" 2>&1; }
 
+# Splunk admin auth for the cluster-status checks in section 7. Read from
+# group_vars rather than hardcoded, so it follows a credential change.
+SPLUNK_AUTH="admin:$(grep -m1 '^splunk_admin_password:' group_vars/all.yml 2>/dev/null | cut -d'"' -f2)"
+
 n_hosts() {
   ansible "$1" --list-hosts 2>/dev/null | tail -n +2 | sed '/^$/d' | wc -l | tr -d ' '
 }
@@ -443,12 +447,17 @@ section "7. SOC tier — Splunk SIEM"
 check_pf_shell pp-splunk \
   'systemctl is-active Splunkd || systemctl is-active splunk' \
   'active' \
-  "pp-splunk indexer service active"
+  "pp-splunk: Splunk service active (search head)"
 
+# pp-splunk is a SEARCH HEAD as of the 2026-08-19 cutover. It must NOT be
+# listening on 9997 -- a search head that still accepts forwarder connections
+# means some forwarders are delivering to a host that stores nothing, and the
+# data lands nowhere visible with no error at either end. Asserting the
+# ABSENCE is the only way that shows up.
 check_pf_shell pp-splunk \
-  'ss -lnt | grep -qE ":9997\\b" && echo OK_9997 || echo MISSING_9997' \
-  'OK_9997' \
-  "pp-splunk listening on :9997 (UF receiver)"
+  'ss -lnt | grep -qE ":9997\\b" && echo STILL_RECEIVING || echo NOT_RECEIVING' \
+  'NOT_RECEIVING' \
+  "pp-splunk: NOT listening on :9997 (search head stores no data)"
 
 check_pf_shell pp-splunk \
   'ss -lnt | grep -qE ":8000\\b" && echo OK_8000 || echo MISSING_8000' \
@@ -460,30 +469,69 @@ check_pf_shell pp-splunk \
   'OK_8089' \
   "pp-splunk listening on :8089 (Splunk REST/mgmt)"
 
+# The indexer tier is what receives now.
+for idx in pp-splunk-idx01 pp-splunk-idx02; do
+  check_pf_shell "$idx" \
+    'systemctl is-active Splunkd || systemctl is-active splunk' \
+    'active' \
+    "$idx: Splunk service active"
+
+  check_pf_shell "$idx" \
+    'ss -lnt | grep -qE ":9997\\b" && echo OK_9997 || echo MISSING_9997' \
+    'OK_9997' \
+    "$idx: listening on :9997 (UF receiver)"
+
+  # Without the replication listener a peer joins and then cannot replicate,
+  # which presents as the replication factor never being met rather than as a
+  # configuration error.
+  check_pf_shell "$idx" \
+    'ss -lnt | grep -qE ":9887\\b" && echo OK_9887 || echo MISSING_9887' \
+    'OK_9887' \
+    "$idx: listening on :9887 (bucket replication)"
+done
+
+# The cluster's own view. Peers can each be Up while nothing replicates, and
+# the factors are the only place that shows.
+check_pf_shell pp-splunk-cm \
+  "/opt/splunk/bin/splunk show cluster-status -auth '$SPLUNK_AUTH' 2>/dev/null | grep -cE '(Replication|Search) factor met'" \
+  '2' \
+  "pp-splunk-cm: replication AND search factors met"
+
+check_pf_shell pp-splunk-cm \
+  "/opt/splunk/bin/splunk show cluster-status -auth '$SPLUNK_AUTH' 2>/dev/null | grep -c 'Status  *Up'" \
+  '2' \
+  "pp-splunk-cm: both peers Up"
+
 # pp-syslog UF forwarding /var/log/remote/* -- catches "UF running but no
-# ESTABLISHED conn to indexer" silent break.
+# ESTABLISHED conn to an indexer" silent break. Now checks the TIER: a UF
+# auto-load-balances, so at any instant it holds a connection to one peer, not
+# necessarily a specific one.
 check_pf_shell pp-syslog \
   'systemctl is-active SplunkForwarder' \
   'active' \
   "pp-syslog SplunkForwarder service active"
 
 check_pf_shell pp-syslog \
-  'c=$(ss -ant | grep "172.16.9.20:9997" | grep -c ESTAB); [ "$c" -ge 1 ] && echo OK_ESTAB || echo NO_ESTAB' \
+  'c=$(ss -ant | grep -E "172\\.16\\.9\\.(21|22):9997" | grep -c ESTAB); [ "$c" -ge 1 ] && echo OK_ESTAB || echo NO_ESTAB' \
   'OK_ESTAB' \
-  "pp-syslog UF has ESTABLISHED connection to indexer :9997"
+  "pp-syslog UF has ESTABLISHED connection to an indexer :9997"
 
-# Total forwarder count, derived from the inventory rather than a constant.
-# The previous hardcoded floor of 30 was set before win-hunt-2..6 joined
-# [splunk-forwarder] on 2026-08-17: it would have kept passing while five new
-# hosts silently failed to forward, because 30 was already satisfied without
-# them. A stale threshold is a check that stops checking. 10% margin absorbs
-# UFs mid-reconnect.
+# Total forwarder count, derived from the inventory rather than a constant, and
+# summed ACROSS the peers -- auto-load-balancing spreads the estate over both,
+# so neither peer alone carries them all.
 uf_expected=$(n_hosts splunk-forwarder)
 uf_floor=$(( uf_expected * 9 / 10 ))
-check_pf_shell pp-splunk \
-  "c=\$(ss -ant | grep ':9997 ' | grep -c ESTAB); [ \"\$c\" -ge $uf_floor ] && echo \"OK_UFS_\$c\" || echo \"LOW_UFS_\$c\"" \
-  'OK_UFS_' \
-  "pp-splunk: >= $uf_floor of $uf_expected inventoried UFs ESTABLISHED on :9997"
+uf_total=0
+for idx in pp-splunk-idx01 pp-splunk-idx02; do
+  c=$(A "$idx" -m ansible.builtin.shell -a "ss -ant | grep ':9997 ' | grep -c ESTAB" --one-line \
+      | grep -oE 'stdout\) [0-9]+' | grep -oE '[0-9]+' | head -1)
+  uf_total=$(( uf_total + ${c:-0} ))
+done
+if [ "$uf_total" -ge "$uf_floor" ]; then
+  pass "indexer tier: $uf_total of $uf_expected inventoried UFs ESTABLISHED (floor $uf_floor)"
+else
+  fail "indexer tier: $uf_total of $uf_expected inventoried UFs ESTABLISHED (floor $uf_floor)"
+fi
 
 # Windows UF service spot check on one workstation + one DC.
 check_ps pp-bp-wkstn-1 \

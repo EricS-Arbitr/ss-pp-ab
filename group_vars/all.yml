@@ -18,16 +18,22 @@ splunk_admin: "admin"
 splunk_admin_password: "simspace1"
 splunk_user: "admin"
 splunk_password: "simspace1"
-splunk_server_ip: "172.16.9.20"          # pp-splunk's PP-Security IP
+# splunk_server_ip: RETIRED 2026-08-19. It meant "the indexer" and pointed at
+# 172.16.9.20, which is now the ES search head and receives nothing. Retired
+# rather than redefined so nothing inherits the old meaning by accident.
+#
+# Its consumers were migrated deliberately: outputs.conf.j2 now renders the
+# splunk_indexers list, and the splunk-forwarder play's `when:` gate -- which
+# tested `splunk_server_ip is defined` -- now tests splunk_indexers. Leaving
+# that gate would have silently SKIPPED the entire forwarder play the moment
+# this line was deleted, and a skipped play reports as a clean run.
 splunk_forwarder_port: "9997"
 
 # --- Distributed Splunk (blueprint ARBITR_PP_147.yml) ---------------------
 # Build sheet: docs/splunk/pp-splunk-distributed-build-sheet.md
 #
-# splunk_server_ip above is NOT retired yet, deliberately. It still means "the
-# indexer" and still points at the working single instance. It is migrated at
-# cutover, once the cluster demonstrably receives data -- redefining it early
-# would silently repoint every forwarder at indexers that are not ready.
+# Cutover completed 2026-08-19: the cluster reported both peers Up and both
+# factors met before forwarders were repointed here.
 splunk_indexers:
   - "172.16.9.21"                       # pp-splunk-idx01
   - "172.16.9.22"                       # pp-splunk-idx02

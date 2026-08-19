@@ -147,7 +147,7 @@ Hosts belong to multiple overlapping groups. Group meanings:
 
 Notable shared variables (defined in `group_vars/all.yml`):
 - `inet_proxy_addr` / `inet_proxy_port` — corporate proxy (10.255.240.1:3128) for any `apt`/`pip`/`win_get_url` traffic.
-- `splunk_server_ip` (`172.16.9.20`), `splunk_forwarder_port` (`9997`).
+- `splunk_indexers` (`172.16.9.21`, `.22`), `splunk_forwarder_port` (`9997`), `splunk_search_head_ip` (`172.16.9.20`), `splunk_cluster_manager_ip` (`172.16.9.23`). `splunk_server_ip` was retired 2026-08-19 when Splunk went distributed — `.20` is the ES search head and receives nothing.
 - `syslog_server_ip` (`172.16.2.9`) — referenced by the three syslog-client plays.
 - `indices` — Splunk index declarations (linux, windows, netfw, sysmon, proxy, mail).
 

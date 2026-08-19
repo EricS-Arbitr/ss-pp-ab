@@ -1,0 +1,7 @@
+---
+# splunk_search_head — dedicated Enterprise Security search head.
+#
+# Joins the cluster as mode=searchhead: it searches the peers and stores no
+# data of its own. ES runs here so its 100+ scheduled correlation searches stop
+# competing with the indexing pipeline -- the argument in build sheet section 3.
+splunk_sh_receiving_port: "9997"

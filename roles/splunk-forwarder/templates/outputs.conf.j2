@@ -1,7 +1,19 @@
+### Managed by Ansible — roles/splunk-forwarder.
+#
+# Forwards to the INDEXER TIER, not to a single server. Auto-load-balancing
+# across the peers is what makes the cluster's replication meaningful from the
+# forwarder's side: data arrives at both peers rather than all landing on one.
+#
+# Migrated from splunk_server_ip (172.16.9.20) on 2026-08-19. That address is
+# now the ES search head and accepts no forwarder connections -- a forwarder
+# still pointed at it would connect to nothing and its data would land nowhere
+# visible, with no error on the endpoint.
 [tcpout]
 defaultGroup = default-autolb-group
 
 [tcpout:default-autolb-group]
-server = {{ splunk_server_ip }}:{{ splunk_forwarder_port }}
+server = {% for ip in splunk_indexers %}{{ ip }}:{{ splunk_forwarder_port }}{% if not loop.last %},{% endif %}{% endfor %}
 
-[tcpout-server://{{ splunk_server_ip }}:{{ splunk_forwarder_port }}]
+{% for ip in splunk_indexers %}
+[tcpout-server://{{ ip }}:{{ splunk_forwarder_port }}]
+{% endfor %}
