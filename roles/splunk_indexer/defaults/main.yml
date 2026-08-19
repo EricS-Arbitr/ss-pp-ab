@@ -1,0 +1,7 @@
+---
+# splunk_indexer — cluster peer.
+#
+# Receives forwarder data on 9997 and replicates buckets to its sibling on
+# 9887. Indexes are NOT defined here: they arrive from the cluster manager's
+# bundle, so this role never writes indexes.conf.
+splunk_indexer_receiving_port: "9997"

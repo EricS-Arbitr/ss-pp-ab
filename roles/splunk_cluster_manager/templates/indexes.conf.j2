@@ -1,0 +1,18 @@
+### Managed by Ansible — roles/splunk_cluster_manager. Do not edit on a peer.
+#
+# Pushed to the PEERS via the cluster manager's bundle. Creating an index
+# directly on a peer instead is one of the two most commonly botched steps in a
+# clustered build (build sheet section 8): the peer serves it until the next
+# bundle push, then the cluster's definition of itself wins and it disappears.
+#
+# repFactor = auto is what makes an index participate in replication. Without
+# it the index exists on the peer but is NOT replicated, so it silently has no
+# redundancy while `show cluster-status` still reports the factors met.
+{% for idx in splunk_cluster_indexes %}
+[{{ idx }}]
+homePath   = $SPLUNK_DB/{{ idx }}/db
+coldPath   = $SPLUNK_DB/{{ idx }}/colddb
+thawedPath = $SPLUNK_DB/{{ idx }}/thaweddb
+repFactor  = auto
+
+{% endfor %}

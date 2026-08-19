@@ -1,0 +1,122 @@
+---
+# =========================================================================
+# splunk_indexer — join the cluster as a peer, receive forwarder data
+# =========================================================================
+# Runs AFTER the base `splunk` role in the same play, for the same reason as
+# the cluster manager: the base role rewrites server.conf wholesale and this
+# role's cluster stanza lives in it.
+#
+# The base role's inputs.conf already opens [splunktcp://9997], which is
+# correct on a peer and is deliberately left alone here.
+# =========================================================================
+
+- name: Wait for the Splunk REST API before joining the cluster
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: idx_api
+  retries: 30
+  delay: 10
+  until: idx_api.status == 200
+
+# The manager must be answering before a peer tries to join. Joining early
+# leaves the peer configured but never registered, and `show cluster-status`
+# on the manager simply does not list it -- no error on either side.
+- name: Wait for the cluster manager to be reachable
+  ansible.builtin.uri:
+    url: "https://{{ splunk_cluster_manager_ip }}:{{ splunk_mgmt_port }}/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: idx_cm_api
+  retries: 30
+  delay: 10
+  until: idx_cm_api.status == 200
+
+- name: Read the current cluster mode
+  ansible.builtin.command: >-
+    /opt/splunk/bin/splunk show cluster-config
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
+  register: idx_current
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Join the cluster as a peer
+  ansible.builtin.command: >-
+    /opt/splunk/bin/splunk edit cluster-config
+    -mode peer
+    -manager_uri https://{{ splunk_cluster_manager_ip }}:{{ splunk_mgmt_port }}
+    -replication_port {{ splunk_replication_port }}
+    -secret {{ splunk_cluster_secret }}
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
+  when: "'mode:peer' not in (idx_current.stdout | default('') | regex_replace('\\s+', ''))"
+  register: idx_configured
+  no_log: true
+
+- name: Enable receiving on {{ splunk_indexer_receiving_port }}
+  ansible.builtin.command: >-
+    /opt/splunk/bin/splunk enable listen {{ splunk_indexer_receiving_port }}
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
+  register: idx_listen
+  changed_when: "'already' not in (idx_listen.stdout | default('') | lower)"
+  failed_when:
+    - idx_listen.rc != 0
+    - "'already' not in (idx_listen.stdout | default('') | lower)"
+  no_log: true
+
+- name: Restart Splunk to apply peer mode
+  ansible.builtin.command: /opt/splunk/bin/splunk restart
+  when: idx_configured is changed
+  changed_when: true
+
+- name: Wait for the REST API after the restart
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: idx_api2
+  retries: 30
+  delay: 10
+  until: idx_api2.status == 200
+
+# Assert from the MANAGER's view, not this peer's. A peer reporting itself
+# configured is transport; the manager listing it Up is the outcome. This is
+# the same distinction that cost six defects elsewhere in this repo.
+- name: The cluster manager must list this peer as Up
+  ansible.builtin.shell: |
+    set -o pipefail
+    /opt/splunk/bin/splunk show cluster-status \
+      -auth '{{ splunk_admin }}:{{ splunk_admin_password }}' 2>/dev/null \
+      | grep -A3 '{{ hostvars[inventory_hostname].network_interfaces[1].ipv4.address }}' \
+      | grep -c 'Up' || true
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['splunk_cluster_manager'][0] }}"
+  register: idx_peer_up
+  changed_when: false
+  until: (idx_peer_up.stdout | trim | int) > 0
+  retries: 12
+  delay: 15
+  no_log: true
+
+- name: Report peer state
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}
+      ({{ hostvars[inventory_hostname].network_interfaces[1].ipv4.address }}):
+      peer of {{ splunk_cluster_manager_ip }}, receiving on
+      {{ splunk_indexer_receiving_port }}, replication
+      {{ splunk_replication_port }} — manager reports Up.

@@ -21,6 +21,42 @@ splunk_password: "simspace1"
 splunk_server_ip: "172.16.9.20"          # pp-splunk's PP-Security IP
 splunk_forwarder_port: "9997"
 
+# --- Distributed Splunk (blueprint ARBITR_PP_147.yml) ---------------------
+# Build sheet: docs/splunk/pp-splunk-distributed-build-sheet.md
+#
+# splunk_server_ip above is NOT retired yet, deliberately. It still means "the
+# indexer" and still points at the working single instance. It is migrated at
+# cutover, once the cluster demonstrably receives data -- redefining it early
+# would silently repoint every forwarder at indexers that are not ready.
+splunk_indexers:
+  - "172.16.9.21"                       # pp-splunk-idx01
+  - "172.16.9.22"                       # pp-splunk-idx02
+splunk_cluster_manager_ip: "172.16.9.23"
+splunk_search_head_ip: "172.16.9.20"    # pp-splunk, analyst-facing
+splunk_replication_port: "9887"
+splunk_mgmt_port: "8089"
+splunk_rf: 2
+splunk_sf: 2
+splunk_cluster_label: "pp-idxc"
+
+# Shared cluster secret. Must be IDENTICAL on the manager, every peer and the
+# search head -- a mismatch shows up as peers that never appear in
+# `splunk show cluster-status`, with the reason only in splunkd.log.
+# Plaintext here to match splunk_admin_password above; this repo has no vault.
+splunk_cluster_secret: "Simspace1!ClusterSecret"
+
+# Indexes the cluster must serve. These are pushed to the PEERS through the
+# cluster manager's manager-apps, never created on a peer directly -- a peer
+# with a hand-made index is not part of the cluster's definition of itself and
+# drifts on the next bundle push.
+splunk_cluster_indexes:
+  - windows
+  - sysmon
+  - linux
+  - netfw
+  - proxy
+  - mail
+
 # Scoped, search-only account used by verify_deployment.sh section 10 so the
 # verifier never needs the admin credential. Role definition and capability
 # grant live in roles/splunk-verify-user/. Kept here in plaintext to match the

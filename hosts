@@ -274,6 +274,9 @@ pp-syslog
 pp-www
 pp-proxy
 pp-splunk
+pp-splunk-idx01
+pp-splunk-idx02
+pp-splunk-cm
 
 [linux:children]
 ubuntu22
@@ -283,6 +286,9 @@ ubuntu22
 # ------------------------------------------------------------
 [security]
 pp-splunk
+pp-splunk-idx01
+pp-splunk-idx02
+pp-splunk-cm
 win-hunt-1
 win-hunt-2
 win-hunt-3
@@ -290,8 +296,33 @@ win-hunt-4
 win-hunt-5
 win-hunt-6
 
+# The single-instance group. Still drives the CURRENT working deployment
+# (roles splunk, splunk-es, splunk-verify-user). Retired only once the cluster
+# below demonstrably receives data -- see docs/splunk/ build sheet section 8.
 [splunk]
 pp-splunk
+
+# ------------------------------------------------------------
+# Distributed Splunk tiers (blueprint ARBITR_PP_147.yml)
+# ------------------------------------------------------------
+# Deliberately NOT in [splunk-forwarder]. That group's children are
+# domain_controllers, corporate_servers, dmz and workstations, and none of
+# these hosts belong to any of them -- an indexer running a UF pointed at the
+# indexer tier forwards to itself.
+[splunk_search_head]
+pp-splunk
+
+[splunk_indexer]
+pp-splunk-idx01
+pp-splunk-idx02
+
+[splunk_cluster_manager]
+pp-splunk-cm
+
+[splunk_cluster:children]
+splunk_search_head
+splunk_indexer
+splunk_cluster_manager
 
 # Central syslog collector — receives from all Linux/VyOS/pfSense hosts,
 # then Splunk UF on this box ships /var/log/remote/* to pp-splunk.

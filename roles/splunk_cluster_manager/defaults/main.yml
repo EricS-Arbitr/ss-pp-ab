@@ -1,0 +1,12 @@
+---
+# splunk_cluster_manager — cluster manager for the PowerPlant indexer cluster.
+#
+# Carries four light singleton roles: cluster manager, license manager,
+# deployment server and monitoring console. Splitting them costs three more VMs
+# that must come up unattended and buys nothing at this scale -- see build sheet
+# section 3.
+#
+# Splunk 9.4.0 terminology: `manager`/`manager_uri`, not the pre-9.0
+# `master`/`master_uri`. Version confirmed from the running instance.
+splunk_cm_apps_dir: /opt/splunk/etc/manager-apps
+splunk_cm_indexes_app: pp_cluster_indexes

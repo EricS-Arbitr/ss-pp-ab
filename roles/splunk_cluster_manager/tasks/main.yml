@@ -1,0 +1,101 @@
+---
+# =========================================================================
+# splunk_cluster_manager
+# =========================================================================
+# Runs AFTER the base `splunk` role in the same play, and must stay in that
+# play. The base role templates /opt/splunk/etc/system/local/server.conf in
+# full, and `splunk edit cluster-config` writes the [clustering] stanza into
+# that same file -- so a base-role run without this role behind it silently
+# strips the cluster configuration.
+# =========================================================================
+
+- name: Wait for the Splunk REST API before configuring the cluster
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: cm_api
+  retries: 30
+  delay: 10
+  until: cm_api.status == 200
+
+- name: Read the current cluster mode
+  ansible.builtin.command: >-
+    /opt/splunk/bin/splunk show cluster-config
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
+  register: cm_current
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+# `edit cluster-config` is not idempotent in the useful sense -- it always
+# reports success and always requires a restart afterwards. Gate on the mode
+# actually being wrong so repeat deploys do not restart Splunk every run.
+- name: Configure this host as the cluster manager
+  ansible.builtin.command: >-
+    /opt/splunk/bin/splunk edit cluster-config
+    -mode manager
+    -replication_factor {{ splunk_rf }}
+    -search_factor {{ splunk_sf }}
+    -secret {{ splunk_cluster_secret }}
+    -cluster_label {{ splunk_cluster_label }}
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
+  when: "'mode:manager' not in (cm_current.stdout | default('') | regex_replace('\\s+', ''))"
+  register: cm_configured
+  no_log: true
+
+- name: Restart Splunk to apply cluster-manager mode
+  ansible.builtin.command: /opt/splunk/bin/splunk restart
+  when: cm_configured is changed
+  changed_when: true
+
+- name: Wait for the REST API after the restart
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ splunk_mgmt_port }}/services/server/info"
+    method: GET
+    user: "{{ splunk_admin }}"
+    password: "{{ splunk_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: cm_api2
+  retries: 30
+  delay: 10
+  until: cm_api2.status == 200
+
+# --- the indexes app, pushed to peers via the bundle ----------------------
+- name: Create the cluster indexes app
+  ansible.builtin.file:
+    path: "{{ splunk_cm_apps_dir }}/{{ splunk_cm_indexes_app }}/local"
+    state: directory
+    mode: '0755'
+
+- name: Template the range's indexes into the app
+  ansible.builtin.template:
+    src: indexes.conf.j2
+    dest: "{{ splunk_cm_apps_dir }}/{{ splunk_cm_indexes_app }}/local/indexes.conf"
+    mode: '0644'
+  register: cm_indexes
+
+# Only pushed when the bundle actually changed. A push restarts peers when the
+# bundle is not reload-compatible, so doing it every run would bounce the
+# indexing tier on every deploy.
+- name: Push the cluster bundle to the peers
+  ansible.builtin.command: >-
+    /opt/splunk/bin/splunk apply cluster-bundle --answer-yes
+    -auth {{ splunk_admin }}:{{ splunk_admin_password }}
+  when: cm_indexes is changed
+  register: cm_bundle
+  changed_when: true
+  no_log: true
+
+- name: Report cluster manager state
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: cluster manager for '{{ splunk_cluster_label }}',
+      RF={{ splunk_rf }} SF={{ splunk_sf }},
+      serving {{ splunk_cluster_indexes | length }} indexes to peers.

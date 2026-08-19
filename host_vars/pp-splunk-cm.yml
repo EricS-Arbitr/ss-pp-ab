@@ -1,0 +1,18 @@
+# pp-splunk-cm — cluster manager + license manager + deployment server + monitoring console
+# Blueprint ARBITR_PP_147.yml: RDP_Ubuntu_Desktop_22.04.5:1.1.0, mgmt on FIRST NIC.
+ansible_host: 10.255.240.211
+network_interfaces:
+  - name: "eth0"
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.211"
+      netmask: "255.255.240.0"
+      gateway: ""
+  - name: "eth1"
+    ipv4:
+      type: "ethernet"
+      address: "172.16.9.23"
+      netmask: "255.255.255.0"
+      gateway: "172.16.9.1"
+    dns:
+      - "172.16.2.7"

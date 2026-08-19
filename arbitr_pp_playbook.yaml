@@ -693,6 +693,48 @@
   tags:
     - splunk
 
+# =============================================================================
+# Distributed Splunk — cluster manager, then peers
+# =============================================================================
+# Build sheet: docs/splunk/pp-splunk-distributed-build-sheet.md
+#
+# STAGE 1 ONLY. This builds the cluster alongside the working single instance;
+# it does not touch pp-splunk, does not repoint any forwarder, and does not
+# retire splunk_server_ip. The existing `splunk server` play above keeps
+# running exactly as before. Cutover is a separate, deliberate step taken once
+# the cluster demonstrably receives data.
+#
+# The base `splunk` role and the tier role are in the SAME play on purpose and
+# share the play's tags. The base role templates
+# /opt/splunk/etc/system/local/server.conf in full, and `edit cluster-config`
+# writes the [clustering] stanza into that same file -- so running the base
+# role without the tier role behind it silently strips the cluster config.
+# Never give them separate tags.
+- name: Splunk cluster manager
+  hosts: splunk_cluster_manager
+  gather_facts: true
+  become: true
+  roles:
+    - splunk
+    - splunk_cluster_manager
+  tags:
+    - splunk_cluster
+    - splunk_cm
+
+# Must follow the cluster manager: a peer that joins before the manager answers
+# is configured but never registers, and the manager simply does not list it --
+# no error on either side.
+- name: Splunk indexer peers
+  hosts: splunk_indexer
+  gather_facts: true
+  become: true
+  roles:
+    - splunk
+    - splunk_indexer
+  tags:
+    - splunk_cluster
+    - splunk_idx
+
 - name: global_dns
   hosts: global_dns
   gather_facts: true
