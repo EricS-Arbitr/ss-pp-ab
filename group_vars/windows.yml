@@ -1,27 +1,26 @@
-# WINDOWS IMAGE CREDENTIALS — the LOCAL account the SimSpace image ships with.
+# WINDOWS IMAGE CREDENTIALS — BASELINE, correct for the SERVER images.
 #
-# Changed 2026-08-20 with the PowerPlant image refresh: was simspace /
-# Simspace1!Simspace1!, now xadmin / ConfigingInTheNameOf1!. These are the
-# out-of-box credentials Ansible uses to reach a host BEFORE it joins the
-# domain, and they keep working afterwards because a local account survives a
-# domain join.
+# The 2026-08-20 image refresh changed the shipped local account on the
+# WORKSTATION images only. Windows Server 2019/2022 still ship simspace, so
+# this stays the baseline and group_vars/win10.yml + win11.yml override it for
+# the 36 workstations.
 #
 # NOT the same thing as domain_admin in group_vars/all.yml. That account is
-# `simspace` and is CREATED BY THE DEPLOY during DC promotion -- it is not
-# supplied by the image and did not change. The two happened to share a
-# password on the old images, which made them easy to confuse.
+# also `simspace` but is CREATED BY THE DEPLOY during DC promotion -- it is not
+# supplied by any image. The two share a password here, which is exactly what
+# makes them easy to confuse.
 #
-# ansible_become_user tracks ansible_user deliberately: `runas` has no
-# separate become password configured, so the two must be the same account or
-# privilege escalation fails on every Windows task.
+# ansible_become_user tracks ansible_user deliberately: `runas` has no separate
+# become password configured, so the two must be the same account or privilege
+# escalation fails on every Windows task.
 ansible_connection: winrm
 ansible_winrm_transport: ntlm
 ansible_port: 5985
-ansible_user: xadmin
-ansible_password: "ConfigingInTheNameOf1!"
+ansible_user: simspace
+ansible_password: "Simspace1!Simspace1!"
 ansible_python_interpreter: python
 ansible_become_method: runas
-ansible_become_user: xadmin
+ansible_become_user: simspace
 staging_dir_windows: "C:\\temp"
 
 # Common installers

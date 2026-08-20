@@ -1,0 +1,17 @@
+---
+# Windows 10 workstation images ship a DIFFERENT local account than the
+# server images as of the 2026-08-20 refresh.
+#
+# Child-group vars override parent-group vars, so these three beat the
+# simspace baseline in group_vars/windows.yml for exactly the 25 hosts in
+# [win10] and nothing else.
+#
+# THE COST OF GETTING THIS WRONG IS NOT AN ERROR, IT IS A DELAY. `init` uses
+# wait_for_connection, which retries on ANY failure including bad credentials
+# and emits no per-host output until every host finishes. A wrong password
+# looks identical to a host that has not booted and burns the full
+# init_wait_timeout (900s) before saying so -- with any_errors_fatal: true on
+# that play, one such host holds all 45.
+ansible_user: xadmin
+ansible_password: "ConfigingInTheNameOf1!"
+ansible_become_user: xadmin
