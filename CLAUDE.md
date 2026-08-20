@@ -165,7 +165,8 @@ Notable shared variables (defined in `group_vars/all.yml`):
 
 5. **Static-route comments cite the destination.** Every `next_hop` value gets an inline comment naming the device on the other end (e.g., `next_hop: "172.16.0.25" # pp-internal-firewall (vmx1 INTERNAL on 172.16.0.24/30)`). This single convention has prevented a known recurring bug class — confusing the local /30 IP with the peer's /30 IP and creating a self-loop default.
 
-6. **Two ansible_user accounts, two truths**:
+6. **Four ansible_user accounts, four truths**:
+   - **Windows** (`group_vars/windows.yml`): `xadmin:ConfigingInTheNameOf1!` — the LOCAL account the SimSpace image ships with, used over WinRM before and after domain join. Changed 2026-08-20 with the image refresh (was `simspace:Simspace1!Simspace1!`). Do **not** confuse it with `domain_admin` (`simspace`) in `group_vars/all.yml`, which the deploy *creates* during DC promotion — on the old images the two shared a password, which made them look interchangeable. `ansible_become_user` must track `ansible_user`: `runas` has no separate become password, so a mismatch fails escalation on every Windows task.
    - **pfSense** (`group_vars/pfsense.yml`): `admin:simspace1`. `simspace` user exists but lacks write access to `/cf/conf/config.xml` (a known pfsensible.core fallback-path issue).
    - **Linux** (`group_vars/linux.yml`): `simspace:Simspace1!` with `become: true` for root tasks.
    - **VyOS** (`group_vars/vyos_routes_only.yml` and equivalent in customer's `group_vars/vyos.yml`): `vyos:Simspace1!`.
