@@ -7,15 +7,37 @@
 # Attempt 3: full playbook again (safety net if retry-scoped attempt didn't cover
 #            a cross-host dependency)
 #
-# --forks 40 (up from Ansible default 5) so full sweeps parallelize
-# aggressively across the ~30-host PowerPlant fleet. Controller has enough
-# headroom (2-4 vCPU on the SimSpace VM); 40 concurrent workers is a
-# comfortable middle ground and matches the airfield-range deploy.sh.
-
+# --forks 52 (up from Ansible default 5) so full sweeps parallelize across the
+# PowerPlant fleet without splitting any play into batches.
+#
+# 52 SPECIFICALLY, raised from 40 on 2026-08-20. Forks below the largest play
+# target silently serialise its tail: with 40, the 45-host [windows] plays ran
+# in two waves, which cost an extra init_wait_delay (15s) on the second and
+# staggered every Windows sweep for no reason.
+#
+# 52 is the largest group any play targets. Measured, not guessed:
+#
+#     52  hosts: windows,linux      <- the `common` role, the heaviest sweep
+#     47  hosts: splunk-forwarder
+#     45  hosts: windows
+#     42  hosts: sysmon
+#     40  hosts: members
+#
+# 45 would have covered [windows] and still split the other two.
+#
+# TRADEOFF: each fork is a separate Python process, so this is a memory
+# question rather than a CPU one -- the workers are almost always blocked on
+# WinRM/SSH I/O, not computing. 40 forks already ran comfortably on this
+# controller; 52 is ~30% more resident memory. If the controller starts
+# swapping during a full sweep, drop this rather than assuming the deploy is
+# slow for another reason.
+#
+# If the fleet grows, re-measure rather than incrementing: a play target one
+# host above FORKS strands a single host running alone at the end of it.
 PLAYBOOK="arbitr_pp_playbook.yaml"
 RETRY_FILE="retry/$PLAYBOOK.retry"
 MAX_ATTEMPTS=3
-FORKS=40
+FORKS=52
 
 # --- Speed knobs -------------------------------------------------------------
 # Trims 5-10 minutes off a full-fleet run vs Ansible defaults.
