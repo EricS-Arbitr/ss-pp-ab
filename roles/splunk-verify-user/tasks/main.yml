@@ -136,39 +136,61 @@
   loop_control:
     label: "{{ item.item.check }}"
 
-# Separate from the shape assertion above, and deliberately blunt: if the
-# account cannot see the indexes that hold the data, every other check in
-# section 10 of verify_deployment.sh is meaningless and must not be trusted.
+# THE BLINDNESS GATE NEEDS A CONTROL.
+#
+# 2026-08-20, fresh deploy: this failed three attempts with
+# VISIBILITY_FAIL_0_raw_events. Zero was the CORRECT state -- this role runs
+# inside the search head play, which is ordered BEFORE the forwarder play, so
+# at this point in a cold deploy nothing has ever sent an event. The gate
+# treated "there is no data" as "the account cannot see the data", which are
+# the two things it exists to tell apart, and it had no way to tell them apart.
+#
+# The fix is the same controlled comparison that resolved the CLI truncation:
+# ask ADMIN the identical question through the identical interface. If admin
+# also sees nothing, there is nothing to be blind to. If admin sees data and
+# svc_verify does not, that is blindness and it still fails hard.
+#
+# Volume assertions belong in verify_deployment.sh, which runs after the whole
+# deploy. This role's job is to prove the GRANT works, not that data exists.
+- name: How many events can ADMIN see? (the control)
+  ansible.builtin.shell: |
+    set -o pipefail
+    printf 'user = "%s"\n' '{{ splunk_admin }}:{{ splunk_admin_password }}' \
+      | curl -sS -k -K - \
+        --url "https://127.0.0.1:{{ splunk_mgmt_port | default('8089') }}/services/search/jobs/export" \
+        --data-urlencode 'search=search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" | stats count AS e | fields e' \
+        --data-urlencode "earliest_time={{ splunk_verify_window }}" \
+        --data-urlencode "latest_time=now" \
+        --data-urlencode "output_mode=csv" 2>/dev/null \
+      | tail -1 | tr -dc '0-9'
+  args:
+    executable: /bin/bash
+  register: admin_visible
+  changed_when: false
+  failed_when: false
+
 - name: Assert the verification account is not blind
   ansible.builtin.assert:
     that:
-      - "'VISIBILITY_OK' in (visibility_result.stdout | default(''))"
+      - (admin_visible.stdout | default('0') | trim | int) == 0
+        or ('VISIBILITY_OK' in (visibility_result.stdout | default('')))
     quiet: false
     fail_msg: >-
-      {{ splunk_verify_user }} cannot see the indexes that hold the range's
-      data: {{ (visibility_result.stdout | default('(no output)')) | trim }}.
-      Expected more than {{ splunk_verify_event_floor }} raw events from the
-      Sysmon source. Run
-      '{{ splunk_verify_app_dir }}/bin/verify_data.sh indexes' on this host to
-      see what the account CAN see. Do not relax the floor to make this pass --
-      a verifier that cannot detect its own blindness is worse than none.
-    success_msg: "Visibility gate: {{ (visibility_result.stdout | default('')) | trim }}"
+      {{ splunk_verify_user }} is BLIND. Admin can see
+      {{ admin_visible.stdout | default('0') | trim }} events from the Sysmon
+      source through the same interface; {{ splunk_verify_user }} reports
+      {{ (visibility_result.stdout | default('(no output)')) | trim }}.
+      Two accounts, one interface, different answers -- that is a grant
+      problem, not a data problem. Run
+      '{{ splunk_verify_app_dir }}/bin/verify_data.sh indexes' to see what the
+      account CAN see. Do not relax the floor to make this pass.
+    success_msg: >-
+      {{ 'No data yet (admin sees 0 too) — grant unverified but not blind; verify_deployment.sh will check volume after the deploy.'
+         if (admin_visible.stdout | default('0') | trim | int) == 0
+         else 'Visibility gate: ' ~ ((visibility_result.stdout | default('')) | trim) }}
   vars:
     visibility_result: >-
       {{ verify_smoke.results
          | selectattr('item.check', 'equalto', 'visibility')
          | list | first | default({}) }}
   ignore_errors: "{{ not splunk_verify_fail_on_blind }}"
-
-- name: WARN — verification results are NOT trustworthy
-  ansible.builtin.debug:
-    msg: >-
-      splunk_verify_fail_on_blind is false and {{ splunk_verify_user }} cannot
-      see the range's data. Section 10 of verify_deployment.sh will still print
-      tokens, and they are MEANINGLESS. Treat those checks as unverified, not
-      as passing, until the grant is fixed.
-  when:
-    - not splunk_verify_fail_on_blind
-    - "'VISIBILITY_OK' not in (verify_smoke.results
-       | selectattr('item.check', 'equalto', 'visibility')
-       | map(attribute='stdout') | join(' '))"

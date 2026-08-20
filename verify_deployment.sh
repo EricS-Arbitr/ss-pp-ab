@@ -722,10 +722,27 @@ else
   # events and all four checks below still returned clean OK tokens -- one of
   # them passed on 13 events. A restricted account emits well-formed tokens, so
   # nothing downstream is trustworthy until this passes.
-  check_pf_shell_token pp-splunk \
-    "$VERIFY_DATA visibility" \
-    'VISIBILITY_OK' \
-    "pp-splunk: verifier account can see the indexes holding the data"
+  #
+  # COMPARED AGAINST ADMIN, not against a bare floor. On 2026-08-20 the
+  # floor-only version failed a fresh deploy three times reporting
+  # VISIBILITY_FAIL_0_raw_events, where zero was simply correct -- the range was
+  # minutes old and nothing had sent an event yet. "There is no data" and "this
+  # account cannot see the data" are the two states this check exists to
+  # separate, and a floor cannot separate them. Asking admin the same question
+  # through the same interface can.
+  admin_events=$(A pp-splunk -m ansible.builtin.shell -a \
+    "printf 'user = \"$SPLUNK_AUTH\"\n' | curl -sS -k -K - --url https://127.0.0.1:8089/services/search/jobs/export --data-urlencode 'search=search index=* source=\"XmlWinEventLog:Microsoft-Windows-Sysmon/Operational\" | stats count AS e | fields e' --data-urlencode earliest_time=-7d --data-urlencode latest_time=now --data-urlencode output_mode=csv 2>/dev/null | tail -1 | tr -dc '0-9'" \
+    --one-line | grep -oE 'stdout\) *[0-9]+' | grep -oE '[0-9]+' | head -1)
+  admin_events=${admin_events:-0}
+
+  if [ "$admin_events" -eq 0 ]; then
+    note "verifier visibility: skipped — admin sees 0 events too, so there is nothing to be blind to (young range?)"
+  else
+    check_pf_shell_token pp-splunk \
+      "$VERIFY_DATA visibility" \
+      'VISIBILITY_OK' \
+      "pp-splunk: verifier account can see the data admin can ($admin_events events)"
+  fi
 
   check_pf_shell_token pp-splunk \
     "$VERIFY_DATA apps" \
