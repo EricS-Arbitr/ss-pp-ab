@@ -136,42 +136,6 @@
   become: yes
   when: rsyslog_config_deployed.changed
 
-# Same design as the Windows path: restart on OUTCOME, not on change.
-#
-# The Linux path never restarted at all -- three templates registered, none
-# acted on -- so pp-syslog, pp-proxy and pp-www reported clean runs while
-# holding the pre-cutover target. Gating on change would not have been enough
-# either: once a template is correct and the process is stale, nothing ever
-# triggers again.
-- name: Is the forwarder actually connected to an indexer?
-  ansible.builtin.shell: |
-    ss -ant state established 2>/dev/null \
-      | grep -cE '({{ splunk_indexers | map('regex_escape') | join('|') }}):{{ splunk_forwarder_port }}' || true
-  become: true
-  register: lin_uf_conn
-  changed_when: false
-
-- name: Restart the forwarder
-  ansible.builtin.command: /opt/splunkforwarder/bin/splunk restart
-  become: true
-  register: lin_uf_restart
-  changed_when: true
-  when: >-
-    (lin_uf_conn.stdout | trim | int) == 0
-    or inputs_conf_stat.changed or outputs_conf_stat.changed
-    or limits_conf_stat.changed
-
-- name: The forwarder must end up connected to an indexer
-  ansible.builtin.shell: |
-    ss -ant state established 2>/dev/null \
-      | grep -cE '({{ splunk_indexers | map('regex_escape') | join('|') }}):{{ splunk_forwarder_port }}' || true
-  become: true
-  register: lin_uf_conn_after
-  changed_when: false
-  until: (lin_uf_conn_after.stdout | trim | int) > 0
-  retries: 12
-  delay: 10
-
 - name: Check if Splunk has been started before
   ansible.builtin.stat:
     path: "/opt/splunkforwarder/etc/splunk-launch.conf"
@@ -205,3 +169,67 @@
     name: SplunkForwarder
     state: started
     enabled: yes
+
+# --- forwarder must actually be delivering, not merely installed -----------
+# POSITION IS LOAD-BEARING. This block previously sat BEFORE "Start Splunk
+# forwarder for first time and accept license", so on a fresh host it ran
+# `splunk restart` against an installation whose licence had never been
+# accepted. That prints:
+#
+#     Do you agree with this license? [y/n]:
+#
+# and blocks on stdin. In an unattended deploy nothing answers, and the play
+# hangs indefinitely -- observed twice on clean runs, once overnight. It has to
+# come after the first-start/boot-start sequence below.
+#
+# --accept-license --answer-yes --no-prompt on top, so the command can never
+# ask a question even if it is somehow reached early again. And `timeout` on
+# top of THAT, because "cannot hang" should not depend on my having predicted
+# every prompt. A task in an unattended deploy that can block forever is a
+# defect regardless of how unlikely the block is.
+- name: Is the forwarder actually connected to an indexer?
+  ansible.builtin.shell: |
+    ss -ant state established 2>/dev/null \
+      | grep -cE '({{ splunk_indexers | map('regex_escape') | join('|') }}):{{ splunk_forwarder_port }}' || true
+  become: true
+  register: lin_uf_conn
+  changed_when: false
+
+# Restart on OUTCOME, not on change. Restart-when-a-template-changed cannot
+# recover from its own failure: the template lands, the restart fails, and the
+# next run sees no change and skips -- reporting a clean sweep across an estate
+# that cannot deliver a byte.
+- name: Restart the forwarder
+  ansible.builtin.command: >-
+    timeout 300 /opt/splunkforwarder/bin/splunk restart
+    --accept-license --answer-yes --no-prompt
+  become: true
+  register: lin_uf_restart
+  changed_when: true
+  failed_when: lin_uf_restart.rc not in [0, 124]
+  when: >-
+    (lin_uf_conn.stdout | trim | int) == 0
+    or inputs_conf_stat.changed or outputs_conf_stat.changed
+    or limits_conf_stat.changed
+
+- name: Fail clearly if the restart timed out rather than errored
+  ansible.builtin.fail:
+    msg: >-
+      splunk restart on {{ inventory_hostname }} hit the 300s timeout (rc=124).
+      It did not error -- it stopped responding, which historically means it is
+      waiting on a prompt. Check /opt/splunkforwarder/var/log/splunk/splunkd.log
+      and run the command by hand to see what it is asking.
+  when:
+    - lin_uf_restart is not skipped
+    - lin_uf_restart.rc | default(0) == 124
+
+- name: The forwarder must end up connected to an indexer
+  ansible.builtin.shell: |
+    ss -ant state established 2>/dev/null \
+      | grep -cE '({{ splunk_indexers | map('regex_escape') | join('|') }}):{{ splunk_forwarder_port }}' || true
+  become: true
+  register: lin_uf_conn_after
+  changed_when: false
+  until: (lin_uf_conn_after.stdout | trim | int) > 0
+  retries: 12
+  delay: 10

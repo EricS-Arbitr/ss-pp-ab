@@ -78,11 +78,30 @@
 # "Cannot stop SplunkForwarder service on computer '.'" -- the .NET
 # ServiceController cannot stop this service cleanly. Splunk's own binary
 # manages its lifecycle correctly.
+#
+# CANNOT HANG. The Linux twin of this task blocked an unattended deploy
+# overnight, twice, because `splunk restart` on an installation whose licence
+# had not been accepted prints "Do you agree with this license? [y/n]:" and
+# waits on stdin. The MSI here accepts the licence at install time
+# (AGREETOLICENSE=Yes) and this task is skipped on a fresh install anyway, so
+# that exact path does not apply -- but "cannot hang" must not rest on my
+# having predicted every prompt. Flags so it cannot ask, and a hard wait so it
+# cannot block even if it does.
 - name: Restart the forwarder
   ansible.windows.win_shell: |
-    & '{{ splunk_forwarder_win_dir }}\bin\splunk.exe' restart
+    $exe = '{{ splunk_forwarder_win_dir }}\bin\splunk.exe'
+    $p = Start-Process -FilePath $exe `
+           -ArgumentList 'restart','--accept-license','--answer-yes','--no-prompt' `
+           -NoNewWindow -PassThru
+    if (-not $p.WaitForExit(300000)) {
+      $p.Kill()
+      Write-Output 'RESTART_TIMEOUT'
+    } else {
+      Write-Output ("RESTART_EXIT_" + $p.ExitCode)
+    }
   register: uf_restart
   changed_when: true
+  failed_when: "'RESTART_TIMEOUT' in (uf_restart.stdout | default(''))"
   when:
     - splunk_install_result is not changed
     - (uf_conn.output[0] | default('0') | int) == 0

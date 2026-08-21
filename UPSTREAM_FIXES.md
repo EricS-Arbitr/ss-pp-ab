@@ -1025,3 +1025,34 @@ Confirmed not fixable by add-on choice: unpacking both Sysmon add-ons showed `TA
 3. **`FullPackets` off.** `-All $true` includes it, and it appends a full hex dump per packet — 11 MB on `pp-dc01` within the hour. `Splunk_TA_windows` parses the summary line, not the dump.
 
 **Verified**: `Query` 16,647 + `Response` 5,103 across three DCs in 24h, with real `dest`, `record_type` and `reply_code`. Asserted by `verify_deployment.sh` section 10.
+
+---
+
+## 2026-08-21 · bug · roles/splunk-forwarder — `splunk restart` before licence acceptance hangs an unattended deploy forever
+
+**Symptom**: a clean deploy stalls at `splunk-forwarder : Restart the forwarder` and never returns. Observed twice on fresh runs; once it sat on that task overnight. The preceding task reports `ok` on all three Linux hosts, so the play looks alive rather than stuck.
+
+**Detection**: the task before it completes and nothing follows. On the host:
+
+```
+ps -ef | grep splunk
+/opt/splunkforwarder/bin/splunk restart      <- running, no children, no CPU
+```
+
+**Cause**: `splunk restart` on an installation whose licence has never been accepted prints
+
+```
+Do you agree with this license? [y/n]:
+```
+
+and blocks on stdin. Nothing answers in an unattended run, and Ansible has no timeout on `ansible.builtin.command`, so the play waits indefinitely.
+
+Three separate defects compounded, all introduced 2026-08-19 with the connection-based restart:
+
+1. **Position.** The block was inserted immediately before `Check if Splunk has been started before`, so it ran *ahead of* `Start Splunk forwarder for first time and accept license`. On a fresh host the licence had genuinely never been accepted at that point.
+2. **Missing flags.** The surrounding tasks all pass `--accept-license --answer-yes --no-prompt`; this one passed nothing.
+3. **No timeout.** A task that can block forever in an unattended deploy is a defect independent of how it blocks.
+
+**Fix (upstream)**: any invocation of a Splunk CLI verb in an unattended role should carry `--accept-license --answer-yes --no-prompt`, and any long-running `command`/`shell` should be bounded. The base role gets (1) right by construction — its first-start task is ordered correctly and carries the flags — which is exactly why inserting a task ahead of it was so easy to get wrong.
+
+**Workaround in PowerPlant overlay**: the connection-check / restart / assert block moved to **after** the first-start and boot-start sequence, the restart wrapped in `timeout 300` with the licence flags, and `rc=124` reported as a distinct failure ("it stopped responding, which historically means it is waiting on a prompt") rather than a generic non-zero exit. The Windows twin gets the same treatment via `Start-Process -PassThru` + `WaitForExit(300000)` + `Kill()`, even though its MSI accepts the licence at install time — "cannot hang" should not depend on having predicted every prompt.
