@@ -472,18 +472,26 @@
   tags:
     - strip_apipa
 
-- name: Join Domain
-  hosts: members
-  gather_facts: false
-  # NOTE: cannot use `strategy: free` here -- role uses the `pause` module
-  # which bypasses the host loop and is unsupported under the free strategy.
-  # Domain join is one of the slowest plays; if wall-clock matters, convert
-  # `pause` in domain_member_retry to `wait_for` (delegated) as an overlay fix.
-  roles:
-    - domain_member_retry
-  tags:
-    - domain_member_retry
-
+# =============================================================================
+# DOMAIN CONTROLLERS BEFORE DOMAIN MEMBERS
+# =============================================================================
+# MOVED AHEAD OF "Join Domain" on 2026-08-22. It used to follow it, and that
+# ordering guaranteed a failed attempt on every fresh deploy.
+#
+# pp-ctl-wks-01..04 carry DNS 192.168.100.5 (pp-dc03) as their PRIMARY resolver
+# and 172.16.2.7 (pp-dc01) only as secondary. With this play after the join,
+# those four queried a host that was not yet a domain controller and was not
+# yet serving DNS, and failed with:
+#
+#   "The specified domain either does not exist or could not be contacted"
+#
+# then joined cleanly on the next attempt once pp-dc03 had been promoted. Two
+# to four of them failed attempt 1 of every fresh run this week -- read as
+# flaky timing, actually a fixed ordering dependency.
+#
+# dc_status comes with it: it waits for NTDS to be operational on every DC, so
+# the members now join a domain whose controllers are all answering rather than
+# racing a promotion that has not started.
 - name: Additional DC
   hosts: additional_dc
   gather_facts: false
@@ -499,6 +507,19 @@
     - dc_status
   tags:
     - dc_status
+
+
+- name: Join Domain
+  hosts: members
+  gather_facts: false
+  # NOTE: cannot use `strategy: free` here -- role uses the `pause` module
+  # which bypasses the host loop and is unsupported under the free strategy.
+  # Domain join is one of the slowest plays; if wall-clock matters, convert
+  # `pause` in domain_member_retry to `wait_for` (delegated) as an overlay fix.
+  roles:
+    - domain_member_retry
+  tags:
+    - domain_member_retry
 
 # The customer's common/tasks/windows.yml "Disable control net DNS
 # registration" task is a double-no-op: the loop hardcodes "Ehternet0"

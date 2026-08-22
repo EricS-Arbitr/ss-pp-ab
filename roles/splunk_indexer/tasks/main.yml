@@ -105,6 +105,21 @@
   ansible.builtin.command: /opt/splunk/bin/splunk restart
   when: (idx_clustering is changed) or (idx_replport is changed) or (idx_local_indexes is changed)
   changed_when: true
+  # DO NOT judge the restart by its exit code. `splunk restart` returns 1 when
+  # Splunk Web is not up within its own wait, even though splunkd started
+  # cleanly -- observed on pp-splunk-idx02 2026-08-22:
+  #
+  #     Starting splunk server daemon (splunkd)...  Done
+  #     Waiting for web server at http://127.0.0.1:8000 to be available........
+  #     WARNING: web interface does not seem to be available!
+  #     rc=1
+  #
+  # Splunk Web is irrelevant on a cluster peer, and the REST wait immediately
+  # below is the real assertion: it polls until splunkd answers, and fails the
+  # play if it never does. Trusting the CLI's rc failed a whole attempt over a
+  # web server nobody uses, and cascaded -- pp-www then could not connect to an
+  # indexer that had actually restarted fine.
+  failed_when: false
 
 - name: Wait for the REST API after the restart
   ansible.builtin.uri:

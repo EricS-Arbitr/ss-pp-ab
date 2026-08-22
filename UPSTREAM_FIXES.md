@@ -1056,3 +1056,30 @@ Three separate defects compounded, all introduced 2026-08-19 with the connection
 **Fix (upstream)**: any invocation of a Splunk CLI verb in an unattended role should carry `--accept-license --answer-yes --no-prompt`, and any long-running `command`/`shell` should be bounded. The base role gets (1) right by construction — its first-start task is ordered correctly and carries the flags — which is exactly why inserting a task ahead of it was so easy to get wrong.
 
 **Workaround in PowerPlant overlay**: the connection-check / restart / assert block moved to **after** the first-start and boot-start sequence, the restart wrapped in `timeout 300` with the licence flags, and `rc=124` reported as a distinct failure ("it stopped responding, which historically means it is waiting on a prompt") rather than a generic non-zero exit. The Windows twin gets the same treatment via `Start-Process -PassThru` + `WaitForExit(300000)` + `Kill()`, even though its MSI accepts the licence at install time — "cannot hang" should not depend on having predicted every prompt.
+
+---
+
+## 2026-08-22 · bug · arbitr_pp_playbook.yaml — "Join Domain" ran before the additional DCs were promoted
+
+**Symptom**: two to four of `pp-ctl-wks-01..04` fail attempt 1 of every fresh deploy with
+
+```
+Computer 'pp-ctl-wks-02' failed to join domain 'voltgrid.com' from its current
+workgroup 'WORKGROUP' with following error message: The specified domain either
+does not exist or could not be contacted.
+```
+
+and join cleanly on attempt 2. Reads as flaky timing on a busy range. It is not.
+
+**Detection**: compare the DNS servers of the hosts that fail against those that don't.
+
+```
+pp-ctl-wks-02   dns: 192.168.100.5 (pp-dc03), 172.16.2.7 (pp-dc01)
+pp-bp-wkstn-1   dns: 172.16.2.7   (pp-dc01)
+```
+
+Only the OT workstations name `pp-dc03` first — and `pp-dc03` was promoted by the **Additional DC** play, which ran *after* **Join Domain**. Those four were querying a machine that was not a domain controller and was not serving DNS. The `pp-dc01` secondary does not save them: a host that answers and refuses is not the same as one that times out, and the resolver does not always fail over.
+
+**Fix (upstream)**: the reference playbook orders member join before additional-DC promotion. Any host whose primary resolver is an additional DC cannot join until that DC exists, so promotion must precede the join. `dc_status` — which waits for NTDS to be operational on every DC — belongs in front of the join for the same reason.
+
+**Workaround in PowerPlant overlay**: **Additional DC** and **dc_status** moved ahead of **Join Domain**. Members now join a domain whose controllers are all answering, rather than racing a promotion that has not started. Play count asserted unchanged at 48 across the move.
