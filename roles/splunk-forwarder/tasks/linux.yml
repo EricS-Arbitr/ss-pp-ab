@@ -199,29 +199,24 @@
 # recover from its own failure: the template lands, the restart fails, and the
 # next run sees no change and skips -- reporting a clean sweep across an estate
 # that cannot deliver a byte.
+#
+# systemd, NOT `splunk restart`. By this point boot-start has created
+# SplunkForwarder.service and the base role has started it, so the UF is a
+# systemd unit and the CLI is the wrong tool for it: on 2026-08-21
+# `splunk restart` hit the 300s timeout on pp-proxy across all three deploy
+# attempts and on pp-www once, while pp-syslog completed normally. systemd
+# restarts it without a shell, without a prompt to hang on, and bounded by its
+# own job timeout rather than one I chose.
 - name: Restart the forwarder
-  ansible.builtin.command: >-
-    timeout 300 /opt/splunkforwarder/bin/splunk restart
-    --accept-license --answer-yes --no-prompt
+  ansible.builtin.systemd:
+    name: SplunkForwarder
+    state: restarted
   become: true
   register: lin_uf_restart
-  changed_when: true
-  failed_when: lin_uf_restart.rc not in [0, 124]
   when: >-
     (lin_uf_conn.stdout | trim | int) == 0
     or inputs_conf_stat.changed or outputs_conf_stat.changed
     or limits_conf_stat.changed
-
-- name: Fail clearly if the restart timed out rather than errored
-  ansible.builtin.fail:
-    msg: >-
-      splunk restart on {{ inventory_hostname }} hit the 300s timeout (rc=124).
-      It did not error -- it stopped responding, which historically means it is
-      waiting on a prompt. Check /opt/splunkforwarder/var/log/splunk/splunkd.log
-      and run the command by hand to see what it is asking.
-  when:
-    - lin_uf_restart is not skipped
-    - lin_uf_restart.rc | default(0) == 124
 
 - name: The forwarder must end up connected to an indexer
   ansible.builtin.shell: |

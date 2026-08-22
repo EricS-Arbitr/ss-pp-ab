@@ -1029,8 +1029,16 @@
           $me = '{{ hostvars[inventory_hostname].network_interfaces
                     | rejectattr("ipv4.address", "match", "10\.255\.(24[0-9]|25[0-5])\.")
                     | map(attribute="ipv4.address") | first }}'
-          foreach ($n in @('{{ domain_name }}', 'www.voltgrid.com', 'pp-file.{{ domain_name }}')) {
-            try { Resolve-DnsName -Name $n -Server $me -DnsOnly -ErrorAction SilentlyContinue | Out-Null } catch {}
+          # Enough queries that an idle secondary DC clears the byte floor.
+          # dc01 answers most of the range's traffic; dc02/dc03 may see almost
+          # none, so the check has to supply its own.
+          $names = @('{{ domain_name }}', 'www.voltgrid.com', 'pp-file.{{ domain_name }}',
+                     'pp-dc01.{{ domain_name }}', 'pp-sql.{{ domain_name }}',
+                     'pp-mail.{{ domain_name }}', 'billing.voltgrid.com')
+          foreach ($pass in 1..4) {
+            foreach ($n in $names) {
+              try { Resolve-DnsName -Name $n -Server $me -DnsOnly -ErrorAction SilentlyContinue | Out-Null } catch {}
+            }
           }
           Write-Output ("queried via " + $me)
       changed_when: false
@@ -1078,8 +1086,16 @@
           $me = '{{ hostvars[inventory_hostname].network_interfaces
                     | rejectattr("ipv4.address", "match", "10\.255\.(24[0-9]|25[0-5])\.")
                     | map(attribute="ipv4.address") | first }}'
-          foreach ($n in @('{{ domain_name }}', 'www.voltgrid.com', 'pp-file.{{ domain_name }}')) {
-            try { Resolve-DnsName -Name $n -Server $me -DnsOnly -ErrorAction SilentlyContinue | Out-Null } catch {}
+          # Enough queries that an idle secondary DC clears the byte floor.
+          # dc01 answers most of the range's traffic; dc02/dc03 may see almost
+          # none, so the check has to supply its own.
+          $names = @('{{ domain_name }}', 'www.voltgrid.com', 'pp-file.{{ domain_name }}',
+                     'pp-dc01.{{ domain_name }}', 'pp-sql.{{ domain_name }}',
+                     'pp-mail.{{ domain_name }}', 'billing.voltgrid.com')
+          foreach ($pass in 1..4) {
+            foreach ($n in $names) {
+              try { Resolve-DnsName -Name $n -Server $me -DnsOnly -ErrorAction SilentlyContinue | Out-Null } catch {}
+            }
           }
           Write-Output ("re-queried via " + $me)
       changed_when: false

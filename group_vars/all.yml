@@ -130,11 +130,23 @@ dns_debug_fail_on_empty: false
 # mechanism other than DNS's own rollover.
 dns_debug_log_rollover: false
 
-# Minimum bytes the log must reach after generated traffic. Deliberately well
-# above any plausible byte-interpretation of the cap above: if a future edit
-# reintroduces the unit confusion, the file cannot exceed the cap and this
-# assertion fails instead of silently logging nothing.
-dns_debug_log_min_bytes: 50000
+# Minimum bytes the log must reach after generated traffic.
+#
+# 4096, down from 50000. The larger figure existed to catch a byte-interpreted
+# MaxMBFileSize holding the file under ~500 bytes -- and that parameter is no
+# longer passed at all, so the reason for it is gone.
+#
+# It was also wrong in practice. On 2026-08-21 pp-dc01 cleared 50000 easily
+# while pp-dc02 and pp-dc03 did not, and the difference was not configuration:
+# dc01 is the primary resolver and answers nearly every query in the range,
+# while the secondaries sit almost idle on a fresh build. The check was
+# measuring how busy a DC is, not whether logging works.
+#
+# 4096 still distinguishes the two states that matter. DNS writes a multi-line
+# header (~1-2 KB) the moment logging is enabled, so "header only" and "header
+# plus records" are separable -- and the play generates its own queries against
+# each server precisely so a quiet DC still has something to log.
+dns_debug_log_min_bytes: 4096
 
 # The path DNS writes to and the forwarder monitors. Both sides must agree --
 # the play sets LogFilePath to this and win_inputs.conf.j2 points
