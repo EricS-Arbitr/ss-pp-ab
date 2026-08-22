@@ -980,9 +980,8 @@
             -FullPackets $false `
             -Notifications $false -Update $false `
             -EnableLoggingToFile $true `
-            -EnableLogFileRollover $true `
+            -EnableLogFileRollover ${{ dns_debug_log_rollover | bool | lower }} `
             -LogFilePath '{{ dns_debug_log_path }}' `
-            -MaxMBFileSize {{ dns_debug_log_max_mb }} `
             -ErrorAction Stop
           $after = Get-DnsServerDiagnostics
           # Report change honestly. An always-changed task would restart DNS on
@@ -993,7 +992,7 @@
           foreach ($k in @('Queries','Answers','QuestionTransactions','UnmatchedResponse',
                            'SendPackets','ReceivePackets','UdpPackets','TcpPackets',
                            'FullPackets','Notifications','Update','EnableLoggingToFile',
-                           'EnableLogFileRollover','LogFilePath','MaxMBFileSize')) {
+                           'EnableLogFileRollover','LogFilePath')) {
             if ($before.$k -ne $after.$k) { $differs = $true }
           }
           $Ansible.Changed = $differs
@@ -1111,21 +1110,24 @@
       ansible.builtin.fail:
         msg: |
           {{ inventory_hostname }}: {{ dns_debug_log_path }} is still empty after
-          enabling every debug option, sending queries directly to this server,
+          enabling debug logging, sending queries directly to this server,
           restarting the DNS service, and sending them again.
 
-          Traffic and stale handles are both ruled out, so read the diagnostics
-          state printed earlier in this run. If EnableLoggingToFile is True and
-          every direction/transport/contents flag is True and the file is STILL
-          zero bytes, then this Windows build is not honouring file-based debug
-          logging and the source has to change -- see docs/splunk/ for the
-          alternatives (DNS Analytical channel, or Zeek dns.log from the
-          Security Onion branch, which already carries both halves of the
-          transaction).
+          Traffic and stale handles are both ruled out. Read the diagnostics
+          state printed earlier in this run, and note that rollover is
+          {{ dns_debug_log_rollover }} -- rollover ON is the one setting
+          measured to hold this file at zero bytes indefinitely.
+
+          DC DNS logging is SUPPLEMENTARY. Sysmon already provides client-side
+          DNS; these logs add message_type, dest and record_type on top. The
+          deploy is not blocked by this (dns_debug_fail_on_empty is false);
+          verify_deployment.sh section 10's DNSSRV check reports the gap until
+          it is fixed.
       when:
         - dns_debug_logging | bool
         - (dns_log_stat.stat.size | default(0)) <= (dns_debug_log_min_bytes | int)
         - (dns_log_recheck.stat.size | default(0)) <= (dns_debug_log_min_bytes | int)
+      ignore_errors: "{{ not (dns_debug_fail_on_empty | bool) }}"
 
 # =============================================================================
 # Management plane — stop the DNS server PUBLISHING its own mgmt address

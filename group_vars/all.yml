@@ -89,18 +89,46 @@ splunk_verify_password: "simspace1"
 # says what was asked and answered.
 #
 # COST: DNS debug logging is not free. It writes every query to disk on a
-# domain controller. Bounded below by size cap + rollover; check the file size
-# after a day of real traffic before enabling emulated users.
+# domain controller, and it is NOT bounded -- see dns_debug_log_rollover below.
+# Check the file size after a day of real traffic before enabling emulated
+# users.
 dns_debug_logging: true
 
-# UNIT RESOLVED 2026-08-18, the hard way. -MaxMBFileSize is MEGABYTES, as its
-# name says. Setting it to 500000000 (on the assumption it took bytes) made DNS
-# truncate dns.log on every write: file present, lastwritetime advancing, size
-# permanently 0, on all three DCs, through three enable attempts and a service
-# restart. Disabling rollover proved it -- the log filled to 646 KB in twenty
-# seconds. The arithmetic confirms the unit: if the field were bytes, 500000000
-# is ~477 MB and a 646 KB file could never trip the threshold.
-dns_debug_log_max_mb: 500
+# Whether an empty dns.log ABORTS the deploy. Default false, deliberately.
+#
+# This is supplementary telemetry: Sysmon already provides client-side DNS, and
+# the DC logs add message_type/dest/record_type on top. On 2026-08-21 a hard
+# failure here burned three full deploy attempts on a range where every other
+# host was green -- a nice-to-have blocking a working build.
+#
+# The gap is still reported, twice: this play prints a loud warning, and
+# verify_deployment.sh section 10's DNSSRV check fails until the DC logs
+# actually reach Network_Resolution. The deploy builds; the verifier judges.
+dns_debug_fail_on_empty: false
+
+# ROLLOVER OFF. This is the only configuration we have direct evidence works.
+#
+# 2026-08-18 measured, on a range where the log had been stuck at 0 bytes
+# through three enable attempts and a service restart: turning rollover OFF
+# filled it to 646 KB in twenty seconds. That is the one causal observation we
+# have.
+#
+# What we do NOT have evidence for is rollover ON working at any size. It was
+# assumed to work afterwards because the log held 11 MB -- but that data had
+# accumulated during the rollover-off window, and the task that reported it
+# read a stale pre-restart stat. A fresh range on 2026-08-21 put it beyond
+# doubt: three brand-new DCs, rollover on, MaxMBFileSize 500, log permanently
+# empty on all three across three deploy attempts.
+#
+# MaxMBFileSize is also not trustworthy on this build: setting 500 read back as
+# 65536, so the value written is not the value stored. Both settings are left
+# out of the call entirely rather than passed with numbers we cannot predict.
+#
+# CONSEQUENCE: dns.log grows unbounded. With FullPackets off the rate is far
+# below the 646 KB/20s measured with it on, and this range is rebuilt between
+# exercises -- but the file size is worth watching, and bounding it will need a
+# mechanism other than DNS's own rollover.
+dns_debug_log_rollover: false
 
 # Minimum bytes the log must reach after generated traffic. Deliberately well
 # above any plausible byte-interpretation of the cap above: if a future edit
