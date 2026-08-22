@@ -75,6 +75,45 @@ mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
 # BOOT_DELAY is overridable so iterative deploys need not pay it -- which was
 # the legitimate half of the 2026-07-02 argument:
 #     BOOT_DELAY=0 ./deploy.sh
+# --- Elapsed-time accounting -------------------------------------------------
+# Reported through an EXIT trap rather than at the bottom of the script, because
+# the bottom is only reached on two of the three ways this ends. The third --
+# someone killing a run that has stopped making progress -- is the one where
+# knowing the elapsed time matters most, and it never reaches the last line.
+#
+# Two clocks, because they answer different questions:
+#   ansible elapsed   what was asked for: first attempt start -> finish
+#   pre-ansible       galaxy install + BOOT_DELAY, ~3 min of the wall clock that
+#                     is not Ansible and should not be blamed on it
+SCRIPT_START=$(date +%s)
+ANSIBLE_START=""
+DEPLOY_RESULT="interrupted before Ansible started"
+
+fmt_elapsed() {
+	local s=$1
+	printf '%dh %02dm %02ds' $((s / 3600)) $(((s % 3600) / 60)) $((s % 60))
+}
+
+report_elapsed() {
+	rc=$?
+	now=$(date +%s)
+	echo
+	echo "================== deploy.sh timing =================="
+	if [ -n "$ANSIBLE_START" ]; then
+		printf '  ansible elapsed  : %s\n' "$(fmt_elapsed $((now - ANSIBLE_START)))"
+		printf '  pre-ansible      : %s   (galaxy + BOOT_DELAY)\n' \
+			"$(fmt_elapsed $((ANSIBLE_START - SCRIPT_START)))"
+	else
+		printf '  ansible elapsed  : never started\n'
+	fi
+	printf '  total wall clock : %s\n' "$(fmt_elapsed $((now - SCRIPT_START)))"
+	printf '  outcome          : %s\n' "$DEPLOY_RESULT"
+	echo "====================================================="
+	exit $rc
+}
+trap report_elapsed EXIT
+trap 'DEPLOY_RESULT="INTERRUPTED by signal"; exit 130' INT TERM
+
 echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then
@@ -92,25 +131,32 @@ if [ "$BOOT_DELAY" -gt 0 ]; then
 	sleep "$BOOT_DELAY"
 fi
 
+ANSIBLE_START=$(date +%s)
+DEPLOY_RESULT="INCOMPLETE — interrupted mid-run"
+
 for i in $(seq 1 $MAX_ATTEMPTS); do
 	# Attempt 2 gets the retry-file scope IF the previous attempt actually
 	# produced one. If the file is missing (e.g. deploy exited on a global
 	# error before writing it), fall through to the full sweep.
+	ATTEMPT_START=$(date +%s)
+
 	if [ $i -eq 2 ] && [ -f "$RETRY_FILE" ]; then
 		echo "=== Attempt $i (retry-file scope — failed hosts only) ==="
 		if ansible-playbook $PLAYBOOK --forks $FORKS --limit @"$RETRY_FILE" "$@"; then
-			echo "Success on attempt $i (retry scope)"
+			echo "Success on attempt $i (retry scope) after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
+			DEPLOY_RESULT="SUCCESS on attempt $i (retry scope)"
 			break
 		fi
 	else
 		echo "=== Attempt $i (full sweep) ==="
 		if ansible-playbook $PLAYBOOK --forks $FORKS "$@"; then
-			echo "Success on attempt $i"
+			echo "Success on attempt $i after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
+			DEPLOY_RESULT="SUCCESS on attempt $i"
 			break
 		fi
 	fi
 
-	echo "Attempt $i failed"
+	echo "Attempt $i failed after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
 
 	# Preserve the retry file between attempts 1 and 2 (that's how attempt 2
 	# knows which hosts to target). Clear it between 2 and 3 so a stale
@@ -122,6 +168,7 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
 
 	if [ $i -eq $MAX_ATTEMPTS ]; then
 		echo "ERROR: Playbook failed after $MAX_ATTEMPTS attempts"
+		DEPLOY_RESULT="FAILED after $MAX_ATTEMPTS attempts"
 		exit 1
 	fi
 done
