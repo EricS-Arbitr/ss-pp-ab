@@ -351,11 +351,42 @@ win-hunt-4
 win-hunt-5
 win-hunt-6
 
+# OT control station. Forwards Windows event logs; deliberately NOT in
+# [sysmon]. The line is INSTRUMENT vs OBSERVE: Sysmon instruments the OS with a
+# kernel driver and process-level hooks, which does not belong on process-
+# critical OT equipment. A universal forwarder only reads event logs Windows is
+# already writing, and collecting those off an HMI or engineering station is
+# ordinary practice even where an EDR agent would never be allowed.
+#
+# Added 2026-08-24. It is in [ae] -- a host attacks are actively run against --
+# and until now produced NO telemetry anywhere: no event logs, no Sysmon,
+# nothing. A target with zero evidence is not blind-spot realism, it is an
+# exercise that cannot be scored.
+#
+# It reached that state structurally rather than by decision: [ot_servers] is
+# not a child of this group, so it was never included and nobody chose to
+# exclude it.
+pp-dcs-ctrl
+
 [splunk-forwarder:children]
 domain_controllers
 corporate_servers
 dmz
 workstations
+
+# Domain-joined Windows hosts that deliberately do NOT forward to Splunk.
+#
+# Empty by design. verify_deployment.sh section 13 asserts that every host in
+# [members] is either in [splunk-forwarder] or listed here, so a host with no
+# telemetry is always a decision someone wrote down rather than an omission
+# nobody noticed.
+#
+# This exists because the old check could not catch that class of gap: it
+# counted forwarders AGAINST the forwarder group, so a host that should have
+# been in the group and was not could never be reported missing. pp-dcs-ctrl
+# sat dark that way and only surfaced from a host count of 44 against 45.
+[splunk_forwarder_exempt]
+
 
 
 # ------------------------------------------------------------

@@ -133,10 +133,33 @@ Hosts belong to multiple overlapping groups. Group meanings:
 
 - **Platform**: `windows`, `linux` (with `ubuntu22` child), `vyos`, `vyos_routes_only`, `pfsense` — drive OS/device-specific task loading.
 - **Role**: `pdc`, `additional_dc`, `domain_controllers`, `file`, `proxy`, `splunk`, `syslog`, `members`, `corporate_servers`, `dmz`, `infrastructure`, `wordpress-pv`.
-- **Posture**: `ae` (attack emulation hosts — pp-dc01/02, pp-file, pp-sql, pp-mail), `aue` (attack-user-experience workstations).
+- **Posture**: `ae` (attack emulation hosts — pp-dc01/02/03, pp-file, pp-sql, pp-mail, pp-dcs-ctrl), `aue` (attack-user-experience workstations).
 - **OS version**: `win10`, `win11`, `winserver2022`, `winserver2019`.
 - **Services**: `splunk-forwarder` (built via `:children`), `global_dns`, `hunt`, `voltgrid:children` (workstations + DCs + corporate_servers).
+- **Telemetry exemption**: `splunk_forwarder_exempt` — Windows hosts that deliberately do NOT forward. Empty by design; `verify_deployment.sh` section 13 asserts every host in `[windows]` is in `[splunk-forwarder]` or listed here.
 - **Special**: `unmanaged` — hard-coded; not targeted by any play. Contains OT PLCs/HMIs that come pre-configured from their image.
+
+### Endpoint telemetry: instrument vs observe
+
+Two agents, two different bars, and `pp-dcs-ctrl` (the OT control station) is
+where they diverge:
+
+- **Sysmon instruments the OS** — kernel driver, process-level hooks, real
+  runtime footprint. It stays off process-critical OT equipment. `pp-dcs-ctrl`
+  is excluded from `[sysmon]` by decision (Eric, 2026-08-18), and section 12 of
+  `verify_deployment.sh` asserts the exclusion still holds.
+- **A universal forwarder only observes** — it reads event logs Windows is
+  already writing. Collecting those off an HMI or engineering station is
+  ordinary practice even where an EDR agent would never be permitted, so
+  `pp-dcs-ctrl` **is** in `[splunk-forwarder]` (added 2026-08-24).
+
+The host is in `[ae]`, meaning attacks are actively run against it. Until
+2026-08-24 it produced no telemetry of any kind and section 7 still passed
+47/47, because that check counts forwarders *against the forwarder group* and
+therefore cannot see a host that should be in the group and isn't. Section 13
+inverts the question and is anchored on `[windows]`, not `[members]` —
+`[members]` is domain membership and excludes the three DCs and both DMZ hosts,
+so a coverage check built on it could not report a dark domain controller.
 
 ## Variable hierarchy (lowest → highest precedence)
 

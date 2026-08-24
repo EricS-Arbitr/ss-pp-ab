@@ -860,6 +860,88 @@ else
 fi
 
 # =========================================================================
+section "13. Forwarder coverage — no host is dark by accident"
+
+# WHY THIS SECTION EXISTS.
+#
+# Section 7 counts running forwarders AGAINST [splunk-forwarder]. That answers
+# "of the hosts we expect to forward, how many do?" -- which can never notice a
+# host that SHOULD be expected and is not in the group at all. It reports a
+# clean 47/47 while a 48th host sits dark.
+#
+# That is not hypothetical. pp-dcs-ctrl had no universal forwarder, no Sysmon
+# and no events of any kind, and section 7 passed every run. It surfaced only
+# because a manual search returned 44 Windows hosts against an inventory of 45,
+# and it got there structurally rather than by decision: [ot_servers] was never
+# made a child of [splunk-forwarder], so nobody ever chose to exclude it.
+#
+# These checks invert the question -- "of the hosts that exist, which produce no
+# telemetry?" -- so a silent host is either an explicit entry in
+# [splunk_forwarder_exempt] or a failure here.
+#
+# THE BASIS IS [windows], NOT [members], and that distinction is the whole
+# check. [members] is domain membership: it holds 40 hosts and excludes
+# pp-dc01, pp-dc02, pp-dc03, pp-dmz-dns and pp-dmz-smtp -- the domain
+# controllers and both DMZ hosts, which are the highest-value log sources here.
+# Anchoring coverage on it would have produced a check that structurally could
+# not report a dark DC: the same class of blind spot one level up from the one
+# it was written to close. [windows] is all 45 Windows hosts, which is the
+# population that should be producing Windows telemetry.
+
+fwd_list=$(ansible splunk-forwarder --list-hosts 2>/dev/null | tail -n +2 | tr -d ' \r' | sed '/^$/d' | sort -u)
+win_list=$(ansible windows --list-hosts 2>/dev/null | tail -n +2 | tr -d ' \r' | sed '/^$/d' | sort -u)
+# An empty or absent group makes ansible warn on stderr and print "hosts (0):"
+# on stdout, so this correctly yields an empty list rather than an error.
+exempt_list=$(ansible splunk_forwarder_exempt --list-hosts 2>/dev/null | tail -n +2 | tr -d ' \r' | sed '/^$/d' | sort -u)
+
+n_win=$(printf '%s' "$win_list" | grep -c . || true)
+n_exempt=$(printf '%s' "$exempt_list" | grep -c . || true)
+
+# comm(1) rather than a shell loop over an unquoted list. The loop version
+# depended on word-splitting an unquoted "$list", which bash does and zsh does
+# not -- and when it does not split, the whole multi-line string is handed to
+# `grep -xF` as ONE pattern, where grep treats each embedded newline as a
+# SEPARATE pattern and matches any line at all. So the loop silently matched
+# everything and `uncovered` could never be non-empty. A check that cannot fail
+# is not a check; comm compares two sorted sets with no shell semantics in the
+# middle and cannot degrade that way.
+uncovered=$(comm -23 <(printf '%s\n' "$win_list") <(printf '%s\n' "$fwd_list" "$exempt_list" | sed '/^$/d' | sort -u) | tr '\n' ' ' | sed 's/ *$//')
+
+if [ "$n_win" -eq 0 ]; then
+  fail "coverage: [windows] resolved to 0 hosts — inventory did not parse"
+elif [ -n "$uncovered" ]; then
+  fail "coverage: Windows hosts with no forwarder and no exemption: $uncovered"
+else
+  pass "coverage: all $n_win Windows hosts forward to Splunk or are explicitly exempt"
+fi
+
+# A host in both groups means two people recorded opposite decisions and
+# [splunk-forwarder] silently won. Cheap to check, and it keeps the exemption
+# list meaningful rather than decorative.
+contradict=$(comm -12 <(printf '%s\n' "$exempt_list" | sed '/^$/d') <(printf '%s\n' "$fwd_list") | tr '\n' ' ' | sed 's/ *$//')
+if [ -n "$contradict" ]; then
+  fail "coverage: exempt but also in [splunk-forwarder]: $contradict"
+else
+  pass "coverage: exemption list consistent with [splunk-forwarder] ($n_exempt exempt)"
+fi
+
+# The two halves of the pp-dcs-ctrl decision, asserted separately, because they
+# point in OPPOSITE directions and a future :children edit could flip either.
+#
+# The line is INSTRUMENT vs OBSERVE. Sysmon instruments the OS with a kernel
+# driver and process-level hooks and stays off process-critical OT equipment
+# (asserted in section 12). A universal forwarder only reads event logs Windows
+# already writes, which is ordinary practice on an HMI or engineering station
+# even where an EDR agent would never be allowed -- and pp-dcs-ctrl is in [ae],
+# a host attacks are actively run against, so its compromise has to leave
+# evidence somewhere.
+if printf '%s\n' "$fwd_list" | grep -qxF pp-dcs-ctrl; then
+  pass "coverage: pp-dcs-ctrl forwards Windows event logs (OT station, no Sysmon)"
+else
+  fail "coverage: pp-dcs-ctrl is not in [splunk-forwarder] — it would produce no telemetry"
+fi
+
+# =========================================================================
 # Summary
 # =========================================================================
 section "Summary"
