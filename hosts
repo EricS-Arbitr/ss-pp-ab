@@ -47,7 +47,23 @@ pp-ctl-wks-02
 pp-ctl-wks-03
 pp-ctl-wks-04
 
-[workstations:children]
+# The SIMULATED BUSINESS's user endpoints -- NOT every Windows workstation.
+#
+# Renamed from [workstations] 2026-08-25. MEMBERSHIP IS UNCHANGED; only the
+# name moved. The old name claimed a population it did not have: the six
+# win-hunt-* analyst boxes are Windows 10 workstations and are deliberately
+# absent, so anything hung off the name silently skipped them -- the same
+# shape as the Sysmon gap (telemetry decided by AUE membership) and
+# pp-dcs-ctrl (no forwarder because [ot_servers] was never a child of
+# [splunk-forwarder]).
+#
+# The exclusion itself is correct and was already recorded: a scenario or
+# attack-simulation play targeting the simulated business must not sweep in
+# the blue team's own tooling. The bug was the name, not the contents.
+#
+# Identical membership to [aue] today, and that is expected -- these ARE the
+# hosts that run emulated users. [aue] is the posture axis, this the org axis.
+[sim_workstations:children]
 business_processing
 engineering
 legal_staff
@@ -77,6 +93,21 @@ pp-syslog
 
 # OT-side servers — on the 192.168.100.0/24 OT subnet behind pp-ot-router.
 # Domain-joined; auth/DNS goes to pp-dc03 (local OT DC) with pp-dc01 fallback.
+#
+# pp-dcs-ctrl (OT control station) FORWARDS Windows event logs but runs NO
+# Sysmon, and both halves are asserted -- section 13 and section 12
+# respectively. The line is INSTRUMENT vs OBSERVE: Sysmon instruments the OS
+# with a kernel driver and process-level hooks, which does not belong on
+# process-critical OT equipment; a universal forwarder only reads event logs
+# Windows is already writing, which is ordinary practice on an HMI or
+# engineering station even where an EDR agent would never be allowed.
+#
+# Until 2026-08-24 it produced NO telemetry at all -- no event logs, no Sysmon,
+# nothing -- while it sat in [ae], a host attacks are actively run against. A
+# target with zero evidence is not blind-spot realism, it is an exercise that
+# cannot be scored. It reached that state structurally rather than by decision:
+# this group was not a child of [splunk-forwarder], so nobody ever chose to
+# exclude it. It is a child now.
 [ot_servers]
 pp-dcs-ctrl
 
@@ -86,8 +117,6 @@ pp-file
 [global_dns]
 is-inet
 
-[trafficgen]
-is-inet
 
 [email]
 is-inet
@@ -136,11 +165,6 @@ pp-ctl-wks-02
 pp-ctl-wks-03
 pp-ctl-wks-04
 pp-sql
-pp-dcs-ctrl
-pp-ctl-wks-01
-pp-ctl-wks-02
-pp-ctl-wks-03
-pp-ctl-wks-04
 win-hunt-1
 win-hunt-2
 win-hunt-3
@@ -158,32 +182,18 @@ win-hunt-6
 # is-inet -- no play targeting is-inet consumes them.
 [voltgrid]
 is-inet
-# SOC hunt/analyst workstations. voltgrid.yml is where `domain_name` lives, and
-# BOTH the domain join and autologin's DefaultDomainName need it -- every other
-# [members] host reaches this group via [voltgrid:children], but the hunt boxes
-# are in none of those children, so they must be listed directly.
-win-hunt-1
-win-hunt-2
-win-hunt-3
-win-hunt-4
-win-hunt-5
-win-hunt-6
 
 [voltgrid:children]
-workstations
+sim_workstations
 domain_controllers
 corporate_servers
 ot_servers
+# voltgrid.yml carries domain_name, which both the domain join and
+# autologin's DefaultDomainName need. The hunt boxes reach it through here
+# now, instead of being listed directly in [voltgrid] to work around not
+# belonging to any child group.
+hunt
 
-# ------------------------------------------------------------
-# OT — new gas-turbine simulation hosts (hard-coded, no mgmt interface)
-# ------------------------------------------------------------
-[ot_devices]
-pp-gas-sim
-pp-gasplant-plc
-pp-gasvibsens
-pp-ot-hist
-pp-engws
 
 # ------------------------------------------------------------
 # DMZ
@@ -281,20 +291,6 @@ pp-splunk-cm
 [linux:children]
 ubuntu22
 
-# ------------------------------------------------------------
-# Security / hunt network (pp-security subnet)
-# ------------------------------------------------------------
-[security]
-pp-splunk
-pp-splunk-idx01
-pp-splunk-idx02
-pp-splunk-cm
-win-hunt-1
-win-hunt-2
-win-hunt-3
-win-hunt-4
-win-hunt-5
-win-hunt-6
 
 # The single-instance group. Still drives the CURRENT working deployment
 # (roles splunk, splunk-es, splunk-verify-user). Retired only once the cluster
@@ -305,10 +301,11 @@ pp-splunk
 # ------------------------------------------------------------
 # Distributed Splunk tiers (blueprint ARBITR_PP_147.yml)
 # ------------------------------------------------------------
-# Deliberately NOT in [splunk-forwarder]. That group's children are
-# domain_controllers, corporate_servers, dmz and workstations, and none of
-# these hosts belong to any of them -- an indexer running a UF pointed at the
-# indexer tier forwards to itself.
+# Deliberately NOT in [splunk-forwarder]. That group's children are servers,
+# dmz, sim_workstations and hunt, and none of these hosts belong to any of them
+# -- an indexer running a UF pointed at the indexer tier forwards to itself.
+# More load-bearing than it was: [servers] became a child on 2026-08-25, so a
+# Splunk tier host added to any server group WOULD pick up a forwarder.
 [splunk_search_head]
 pp-splunk
 
@@ -319,10 +316,6 @@ pp-splunk-idx02
 [splunk_cluster_manager]
 pp-splunk-cm
 
-[splunk_cluster:children]
-splunk_search_head
-splunk_indexer
-splunk_cluster_manager
 
 # Central syslog collector — receives from all Linux/VyOS/pfSense hosts,
 # then Splunk UF on this box ships /var/log/remote/* to pp-splunk.
@@ -331,53 +324,28 @@ pp-syslog
 
 
 [splunk-forwarder]
+# The only member belonging to no server/workstation group.
 pp-proxy
-# SOC hunt/analyst workstations. Added 2026-08-17 -- an attacker who lands on
-# an analyst box sees everything the SOC sees and can steer the
-# investigation, so these are high-value targets and belong in the SIEM.
-# Security Onion already collects their endpoint telemetry via [windows] in
-# 75-endpoint; Splunk not having them was an inconsistency rather than a
-# decision.
-#
-# DIRECT members here rather than adding them to [workstations], following
-# pp-proxy above. [workstations] means "the simulated business's user
-# endpoints" -- it feeds nothing but this group today, but a future play
-# targeting it for scenario activity or attack simulation should not silently
-# sweep in the blue team's own tooling.
-win-hunt-1
-win-hunt-2
-win-hunt-3
-win-hunt-4
-win-hunt-5
-win-hunt-6
-
-# OT control station. Forwards Windows event logs; deliberately NOT in
-# [sysmon]. The line is INSTRUMENT vs OBSERVE: Sysmon instruments the OS with a
-# kernel driver and process-level hooks, which does not belong on process-
-# critical OT equipment. A universal forwarder only reads event logs Windows is
-# already writing, and collecting those off an HMI or engineering station is
-# ordinary practice even where an EDR agent would never be allowed.
-#
-# Added 2026-08-24. It is in [ae] -- a host attacks are actively run against --
-# and until now produced NO telemetry anywhere: no event logs, no Sysmon,
-# nothing. A target with zero evidence is not blind-spot realism, it is an
-# exercise that cannot be scored.
-#
-# It reached that state structurally rather than by decision: [ot_servers] is
-# not a child of this group, so it was never included and nobody chose to
-# exclude it.
-pp-dcs-ctrl
 
 [splunk-forwarder:children]
-domain_controllers
-corporate_servers
+# `servers` rather than domain_controllers + corporate_servers: it also
+# carries [ot_servers], which is how pp-dcs-ctrl gets a forwarder. It sat
+# dark for months precisely because ot_servers was NOT a child here --
+# nobody chose to exclude it, the structure just never included it.
+# Stating "all servers forward" positively means a future server group
+# inherits telemetry instead of quietly missing it. pp-dcs-ctrl keeps its
+# Sysmon exclusion (section 12): INSTRUMENT vs OBSERVE.
+servers
 dmz
-workstations
+sim_workstations
+# The analyst boxes, via [hunt] rather than six direct lines. They are NOT
+# in sim_workstations by design -- see the comment there.
+hunt
 
 # Domain-joined Windows hosts that deliberately do NOT forward to Splunk.
 #
 # Empty by design. verify_deployment.sh section 13 asserts that every host in
-# [members] is either in [splunk-forwarder] or listed here, so a host with no
+# [windows] is either in [splunk-forwarder] or listed here, so a host with no
 # telemetry is always a decision someone wrote down rather than an omission
 # nobody noticed.
 #
@@ -420,6 +388,15 @@ pp-dc01
 pp-dc02
 pp-dc03
 
+# SOC hunt/analyst workstations. An attacker who lands on an analyst box sees
+# everything the SOC sees and can steer the investigation, so these are
+# high-value targets and belong in the SIEM like any other endpoint -- they
+# reach [splunk-forwarder] and [sysmon] as a child of each.
+#
+# They are NOT in [sim_workstations]: a scenario or attack-simulation play
+# targeting the simulated business must not sweep in the blue team's own
+# tooling. Nor do they get emulated users -- and note that exclusion is not
+# enforceable from here, see verify_deployment.sh section 11.
 [hunt]
 win-hunt-1
 win-hunt-2
@@ -459,14 +436,6 @@ pp-external-firewall
 [vyos_routes_only]
 pp-ot-router
 
-# ------------------------------------------------------------
-# Infrastructure / special systems (not domain-managed)
-# ------------------------------------------------------------
-[infrastructure]
-ansible
-is-inet
-Red-1
-Activity-Emulation
 
 [proxy]
 pp-proxy
@@ -483,6 +452,27 @@ pp-gasvibsens
 pp-ot-hist
 pp-engws
 elgg
+
+# ------------------------------------------------------------
+# Range infrastructure — present in the range, NOT managed by Ansible.
+# ------------------------------------------------------------
+# The Ansible controller itself, the red-team box and the AUE actuator VM.
+# Like [unmanaged] this group is targeted by no play; it exists so these
+# hosts are recorded rather than invisible, and so `--limit` can reach them.
+#
+# Kept deliberately during the 2026-08-25 inventory audit. It was on the
+# delete list as unreferenced, and deleting it removed Red-1,
+# Activity-Emulation and ansible from the inventory ENTIRELY -- they belong
+# to no other group. An unreferenced group and an unreferenced host are not
+# the same thing, and only the host count caught the difference.
+#
+# Activity-Emulation drives user emulation. Which hosts it targets is
+# platform-side config, not inventory -- see verify_deployment.sh section 11.
+[infrastructure]
+ansible
+is-inet
+Red-1
+Activity-Emulation
 
 [aue]
 pp-bp-wkstn-1

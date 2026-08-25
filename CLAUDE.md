@@ -132,10 +132,11 @@ ansible-playbook arbitr_pp_playbook.yaml --limit pp-ot-firewall
 Hosts belong to multiple overlapping groups. Group meanings:
 
 - **Platform**: `windows`, `linux` (with `ubuntu22` child), `vyos`, `vyos_routes_only`, `pfsense` — drive OS/device-specific task loading.
-- **Role**: `pdc`, `additional_dc`, `domain_controllers`, `file`, `proxy`, `splunk`, `syslog`, `members`, `corporate_servers`, `dmz`, `infrastructure`, `wordpress-pv`.
+- **Role**: `pdc`, `additional_dc`, `domain_controllers`, `file`, `proxy`, `splunk`, `syslog`, `members`, `corporate_servers`, `servers`, `dmz`, `wordpress-pv`.
+- **Label-only** (targeted by no play, kept so the hosts are recorded): `unmanaged` (OT PLCs/HMIs + elgg), `infrastructure` (the Ansible controller, Red-1, Activity-Emulation).
 - **Posture**: `ae` (attack emulation hosts — pp-dc01/02/03, pp-file, pp-sql, pp-mail, pp-dcs-ctrl), `aue` (attack-user-experience workstations).
 - **OS version**: `win10`, `win11`, `winserver2022`, `winserver2019`.
-- **Services**: `splunk-forwarder` (built via `:children`), `global_dns`, `hunt`, `voltgrid:children` (workstations + DCs + corporate_servers).
+- **Services**: `splunk-forwarder` (children: `servers`, `dmz`, `sim_workstations`, `hunt`; `pp-proxy` direct), `global_dns`, `hunt`, `voltgrid`.
 - **Telemetry exemption**: `splunk_forwarder_exempt` — Windows hosts that deliberately do NOT forward. Empty by design; `verify_deployment.sh` section 13 asserts every host in `[windows]` is in `[splunk-forwarder]` or listed here.
 - **Special**: `unmanaged` — hard-coded; not targeted by any play. Contains OT PLCs/HMIs that come pre-configured from their image.
 
@@ -234,6 +235,41 @@ Validator — a validation tool with no data path through it. Overriding vendor
 metadata in `local.meta` to silence a health check the vendor pre-emptively
 answered is a cosmetic workaround, not a fix. If the message becomes noisy, ES
 has a suppression mechanism; use that instead of changing config.
+
+### `sim_workstations` is not "all workstations"
+
+Renamed from `workstations` on 2026-08-25 during an inventory audit. **The
+membership did not change** — only the name.
+
+The old name claimed a population it did not have: the six `win-hunt-*` analyst
+boxes are Windows 10 workstations and are deliberately excluded, so anything
+hung off the name silently skipped them. Same shape as the Sysmon gap (endpoint
+telemetry decided by AUE membership) and `pp-dcs-ctrl` (no forwarder because
+`[ot_servers]` was never a child of `[splunk-forwarder]`).
+
+The exclusion itself is correct and was already recorded: a scenario or
+attack-simulation play targeting the simulated business must not sweep in the
+blue team's own tooling. The bug was the name, not the contents.
+
+Identical membership to `[aue]` is expected — these *are* the hosts that run
+emulated users. `aue` is the posture axis, `sim_workstations` the org axis, and
+they are free to diverge.
+
+Same audit: `[splunk-forwarder]` now takes `servers` as a child rather than
+listing `domain_controllers` + `corporate_servers`, because `servers` also
+carries `[ot_servers]` — which is how `pp-dcs-ctrl` gets a forwarder instead of
+a hand-added direct entry. "All servers forward" stated positively means a
+future server group inherits telemetry rather than quietly missing it. Deleted
+as unreferenced: `security`, `ot_devices`, `trafficgen`, `splunk_cluster` (the
+last also collided with the *tag* of the same name, so `--tags splunk_cluster`
+and `--limit splunk_cluster` meant different things).
+
+`infrastructure` was on that list and was **kept**: deleting it removed `Red-1`,
+`Activity-Emulation` and `ansible` from the inventory *entirely*, because they
+belong to no other group. An unreferenced group and an unreferenced host are
+not the same thing, and only a host-count check caught the difference — the
+membership-invariant check passed, because a host that no longer exists cannot
+show up as membership drift.
 
 ## Variable hierarchy (lowest → highest precedence)
 
