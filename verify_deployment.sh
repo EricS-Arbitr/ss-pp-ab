@@ -881,6 +881,35 @@ else
   else
     fail "hunt: $hunt_autologon/$hunt_total configured for autologin"
   fi
+
+  # ANALYSTS DO NOT GET EMULATED USERS.
+  #
+  # [hunt] is deliberately excluded from [aue] and [ae], so the aue_agent role
+  # never targets these hosts -- and for months that was taken as sufficient.
+  # It is not. On 2026-08-24, enabling user emulation in the SimSpace platform
+  # installed the AUE agent on all six hunt workstations anyway: MSI install
+  # records dated that day, a scheduled task named AUEAgent in Running state,
+  # and a live aue-agent process on every one. The agent is NOT baked into
+  # global/RDP_Windows_10:1.0.6 -- the platform pushed it.
+  #
+  # So the Ansible-side exclusion is not the control it appears to be. The
+  # control is the platform's emulation host set, which lives outside this
+  # repo entirely and which nothing here can enforce. What this repo CAN do is
+  # notice, which is what this check is for: it converts a silent platform
+  # config drift into a failed check.
+  #
+  # Why it matters beyond tidiness: emulated users on an analyst workstation
+  # inject synthetic process, browser and file activity into exactly the host
+  # a hunter is using to investigate, so their own tooling shows up as
+  # adversary-shaped noise in their own telemetry.
+  hunt_aue=$(count_ps_predicate hunt \
+    '$t=Get-ScheduledTask -TaskName AUEAgent -ErrorAction SilentlyContinue; $p=Get-Process aue-agent -ErrorAction SilentlyContinue; if ($t -or $p) { Write-Output AUE_PRESENT } else { Write-Output AUE_ABSENT }' \
+    '\(stdout\)[[:space:]]+AUE_ABSENT')
+  if [ "$hunt_aue" -eq "$hunt_total" ]; then
+    pass "hunt: $hunt_aue/$hunt_total free of the AUE agent (analysts get no emulated users)"
+  else
+    fail "hunt: $hunt_aue/$hunt_total free of the AUE agent — $((hunt_total - hunt_aue)) still running emulation; the platform's emulation host set still includes hunt workstations"
+  fi
 fi
 
 # =========================================================================

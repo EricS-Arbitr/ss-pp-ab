@@ -192,6 +192,49 @@ or `manager_uri` rather than assuming the 9.x rename applied to every stanza —
 the wrong key is not an error, it is silently ignored, which would leave the
 countdown running behind a config file that reads as fixed.
 
+### User emulation: the platform can override the inventory
+
+`[hunt]` is excluded from `[aue]` and `[ae]`, so `aue_agent` never targets the
+six `win-hunt-*` boxes. **That exclusion is not the control it looks like.**
+
+On 2026-08-24, enabling user emulation in the SimSpace UI installed the AUE
+agent on all six anyway — MSI install records dated that day, a scheduled task
+`AUEAgent` in Running state, a live `aue-agent` process on each. The agent is
+*not* in `global/RDP_Windows_10:1.0.6`; the platform pushed it. Which host set
+emulation targets lives in the platform, outside this repo, and nothing here
+can enforce it.
+
+So: **the fix is a platform-side deselect, not an Ansible change.** Uninstalling
+with Ansible alone loses the race — the actuator reinstalls (six install records
+on win-hunt-1 in three and a half hours). Remove the hunt hosts from the
+emulation set *first*, then clean up.
+
+What this repo does instead is *notice*: section 11 of `verify_deployment.sh`
+asserts no hunt workstation has the AUE task or process, turning a silent
+platform drift into a failed check.
+
+Why it matters beyond tidiness: emulated users on an analyst workstation inject
+synthetic process, browser and file activity into the exact host a hunter is
+investigating from, so their own tooling appears as adversary-shaped noise in
+their own telemetry.
+
+### SA-cim_vladiator "not exporting configurations globally" — leave it
+
+ES health check flags this; the app's own `default.meta` answers it:
+
+```
+export = none
+
+# does not need to be gloabl
+# export = system
+```
+
+Splunk shipped `export = none` deliberately and wrote the note. It is the CIM
+Validator — a validation tool with no data path through it. Overriding vendor
+metadata in `local.meta` to silence a health check the vendor pre-emptively
+answered is a cosmetic workaround, not a fix. If the message becomes noisy, ES
+has a suppression mechanism; use that instead of changing config.
+
 ## Variable hierarchy (lowest → highest precedence)
 
 1. `group_vars/all.yml` — credentials, proxy, Splunk indices, syslog/splunk server IPs.
