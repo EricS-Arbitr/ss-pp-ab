@@ -86,12 +86,41 @@
 #
 # So the spec file on the host decides. It is the authority, it is already
 # present, and it costs one task.
+#
+# MEASURED ON pp-splunk-cm 2026-08-25: the [license] stanza documents BOTH
+# spellings. So "which key exists" is the wrong question -- the first version
+# of this task asked exactly that and took `head -1`, which selects by the
+# order Splunk happens to list them in the spec file. That returned master_uri,
+# which worked (the peers registered and the warning cleared), but it was
+# arbitrary: nothing about file order says which key is current, and the same
+# logic would pick the deprecated alias on any build that lists it first.
+#
+# The spec marks the superseded key DEPRECATED in its own description block, so
+# that is what gets read. Preference is manager_uri, then master_uri, then
+# whatever is listed first -- and each candidate is skipped if its OWN block
+# says deprecated. Note this is correct WITHOUT knowing which of the two Splunk
+# deprecated: if it ever turns out to be manager_uri, the same logic picks
+# master_uri and nothing changes. That property is the point. A rule that
+# depends on my recollection of a vendor rename is the thing being removed.
 - name: Ask server.conf.spec which key the [license] stanza takes
   ansible.builtin.shell: |
-    set -o pipefail
-    sed -n '/^\[license\]/,/^\[/p' \
-      /opt/splunk/etc/system/README/server.conf.spec \
-      | grep -oE '^(manager_uri|master_uri)' | head -1
+    awk '
+      /^\[license\]/ { inlic=1; next }
+      /^\[/           { inlic=0 }
+      !inlic          { next }
+      /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/ {
+          key = $1
+          if (key == "manager_uri" || key == "master_uri") { cand[key]=1; order[++n]=key }
+          else key = ""
+          next
+      }
+      key != "" && tolower($0) ~ /deprecat/ { dep[key]=1 }
+      END {
+          if (cand["manager_uri"] && !dep["manager_uri"]) { print "manager_uri"; exit }
+          if (cand["master_uri"]  && !dep["master_uri"])  { print "master_uri";  exit }
+          if (n > 0) print order[1]
+      }
+    ' /opt/splunk/etc/system/README/server.conf.spec
   args:
     executable: /bin/bash
   register: lic_keyname
