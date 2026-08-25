@@ -1,0 +1,7 @@
+---
+# splunk_license_peer — point a Splunk node at the central license manager.
+#
+# Applied to the indexer peers and the ES search head. NOT to pp-splunk-cm,
+# which is the license manager itself.
+splunk_license_dir: /opt/splunk/etc/licenses
+splunk_license_stack_dir: /opt/splunk/etc/licenses/enterprise

@@ -161,6 +161,37 @@ inverts the question and is anchored on `[windows]`, not `[members]` —
 `[members]` is domain membership and excludes the three DCs and both DMZ hosts,
 so a coverage check built on it could not report a dark domain controller.
 
+### Splunk licensing: one manager, three peers
+
+`pp-splunk-cm` is the **license manager**; `pp-splunk-idx01`, `pp-splunk-idx02`
+and `pp-splunk` are license peers pointed at it (`roles/splunk_license_peer`,
+added 2026-08-25).
+
+This is not optional tidiness. The base `splunk` role downloads
+`{{ splunk_license }}` from Nexus and runs `splunk add license` with **no
+condition on the host's tier**, and that role runs in all four distributed
+Splunk plays. Left alone, every node becomes its own license manager holding
+the same license, which Splunk reads as one licensed volume claimed four times
+and answers with a 72-hour countdown to disabling a peer.
+
+Two things worth remembering about how it surfaced:
+
+- Splunk's warning named **only the two indexers**, because the cluster manager
+  compares licenses across its *peers* and a search head is not one.
+  `pp-splunk` held the same duplicate and was never mentioned. Fixing the hosts
+  named in the message would have left a third duplicate in place.
+- Nothing looked wrong beforehand. A Splunk node with a license installed *is*
+  a license manager by default, so `pp-splunk-cm` was correct — it was just not
+  the *only* one.
+
+`splunk_license_peer` runs behind the base role in the same play and re-asserts
+every run, the same ordering contract the cluster roles depend on. **Never give
+it a tag the base role does not share.** It also reads
+`server.conf.spec` on the host to decide whether `[license]` takes `master_uri`
+or `manager_uri` rather than assuming the 9.x rename applied to every stanza —
+the wrong key is not an error, it is silently ignored, which would leave the
+countdown running behind a config file that reads as fixed.
+
 ## Variable hierarchy (lowest → highest precedence)
 
 1. `group_vars/all.yml` — credentials, proxy, Splunk indices, syslog/splunk server IPs.

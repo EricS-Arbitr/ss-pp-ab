@@ -731,6 +731,10 @@
   roles:
     - splunk
     - splunk_indexer
+    # Central licensing. Shares the play's tags on purpose -- the base `splunk`
+    # role re-adds the license and rewrites server.conf, so this must never be
+    # runnable without it.
+    - splunk_license_peer
   tags:
     - splunk_cluster
     - splunk_idx
@@ -755,6 +759,11 @@
   roles:
     - splunk
     - splunk_search_head
+    # pp-splunk holds the SAME duplicate license as the two indexers. It is not
+    # named in Splunk's warning only because the cluster manager compares
+    # licenses across its PEERS and a search head is not one -- fixing just the
+    # two hosts in the message would leave this duplicate in place.
+    - splunk_license_peer
     # Must follow splunk_search_head: ES is installed on a host that is already
     # a cluster search head, so its data models resolve against the peers.
     - role: splunk-es

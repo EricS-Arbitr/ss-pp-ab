@@ -148,6 +148,47 @@
   register: cm_bundle
   changed_when: true
 
+# =========================================================================
+# License manager
+# =========================================================================
+# host_vars/pp-splunk-cm.yml has declared this host "cluster manager + license
+# manager + deployment server + monitoring console" since the distributed build
+# was designed. Three of those were implemented; licensing was not, and the gap
+# was invisible because a Splunk node with a license installed IS a license
+# manager by default -- so pp-splunk-cm looked correct while three other nodes
+# were quietly being license managers too.
+#
+# Splunk surfaced it on 2026-08-25 with a 72-hour deadline to disable a peer.
+# See roles/splunk_license_peer for the full cause.
+#
+# These two tasks assert the half of the arrangement that lives here: this node
+# holds the license, and it answers to nobody. The peers assert the other half.
+
+- name: This node must hold the deployment's only license
+  ansible.builtin.find:
+    paths: "{{ splunk_license_stack_dir | default('/opt/splunk/etc/licenses/enterprise') }}"
+    patterns: '*.lic,*.license,*.xml'
+    file_type: file
+  register: cm_licenses
+  failed_when: (cm_licenses.files | length) < 1
+
+# `master_uri`/`manager_uri` absent from [license] is what "license master
+# self" means. Asserting the ABSENCE matters because the failure it prevents is
+# silent: if this node were ever pointed at another license manager, every peer
+# would chain through it and the whole deployment would depend on a host nobody
+# recorded as authoritative.
+- name: The license manager must not answer to another license manager
+  community.general.ini_file:
+    path: /opt/splunk/etc/system/local/server.conf
+    section: license
+    option: "{{ item }}"
+    state: absent
+    mode: '0600'
+  loop:
+    - master_uri
+    - manager_uri
+  register: cm_lic_self
+
 - name: Report cluster manager state
   ansible.builtin.debug:
     msg: >-

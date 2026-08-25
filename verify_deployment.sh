@@ -553,6 +553,63 @@ check_ps pp-bp-wkstn-1 \
   '\(stdout\)[[:space:]]+Running' \
   "pp-bp-wkstn-1: Sysmon64 service running"
 
+# -------------------------------------------------------------------------
+# Licensing — exactly one license manager
+# -------------------------------------------------------------------------
+# Splunk Web, 2026-08-25:
+#
+#   "Peer pp-splunk-idx02 has the same license installed as peer
+#    pp-splunk-idx01 ... Please fix this issue in 72 hours, otherwise peer
+#    will be disabled."
+#
+# The base `splunk` role installs {{ splunk_license }} unconditionally and runs
+# in all four distributed Splunk plays, so cm, both peers AND the search head
+# each became an independent license manager holding the same license. Splunk
+# reads that as one licensed volume claimed four times.
+#
+# Note what the warning did NOT say: pp-splunk holds the same duplicate and is
+# never mentioned, because the cluster manager compares licenses across its
+# PEERS and a search head is not one. Acting only on the hosts named in a
+# vendor warning would have left a third duplicate in place. These checks are
+# written against the INVARIANT -- one holder, everyone else pointed at it --
+# rather than against the symptom that happened to get reported.
+
+check_pf_shell pp-splunk-cm \
+  'ls /opt/splunk/etc/licenses/enterprise/ 2>/dev/null | grep -cE "\.(lic|license|xml)$"' \
+  '\(stdout\)[[:space:]]+[1-9]' \
+  "pp-splunk-cm: holds the deployment's license (license manager)"
+
+# Asserting the ABSENCE on every other node. A license peer ignores a local
+# license, so a stray one causes no immediate symptom -- it just re-arms the
+# same 72-hour warning the next time someone reruns the base role and Splunk
+# re-compares. "No symptom" is not the same as "correct".
+for h in pp-splunk-idx01 pp-splunk-idx02 pp-splunk; do
+  check_pf_shell "$h" \
+    'ls /opt/splunk/etc/licenses/enterprise/ 2>/dev/null | grep -cE "\.(lic|license|xml)$"' \
+    '\(stdout\)[[:space:]]+0' \
+    "$h: holds no local license (defers to pp-splunk-cm)"
+done
+
+# The outcome, from the manager's side. The three checks above prove the FILES
+# are in the right places; this proves the nodes actually reached each other.
+# A wrong URI, an unreachable 8089 or a pass4SymmKey mismatch all leave the
+# filesystem looking perfect and the peer still licensing itself.
+for h in pp-splunk-idx01 pp-splunk-idx02 pp-splunk; do
+  check_pf_shell_token pp-splunk-cm \
+    "curl -sS -k -u '$SPLUNK_AUTH' 'https://127.0.0.1:8089/services/licenser/slaves?output_mode=json&count=0' | grep -c '\"label\"[[:space:]]*:[[:space:]]*\"$h\"' || true" \
+    '\(stdout\)[[:space:]]+[1-9]' \
+    "$h: registered with the license manager"
+done
+
+# The warning itself. Splunk keeps licenser messages until the condition
+# clears, so this is the check that actually answers "is the 72-hour clock
+# still running?" -- the only one of these that a human would recognise as the
+# original problem.
+check_pf_shell pp-splunk-cm \
+  "curl -sS -k -u '$SPLUNK_AUTH' 'https://127.0.0.1:8089/services/licenser/messages?output_mode=json&count=0' | grep -ci 'same license' || true" \
+  '\(stdout\)[[:space:]]+0' \
+  "no active duplicate-license warning"
+
 # =========================================================================
 # 8. Enterprise services — root certs, AUE lockdown, autologin, squid, DNS
 # =========================================================================
