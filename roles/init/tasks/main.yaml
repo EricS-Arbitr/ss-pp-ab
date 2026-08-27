@@ -8,5 +8,75 @@
     delay: "{{ init_wait_delay }}"
     sleep: "{{ init_wait_sleep }}"
 
+# =========================================================================
+# Repair a poisoned default-gateway ARP entry before anything needs to leave
+# the subnet.
+# =========================================================================
+# MEASURED, not theorised. On 2026-08-25 pp-dc03 (ss-pp-ab, Windows Server
+# 2019) held 192.168.100.1 at 00-50-56-98-7D-D7 while pp-ot-router's eth4 is
+# 00-50-56-A8-30-DC. On 2026-08-27 all six win-hunt boxes (ss-pp-so, Windows
+# 10) held 172.16.9.1 at THE SAME 00-50-56-98-7D-D7 while pp-internal-router's
+# eth0 is 00-50-56-A8-88-90. One MAC, four subnets, two independent ranges.
+#
+# WHY IT IS SO HARD TO SEE: the impostor answers ICMP. The gateway pings, so
+# every check that stops at "can I reach my gateway" reports healthy while
+# nothing routes. pp-dc03 burned three deploy attempts and 4h31m on it; the
+# hunt boxes cost another full run. The router meanwhile shows the host's own
+# ARP entry going STALE, because it never receives a packet.
+#
+# WINDOWS ONLY. Linux on the same wire is unaffected -- pp-splunk (172.16.9.20)
+# held the correct MAC throughout and reached the DC fine. Windows accepts an
+# unsolicited ARP reply for an address it did not ask about; Linux ignores it
+# (arp_accept=0). Not version-specific: confirmed on Server 2019 and Windows 10.
+#
+# WHY A FLUSH IS ENOUGH, AND WHY NOT A STATIC ENTRY. After one flush every one
+# of 45 hosts re-learned the CORRECT MAC and kept it. The impostor is not
+# re-announcing; a stale entry gets planted once (boot/provisioning) and then
+# persists because Windows never re-ARPs an entry it still considers valid.
+# Pinning New-NetNeighbor -State Permanent was considered and rejected: it can
+# isolate a host if the pinned MAC is ever wrong, and it buys nothing over a
+# flush that demonstrably holds.
+#
+# Records the MAC BEFORE flushing on purpose. The first sweep flushed and then
+# read back, which destroyed the evidence for 42 of 45 hosts and left no census
+# of who was actually affected. Every fresh range should now produce that data.
+#
+# THIS IS A WORKAROUND FOR A PLATFORM BEHAVIOUR. 00:50:56:98:7D:D7 is in a
+# different VMware MAC block (:98:) from every real router interface (:A8:) and
+# appears across independent ranges, so only SimSpace can remove the cause.
+- name: Repair the default-gateway ARP entry if it was poisoned
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = 'SilentlyContinue'
+    $gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' |
+           Sort-Object RouteMetric | Select-Object -First 1).NextHop
+    if (-not $gw -or $gw -eq '0.0.0.0') { Write-Output 'INIT_GW_NONE'; exit 0 }
+    $before = (Get-NetNeighbor -IPAddress $gw | Select-Object -First 1).LinkLayerAddress
+    Remove-NetNeighbor -IPAddress $gw -Confirm:$false
+    Start-Sleep -Seconds 3
+    Test-Connection -ComputerName $gw -Count 2 -Quiet | Out-Null
+    $after = (Get-NetNeighbor -IPAddress $gw | Select-Object -First 1).LinkLayerAddress
+    if (-not $after) { Write-Output ("INIT_GW_UNRESOLVED gw=" + $gw + " was=" + $before); exit 0 }
+    if ($before -and $before -ne $after) {
+      Write-Output ("INIT_GW_REPAIRED gw=" + $gw + " was=" + $before + " now=" + $after); exit 0
+    }
+    Write-Output ("INIT_GW_OK gw=" + $gw + " mac=" + $after)
+  register: init_gw_arp
+  changed_when: "'INIT_GW_REPAIRED' in (init_gw_arp.stdout | default(''))"
+  # Never fatal. The play carries any_errors_fatal: true, so failing here for
+  # one host stops all 45 -- and a host whose gateway will not resolve is going
+  # to fail a later precondition that reports it far better than init can.
+  failed_when: false
+
+# Surfaced deliberately rather than left in the register. A repair that nobody
+# sees is indistinguishable from the problem never happening, and the whole
+# point of recording `was=` is to build a census across fresh ranges.
+- name: Report gateway ARP repairs
+  ansible.builtin.debug:
+    msg: "{{ init_gw_arp.stdout | default('') | trim }}"
+  when: >
+    'INIT_GW_REPAIRED' in (init_gw_arp.stdout | default('')) or
+    'INIT_GW_UNRESOLVED' in (init_gw_arp.stdout | default('')) or
+    'INIT_GW_NONE' in (init_gw_arp.stdout | default(''))
+
 - name: Ping test to verify connectivity
   ansible.windows.win_ping:
