@@ -114,6 +114,170 @@ report_elapsed() {
 trap report_elapsed EXIT
 trap 'DEPLOY_RESULT="INTERRUPTED by signal"; exit 130' INT TERM
 
+# --- Prerequisites the platform is responsible for ---------------------------
+# Ported from ss-pp-so 2026-09-01. A blueprint-driven deploy extracts the
+# tarball as root and then runs this script unattended, so anything that would
+# otherwise be a "now run these commands by hand" instruction has to happen
+# here.
+#
+# /etc/ansible/retry is the one that bites: extracted root-owned, so the
+# ansible user cannot write retry files. Every failed run printed "Could not
+# create retry file ... Permission denied" and attempt 2 silently lost its
+# retry-file scope, degrading to a full sweep -- slower, and it hides which
+# hosts actually failed.
+
+
+# --- Unattended prerequisites -------------------------------------------------
+# This deploy is driven by the range BLUEPRINT: the platform spins the images,
+# pulls the tarball from GitHub and extracts it, then runs this script. Nobody
+# is at a keyboard. Anything that would previously have been a "now run these
+# three commands by hand" instruction has to be done here instead.
+#
+# Two things the extraction leaves wrong:
+#   * /etc/ansible/retry — the tarball extracts as root, so the ansible user
+#     cannot write retry files. Previously every failed run printed
+#     "Could not create retry file ... Permission denied" and attempt 2 lost
+#     its retry-file scope, silently degrading to a full sweep.
+#   * /home/simspace/.vault_pass — the password file and its value are placed
+#     by the platform, but not necessarily with ownership and mode the ansible
+#     user can read. 0600 root:root is unreadable to simspace, and every
+#     vaulted variable in the repo resolves through it.
+#
+# `sudo -n` throughout: non-interactive, so a sudo password prompt FAILS
+# immediately rather than hanging a headless deploy forever waiting on stdin.
+ANSIBLE_OWNER="${ANSIBLE_OWNER:-simspace}"
+VAULT_PASS_FILE="${VAULT_PASS_FILE:-/home/simspace/.vault_pass}"
+RETRY_DIR="${RETRY_DIR:-/etc/ansible/retry}"
+
+as_root() {
+	if [ "$(id -u)" -eq 0 ]; then
+		"$@"
+	else
+		sudo -n "$@"
+	fi
+}
+
+# ASSERT THE END STATE UNCONDITIONALLY. An earlier version skipped the chown
+# when the path merely looked fine for the CURRENT user -- and a
+# blueprint-driven deploy runs as root, for whom everything is writable. The
+# chown was therefore skipped on exactly the run it was written for, leaving
+# /etc/ansible/retry as root:root (observed 2026-08-05).
+#
+# The requirement is an end state -- owned by the ansible user -- not "writable
+# by whoever happens to be running". chown/chmod are idempotent and cost
+# milliseconds; there is no reason to guess whether they are needed.
+owner_of() {
+	# GNU first (the controller is Ubuntu), BSD fallback so this is testable
+	# on a developer Mac.
+	stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || echo "unknown"
+}
+
+echo "=== Asserting prerequisites the platform is responsible for ==="
+
+# retry dir — the tarball extracts as root, so this lands root-owned. Without
+# the fix a failed attempt 1 cannot write its retry file, and attempt 2 loses
+# retry-file scope and silently degrades to a full sweep.
+as_root mkdir -p "$RETRY_DIR" 2>/dev/null || true
+# Failures are deliberately silent here: what matters is the END STATE,
+# checked immediately below. Reporting "chown failed" when the ownership was
+# already correct is the same proxy-versus-claim mistake catalogued all
+# through this log.
+as_root chown -R "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$RETRY_DIR" 2>/dev/null || true
+as_root chmod 0755 "$RETRY_DIR" 2>/dev/null || true
+
+# Verify the END STATE, not that the commands ran.
+retry_owner="$(owner_of "$RETRY_DIR")"
+if [ "$retry_owner" = "$ANSIBLE_OWNER" ]; then
+	echo "  $RETRY_DIR owned by $ANSIBLE_OWNER"
+else
+	echo "  WARN: $RETRY_DIR still owned by '$retry_owner', wanted '$ANSIBLE_OWNER'"
+	echo "        Retry-file scoping will be lost on a failed attempt; deploy continues."
+fi
+
+# vault password file — placed by the blueprint with its value, but not
+# necessarily with ownership and mode the ansible user can read.
+if [ -f "$VAULT_PASS_FILE" ]; then
+	as_root chown "$ANSIBLE_OWNER:$ANSIBLE_OWNER" "$VAULT_PASS_FILE" 2>/dev/null || true
+	as_root chmod 0600 "$VAULT_PASS_FILE" 2>/dev/null || true
+	vault_owner="$(owner_of "$VAULT_PASS_FILE")"
+	if [ "$vault_owner" = "$ANSIBLE_OWNER" ]; then
+		echo "  $VAULT_PASS_FILE owned by $ANSIBLE_OWNER, mode 0600"
+	else
+		echo "  WARN: $VAULT_PASS_FILE still owned by '$vault_owner'"
+	fi
+fi
+
+# --- Vault guard -------------------------------------------------------------
+# Refuse to deploy if the vault is missing or plaintext. Written FAIL-CLOSED on
+# purpose: the equivalent guard in so-ansible was
+#   if [ -f <path> ] && ! head -1 <path> | grep -q '^$ANSIBLE_VAULT'
+# and a MISSING file short-circuited the whole test to false, so it passed on
+# every run and had never once fired. A plaintext vault would have shipped
+# silently. Two separate checks here, both fatal.
+VAULT_FILE="group_vars/all/vault.yml"
+
+if [ ! -f "$VAULT_FILE" ]; then
+	echo "ERROR: $VAULT_FILE not found. Refusing to deploy."
+	echo "       Every credential in this repo resolves through it."
+	exit 1
+fi
+
+if ! head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
+	echo "ERROR: $VAULT_FILE is plaintext. Refusing to deploy."
+	echo "       Re-encrypt: ansible-vault encrypt $VAULT_FILE"
+	exit 1
+fi
+
+if [ ! -f "$VAULT_PASS_FILE" ]; then
+	echo "ERROR: $VAULT_PASS_FILE not found. Refusing to deploy."
+	echo "       The range blueprint is responsible for placing this file and"
+	echo "       its value on the controller; it does NOT persist across"
+	echo "       spin-ups. If the blueprint is not doing that, fix it there —"
+	echo "       a hands-off deploy cannot prompt for it."
+	exit 1
+fi
+
+# READABILITY, not existence. The chown/chmod above may have failed (sudo -n
+# is deliberately non-interactive), and a file that exists but cannot be read
+# fails later as a confusing vault decrypt error on the first vaulted variable
+# rather than here. Test what actually matters: can THIS process read it?
+if ! head -c1 "$VAULT_PASS_FILE" >/dev/null 2>&1; then
+	echo "ERROR: $VAULT_PASS_FILE exists but is not readable by $(id -un)."
+	echo "       Ownership/mode could not be corrected — check that the"
+	echo "       deploy account has passwordless sudo, or have the blueprint"
+	echo "       place the file as $ANSIBLE_OWNER:$ANSIBLE_OWNER mode 0600."
+	ls -l "$VAULT_PASS_FILE" 2>&1 | sed 's/^/       /'
+	exit 1
+fi
+
+# And that it is not empty -- an empty password file decrypts nothing and the
+# error surfaces far from here.
+if [ ! -s "$VAULT_PASS_FILE" ]; then
+	echo "ERROR: $VAULT_PASS_FILE is empty. Refusing to deploy."
+	exit 1
+fi
+
+# --- Install Galaxy collections (idempotent — skips already-installed ones) ---
+# Required for the pfsensible.core collection that drives the pp-ot-firewall
+# pfSense play. Pulled through the corp proxy because the Ansible VM doesn't
+# have direct internet. Failure here doesn't abort the deploy — ansible-playbook
+# will surface a clear "collection not found" error if anything's actually missing.
+#
+# NOTE: a `sleep 120` here was removed 2026-07-02 in a speed pass, reasoning
+# that the retry loop already handles a VM that is not ready yet. RESTORED
+# 2026-08-05 at 180s, because that reasoning did not survive contact with a
+# fresh range: the first two attempts of a from-scratch deploy both failed on
+# hosts that had not finished booting, and "the retry loop handles it" meant
+# paying for two full multi-hour sweeps to discover that. A three-minute wait
+# is cheap against a ~5-hour deploy; two wasted passes are not.
+
+
+#
+# BOOT_DELAY is overridable so iterative deploys need not pay it -- which was
+# the legitimate half of the 2026-07-02 argument:
+#     BOOT_DELAY=0 ./deploy.sh
+
+
 echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then
