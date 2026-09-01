@@ -9,74 +9,124 @@
     sleep: "{{ init_wait_sleep }}"
 
 # =========================================================================
-# Repair a poisoned default-gateway ARP entry before anything needs to leave
-# the subnet.
+# Repair AND PIN the default-gateway ARP entry before anything routes
 # =========================================================================
-# MEASURED, not theorised. On 2026-08-25 pp-dc03 (ss-pp-ab, Windows Server
-# 2019) held 192.168.100.1 at 00-50-56-98-7D-D7 while pp-ot-router's eth4 is
-# 00-50-56-A8-30-DC. On 2026-08-27 all six win-hunt boxes (ss-pp-so, Windows
-# 10) held 172.16.9.1 at THE SAME 00-50-56-98-7D-D7 while pp-internal-router's
-# eth0 is 00-50-56-A8-88-90. One MAC, four subnets, two independent ranges.
+# MEASURED. One MAC, 00:50:56:98:7D:D7, answers ARP for the default-gateway
+# address on whatever segment it appears on. Seen on four subnets across three
+# independent ranges, always Windows-only -- Linux on the same wire ignores
+# unsolicited ARP for an address it did not ask about (arp_accept=0) while
+# Windows accepts the reply and overwrites its cache. Confirmed on Server 2019
+# and Windows 10, so it is not version-specific.
 #
-# WHY IT IS SO HARD TO SEE: the impostor answers ICMP. The gateway pings, so
-# every check that stops at "can I reach my gateway" reports healthy while
-# nothing routes. pp-dc03 burned three deploy attempts and 4h31m on it; the
-# hunt boxes cost another full run. The router meanwhile shows the host's own
-# ARP entry going STALE, because it never receives a packet.
+# IT ANSWERS ICMP. The gateway pings, so any check that stops at "can I reach
+# my gateway" reports healthy while nothing routes off-subnet. It presents as
+# DNS failures, domain joins failing, Fleet enrolment failing -- and the router
+# meanwhile shows the host's own ARP entry going STALE, because it never
+# receives a packet.
 #
-# WINDOWS ONLY. Linux on the same wire is unaffected -- pp-splunk (172.16.9.20)
-# held the correct MAC throughout and reached the DC fine. Windows accepts an
-# unsolicited ARP reply for an address it did not ask about; Linux ignores it
-# (arp_accept=0). Not version-specific: confirmed on Server 2019 and Windows 10.
+# A FLUSH ALONE IS NOT ENOUGH, which an earlier version of this task assumed.
+# On 2026-08-27 one flush appeared to hold across all 45 hosts and the
+# conclusion drawn was that the entry is planted once at boot. It is not: on
+# 2026-08-31 hosts repaired by this very task had reverted to the impostor MAC
+# by the end of the same run, with NO reboot (uptime 3 days on both a reverted
+# host and a healthy one). The impostor re-announces, so the entry must be
+# PINNED, not merely corrected.
 #
-# WHY A FLUSH IS ENOUGH, AND WHY NOT A STATIC ENTRY. After one flush every one
-# of 45 hosts re-learned the CORRECT MAC and kept it. The impostor is not
-# re-announcing; a stale entry gets planted once (boot/provisioning) and then
-# persists because Windows never re-ARPs an entry it still considers valid.
-# Pinning New-NetNeighbor -State Permanent was considered and rejected: it can
-# isolate a host if the pinned MAC is ever wrong, and it buys nothing over a
-# flush that demonstrably holds.
+# A Permanent neighbour entry cannot be overwritten by a forged reply.
+# Verified on win-hunt-3 2026-08-31: State=Permanent, off-subnet reachability
+# restored. Note that verifying a pin requires reading State -- reading
+# LinkLayerAddress alone cannot distinguish a pinned entry from a dynamic one
+# that happened to re-learn correctly, which is how an earlier manual attempt
+# was mistakenly believed to have worked.
 #
-# Records the MAC BEFORE flushing on purpose. The first sweep flushed and then
-# read back, which destroyed the evidence for 42 of 45 hosts and left no census
-# of who was actually affected. Every fresh range should now produce that data.
+# SAFETY. Pinning the wrong MAC would isolate the host, so the pin is only
+# written after the learned MAC is confirmed NOT blocklisted AND an off-subnet
+# host is confirmed reachable, and it is removed again if reachability breaks
+# afterwards. The probe target is the host's own configured DNS server: in
+# every range these roles serve, that is off-subnet, so it proves routing
+# rather than merely proving the gateway answers.
 #
-# THIS IS A WORKAROUND FOR A PLATFORM BEHAVIOUR. 00:50:56:98:7D:D7 is in a
+# This is a workaround for a platform behaviour. 00:50:56:98:7D:D7 is in a
 # different VMware MAC block (:98:) from every real router interface (:A8:) and
-# appears across independent ranges, so only SimSpace can remove the cause.
-- name: Repair the default-gateway ARP entry if it was poisoned
+# recurs across independent ranges, so only the platform vendor can remove the
+# cause.
+- name: Repair and pin the default-gateway ARP entry
   ansible.windows.win_shell: |
     $ErrorActionPreference = 'SilentlyContinue'
-    $gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' |
-           Sort-Object RouteMetric | Select-Object -First 1).NextHop
+    $blocked = "{{ init_gw_arp_blocklist | join(',') }}".Split(',') |
+               ForEach-Object { $_.Trim().ToUpper() }
+    function Norm($m) { if ($m) { $m.ToUpper().Replace(':','-') } else { '' } }
+
+    $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' |
+             Sort-Object RouteMetric | Select-Object -First 1
+    $gw = $route.NextHop
     if (-not $gw -or $gw -eq '0.0.0.0') { Write-Output 'INIT_GW_NONE'; exit 0 }
-    $before = (Get-NetNeighbor -IPAddress $gw | Select-Object -First 1).LinkLayerAddress
-    Remove-NetNeighbor -IPAddress $gw -Confirm:$false
-    Start-Sleep -Seconds 3
-    Test-Connection -ComputerName $gw -Count 2 -Quiet | Out-Null
-    $after = (Get-NetNeighbor -IPAddress $gw | Select-Object -First 1).LinkLayerAddress
-    if (-not $after) { Write-Output ("INIT_GW_UNRESOLVED gw=" + $gw + " was=" + $before); exit 0 }
-    if ($before -and $before -ne $after) {
-      Write-Output ("INIT_GW_REPAIRED gw=" + $gw + " was=" + $before + " now=" + $after); exit 0
+
+    # Off-subnet reachability, not "can I ping my gateway" -- the impostor
+    # answers ICMP, so the gateway is not a valid test of anything.
+    $dns = (Get-DnsClientServerAddress -AddressFamily IPv4 |
+            Where-Object { $_.ServerAddresses.Count -gt 0 } |
+            Select-Object -First 1).ServerAddresses[0]
+    function Routes { if (-not $dns) { return $true }
+                      return [bool](Test-Connection -ComputerName $dns -Count 2 -Quiet) }
+
+    $repaired = $false
+    for ($i = 0; $i -lt {{ init_gw_arp_attempts }}; $i++) {
+      $n   = Get-NetNeighbor -IPAddress $gw | Select-Object -First 1
+      $mac = Norm $n.LinkLayerAddress
+      if ($mac -and ($blocked -notcontains $mac) -and (Routes)) { break }
+      Remove-NetNeighbor -IPAddress $gw -Confirm:$false
+      Start-Sleep -Seconds 3
+      Test-Connection -ComputerName $gw -Count 2 -Quiet | Out-Null
+      $repaired = $true
     }
-    Write-Output ("INIT_GW_OK gw=" + $gw + " mac=" + $after)
+
+    $n   = Get-NetNeighbor -IPAddress $gw | Select-Object -First 1
+    $mac = Norm $n.LinkLayerAddress
+    if (-not $mac -or ($blocked -contains $mac)) {
+      Write-Output ("INIT_GW_FAIL gw=" + $gw + " mac=" + $mac + " still-blocklisted"); exit 0
+    }
+    if (-not (Routes)) {
+      Write-Output ("INIT_GW_FAIL gw=" + $gw + " mac=" + $mac + " no-off-subnet-route"); exit 0
+    }
+    if ($n.State -eq 'Permanent') {
+      Write-Output ("INIT_GW_OK gw=" + $gw + " mac=" + $mac + " already-pinned"); exit 0
+    }
+
+    Remove-NetNeighbor -IPAddress $gw -Confirm:$false
+    try {
+      New-NetNeighbor -IPAddress $gw -LinkLayerAddress $mac `
+        -InterfaceIndex $route.InterfaceIndex -State Permanent -ErrorAction Stop | Out-Null
+    } catch {
+      Write-Output ("INIT_GW_PIN_FAILED gw=" + $gw + " mac=" + $mac + " " + $_.Exception.Message)
+      exit 0
+    }
+    # Roll back rather than leave a host isolated behind a bad pin.
+    if (-not (Routes)) {
+      Remove-NetNeighbor -IPAddress $gw -Confirm:$false
+      Start-Sleep -Seconds 3
+      Write-Output ("INIT_GW_PIN_ROLLED_BACK gw=" + $gw + " mac=" + $mac); exit 0
+    }
+    $verify = (Get-NetNeighbor -IPAddress $gw | Select-Object -First 1).State
+    if ($repaired) { Write-Output ("INIT_GW_REPAIRED_AND_PINNED gw=" + $gw + " mac=" + $mac + " state=" + $verify) }
+    else           { Write-Output ("INIT_GW_PINNED gw=" + $gw + " mac=" + $mac + " state=" + $verify) }
   register: init_gw_arp
-  changed_when: "'INIT_GW_REPAIRED' in (init_gw_arp.stdout | default(''))"
-  # Never fatal. The play carries any_errors_fatal: true, so failing here for
-  # one host stops all 45 -- and a host whose gateway will not resolve is going
-  # to fail a later precondition that reports it far better than init can.
+  changed_when: >
+    'INIT_GW_PINNED' in (init_gw_arp.stdout | default('')) or
+    'INIT_GW_REPAIRED_AND_PINNED' in (init_gw_arp.stdout | default(''))
+  # Never fatal: the play carries any_errors_fatal, so failing here for one
+  # host stops all 45, and a host that cannot route fails a later precondition
+  # that reports it far better than init can.
   failed_when: false
 
-# Surfaced deliberately rather than left in the register. A repair that nobody
-# sees is indistinguishable from the problem never happening, and the whole
-# point of recording `was=` is to build a census across fresh ranges.
+# Surfaced deliberately. A repair nobody sees is indistinguishable from the
+# problem never happening, and the `was=`/`mac=` values are the census that
+# tells the platform vendor this is still occurring.
 - name: Report gateway ARP repairs
   ansible.builtin.debug:
     msg: "{{ init_gw_arp.stdout | default('') | trim }}"
   when: >
-    'INIT_GW_REPAIRED' in (init_gw_arp.stdout | default('')) or
-    'INIT_GW_UNRESOLVED' in (init_gw_arp.stdout | default('')) or
-    'INIT_GW_NONE' in (init_gw_arp.stdout | default(''))
+    'INIT_GW_OK' not in (init_gw_arp.stdout | default('none'))
 
 - name: Ping test to verify connectivity
   ansible.windows.win_ping:

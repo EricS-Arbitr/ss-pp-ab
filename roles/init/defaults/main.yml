@@ -14,3 +14,14 @@
 init_wait_timeout: 900
 init_wait_delay: 15
 init_wait_sleep: 10
+
+# --- Default-gateway ARP poisoning (see tasks/main.yaml) ------------------
+# MACs known to falsely answer ARP for a gateway address. The task flushes and
+# re-probes until the learned MAC is not on this list, then pins it.
+# 00:50:56:98:7D:D7 has been observed on four subnets across three independent
+# ranges; every real router interface in these ranges is in the :A8: block.
+# pp-dc03 was the first casualty, 2026-08-25.
+init_gw_arp_blocklist:
+  - "00-50-56-98-7D-D7"
+# How many flush/re-probe cycles before giving up and reporting INIT_GW_FAIL.
+init_gw_arp_attempts: 6
