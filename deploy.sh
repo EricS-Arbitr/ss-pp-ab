@@ -207,54 +207,71 @@ if [ -f "$VAULT_PASS_FILE" ]; then
 	fi
 fi
 
-# --- Vault guard -------------------------------------------------------------
-# Refuse to deploy if the vault is missing or plaintext. Written FAIL-CLOSED on
-# purpose: the equivalent guard in so-ansible was
+# --- Vault guard (only where the repo actually uses a vault) -----------------
+# THIS REPO STORES CREDENTIALS IN PLAINTEXT, in group_vars/all/main.yml. That is
+# a deliberate, long-standing convention here -- domain_admin_password and
+# splunk_admin_password have always been plaintext -- and there is no
+# group_vars/all/vault.yml to check.
+#
+# The guard below was imported wholesale from ss-pp-so on 2026-09-01 along with
+# the retry-directory prerequisites. ss-pp-so IS vaulted, so there the checks
+# are correct; here they made deploy.sh exit 1 before Ansible ever started,
+# with "group_vars/all/vault.yml not found. Refusing to deploy." Porting a
+# prerequisite block between repos with different credential conventions
+# carried an assertion that could never pass.
+#
+# Gated on an explicit flag rather than "skip if the file is absent". A
+# file-absence short-circuit is exactly the bug the original comment warned
+# about: in so-ansible the equivalent guard read
 #   if [ -f <path> ] && ! head -1 <path> | grep -q '^$ANSIBLE_VAULT'
-# and a MISSING file short-circuited the whole test to false, so it passed on
-# every run and had never once fired. A plaintext vault would have shipped
-# silently. Two separate checks here, both fatal.
-VAULT_FILE="group_vars/all/vault.yml"
+# so a MISSING vault made the whole test false and it passed on every run,
+# having never once fired. An explicit flag cannot fail that way -- set it to
+# true and every check below becomes fatal again.
+REPO_USES_VAULT="${REPO_USES_VAULT:-false}"
 
-if [ ! -f "$VAULT_FILE" ]; then
-	echo "ERROR: $VAULT_FILE not found. Refusing to deploy."
-	echo "       Every credential in this repo resolves through it."
-	exit 1
-fi
+if [ "$REPO_USES_VAULT" = "true" ]; then
+	VAULT_FILE="group_vars/all/vault.yml"
 
-if ! head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
-	echo "ERROR: $VAULT_FILE is plaintext. Refusing to deploy."
-	echo "       Re-encrypt: ansible-vault encrypt $VAULT_FILE"
-	exit 1
-fi
+	if [ ! -f "$VAULT_FILE" ]; then
+		echo "ERROR: $VAULT_FILE not found. Refusing to deploy."
+		echo "       Every credential in this repo resolves through it."
+		exit 1
+	fi
 
-if [ ! -f "$VAULT_PASS_FILE" ]; then
-	echo "ERROR: $VAULT_PASS_FILE not found. Refusing to deploy."
-	echo "       The range blueprint is responsible for placing this file and"
-	echo "       its value on the controller; it does NOT persist across"
-	echo "       spin-ups. If the blueprint is not doing that, fix it there —"
-	echo "       a hands-off deploy cannot prompt for it."
-	exit 1
-fi
+	if ! head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
+		echo "ERROR: $VAULT_FILE is plaintext. Refusing to deploy."
+		echo "       Re-encrypt: ansible-vault encrypt $VAULT_FILE"
+		exit 1
+	fi
 
-# READABILITY, not existence. The chown/chmod above may have failed (sudo -n
-# is deliberately non-interactive), and a file that exists but cannot be read
-# fails later as a confusing vault decrypt error on the first vaulted variable
-# rather than here. Test what actually matters: can THIS process read it?
-if ! head -c1 "$VAULT_PASS_FILE" >/dev/null 2>&1; then
-	echo "ERROR: $VAULT_PASS_FILE exists but is not readable by $(id -un)."
-	echo "       Ownership/mode could not be corrected — check that the"
-	echo "       deploy account has passwordless sudo, or have the blueprint"
-	echo "       place the file as $ANSIBLE_OWNER:$ANSIBLE_OWNER mode 0600."
-	ls -l "$VAULT_PASS_FILE" 2>&1 | sed 's/^/       /'
-	exit 1
-fi
+	if [ ! -f "$VAULT_PASS_FILE" ]; then
+		echo "ERROR: $VAULT_PASS_FILE not found. Refusing to deploy."
+		echo "       The range blueprint is responsible for placing this file and"
+		echo "       its value on the controller; it does NOT persist across"
+		echo "       spin-ups. If the blueprint is not doing that, fix it there —"
+		echo "       a hands-off deploy cannot prompt for it."
+		exit 1
+	fi
 
-# And that it is not empty -- an empty password file decrypts nothing and the
-# error surfaces far from here.
-if [ ! -s "$VAULT_PASS_FILE" ]; then
-	echo "ERROR: $VAULT_PASS_FILE is empty. Refusing to deploy."
-	exit 1
+	# READABILITY, not existence. The chown/chmod above may have failed (sudo -n
+	# is deliberately non-interactive), and a file that exists but cannot be read
+	# fails later as a confusing vault decrypt error on the first vaulted variable
+	# rather than here. Test what actually matters: can THIS process read it?
+	if ! head -c1 "$VAULT_PASS_FILE" >/dev/null 2>&1; then
+		echo "ERROR: $VAULT_PASS_FILE exists but is not readable by $(id -un)."
+		echo "       Ownership/mode could not be corrected — check that the"
+		echo "       deploy account has passwordless sudo, or have the blueprint"
+		echo "       place the file as $ANSIBLE_OWNER:$ANSIBLE_OWNER mode 0600."
+		ls -l "$VAULT_PASS_FILE" 2>&1 | sed 's/^/       /'
+		exit 1
+	fi
+
+	# And that it is not empty -- an empty password file decrypts nothing and the
+	# error surfaces far from here.
+	if [ ! -s "$VAULT_PASS_FILE" ]; then
+		echo "ERROR: $VAULT_PASS_FILE is empty. Refusing to deploy."
+		exit 1
+	fi
 fi
 
 # --- Install Galaxy collections (idempotent — skips already-installed ones) ---
