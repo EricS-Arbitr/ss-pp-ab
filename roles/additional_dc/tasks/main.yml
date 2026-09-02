@@ -20,6 +20,24 @@
     account_disabled: no
 
 # =========================================================================
+# Is this host ALREADY a domain controller? Everything below branches on it.
+# =========================================================================
+# Win32_ComputerSystem.DomainRole: 4 = backup DC, 5 = primary DC. Anything
+# lower is a member server that has not been promoted.
+#
+# This fact did not exist before 2026-09-02 and its absence is what made both
+# tasks below wrong on a re-run. See the comment on the next task.
+- name: Determine whether this host is already a domain controller
+  ansible.windows.win_shell: |
+    if ((Get-CimInstance -ClassName Win32_ComputerSystem).DomainRole -ge 4) {
+      Write-Output 'ADDC_ALREADY_DC'
+    } else {
+      Write-Output 'ADDC_NOT_DC'
+    }
+  register: addc_role_state
+  changed_when: false
+
+# =========================================================================
 # The rescue below is NOT self-reversing, so undo it first.
 # =========================================================================
 # When promotion fails, the rescue sets the DNS service to stopped + DISABLED.
@@ -28,15 +46,58 @@
 # disabled service. PowerPlant 2026-08-25: three deploy attempts, 4h 31m, and
 # attempts 2 and 3 were sabotaged by attempt 1's own cleanup.
 #
-# Left stopped, not started: promotion starts it once there is a zone to serve.
-# Starting a zone-less DNS server here would re-create exactly the SERVFAIL
-# the rescue exists to prevent.
-- name: Undo a previous rescue — DNS may be disabled from a failed run
+# THAT FIX THEN BROKE THE SAME WAY IT WAS FIXING. 2026-08-25 wrote the undo as
+# `start_mode: auto` PLUS `state: stopped`, unconditionally. On a host that is
+# already a healthy promoted DC, that stops a running, zone-serving DNS
+# service -- and dcpromo has by then put 127.0.0.1 at the front of the NIC's
+# resolver list, so the preflight three tasks down queried the very service
+# this task had just killed and reported `srv-lookup-failed-via-127.0.0.1`.
+#
+# ss-pp-stacked 2026-09-02: attempt 1 promoted pp-dc02 and pp-dc03 cleanly;
+# attempts 2 and 3 each burned six 20s retries and failed both hosts. The
+# error text then blamed a gateway ARP poisoning that had nothing to do with
+# it, because the ARP flush is the only recovery the probe knows. Once again a
+# run was sabotaged by its own cleanup -- the exact sentence three lines up.
+#
+# So the two halves are now separate, and only the destructive half is
+# conditional:
+#   * re-enabling autostart is safe on ANY host and always runs
+#   * stopping the service is a containment action that applies ONLY to a host
+#     with no AD zone to serve, i.e. one that is not yet a DC
+- name: Undo a previous rescue — re-enable DNS autostart
   ansible.windows.win_service:
     name: DNS
     start_mode: auto
-    state: stopped
   failed_when: false
+
+# Left stopped, not started: promotion starts it once there is a zone to serve.
+# Starting a zone-less DNS server here would re-create exactly the SERVFAIL
+# the rescue exists to prevent.
+- name: Not yet a DC — stop DNS so a zone-less server cannot SERVFAIL
+  ansible.windows.win_service:
+    name: DNS
+    state: stopped
+  when: "'ADDC_ALREADY_DC' not in addc_role_state.stdout"
+  failed_when: false
+
+# The symmetric half, and it is NOT optional. Making the stop conditional
+# stopped this role from breaking a healthy DC, but it did not repair the DCs
+# the previous version had already broken: ss-pp-stacked attempts 2 and 3 left
+# pp-dc02 and pp-dc03 with DNS stopped and start_mode auto, then failed at the
+# preflight -- which is OUTSIDE the promotion block, so the rescue never ran
+# and nothing restarted the service. Without this task a re-run would skip the
+# stop, skip the preflight, no-op the promotion, and leave those two DCs
+# serving nothing while reporting success.
+#
+# Deliberately NOT `failed_when: false`. A promoted DC whose DNS service will
+# not start is a genuinely broken host, and every other silent-continue in
+# this file's history turned into a multi-hour misdiagnosis somewhere else.
+- name: Already a DC — DNS must be running, it serves the AD zone
+  ansible.windows.win_service:
+    name: DNS
+    state: started
+    start_mode: auto
+  when: "'ADDC_ALREADY_DC' in addc_role_state.stdout"
 
 # =========================================================================
 # Preflight — can this host actually reach a DC before we try to promote?
@@ -65,16 +126,35 @@
 - name: Preflight — prove a domain controller is reachable, recovering if not
   ansible.windows.win_shell: |
     $ErrorActionPreference = 'SilentlyContinue'
+    function DnsCandidates {
+      # Every IPv4 DNS server configured on any interface, LOOPBACK LAST.
+      #
+      # The old form was `Select-Object -First 1`, which took whichever
+      # interface Windows happened to enumerate first. A loopback entry only
+      # reports on THIS host's own DNS service and says nothing about whether
+      # a peer DC is reachable -- and dcpromo puts 127.0.0.1 at the FRONT of
+      # the list, so on any already-promoted host the old selector picked
+      # precisely the uninformative one. Ordering peers first means the probe
+      # answers the question it claims to answer.
+      $all = @(Get-DnsClientServerAddress -AddressFamily IPv4 |
+               ForEach-Object { $_.ServerAddresses }) |
+             Where-Object { $_ } | Select-Object -Unique
+      $peer = @($all | Where-Object { $_ -notmatch '^127\.' })
+      $loop = @($all | Where-Object { $_ -match  '^127\.' })
+      return @($peer + $loop)
+    }
     function Probe {
-      $dns = (Get-DnsClientServerAddress -AddressFamily IPv4 |
-              Where-Object { $_.ServerAddresses.Count -gt 0 } |
-              Select-Object -First 1).ServerAddresses[0]
-      if (-not $dns) { return @($false, 'no-dns-server-configured') }
-      $t = Test-NetConnection -ComputerName $dns -Port 389 -WarningAction SilentlyContinue
-      if (-not $t.TcpTestSucceeded) { return @($false, "ldap389-unreachable-to-$dns") }
-      $srv = Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.{{ domain_name }}" -Type SRV -Server $dns
-      if (-not $srv) { return @($false, "srv-lookup-failed-via-$dns") }
-      return @($true, "ok-via-$dns")
+      $cands = DnsCandidates
+      if (-not $cands) { return @($false, 'no-dns-server-configured') }
+      $why = 'no-dns-server-answered'
+      foreach ($dns in $cands) {
+        $t = Test-NetConnection -ComputerName $dns -Port 389 -WarningAction SilentlyContinue
+        if (-not $t.TcpTestSucceeded) { $why = "ldap389-unreachable-to-$dns"; continue }
+        $srv = Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.{{ domain_name }}" -Type SRV -Server $dns
+        if (-not $srv) { $why = "srv-lookup-failed-via-$dns"; continue }
+        return @($true, "ok-via-$dns")
+      }
+      return @($false, $why)
     }
     $r = Probe
     if ($r[0]) { Write-Output ("ADDC_PREFLIGHT_OK " + $r[1]); exit 0 }
@@ -99,6 +179,14 @@
   delay: 20
   until: "'ADDC_PREFLIGHT_FAIL' not in addc_preflight.stdout"
   failed_when: false
+  # An already-promoted DC has nothing to preflight: the promotion this gate
+  # protects is a no-op, and asking a DC to prove it can reach a DC over the
+  # network is a question with no useful answer. Skipping it is also what
+  # keeps a re-run idempotent -- see the DNS autostart task above.
+  #
+  # The fail task below needs no matching `when`: a skipped task still
+  # registers, with no `stdout`, so its `default('')` cannot match.
+  when: "'ADDC_ALREADY_DC' not in addc_role_state.stdout"
 
 - name: Fail fast if no domain controller is reachable
   ansible.builtin.fail:
