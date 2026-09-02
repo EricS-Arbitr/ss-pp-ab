@@ -323,14 +323,27 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
 
 	if [ $i -eq 2 ] && [ -f "$RETRY_FILE" ]; then
 		echo "=== Attempt $i (retry-file scope — failed hosts only) ==="
-		if ansible-playbook $PLAYBOOK --forks $FORKS --limit @"$RETRY_FILE" "$@"; then
+	# STDERR IS MERGED INTO STDOUT DELIBERATELY.
+	#
+	# ss-pp-stacked 2026-09-02: all three attempts failed in ~2 seconds and
+	# /var/log/playbook_run.log contained nothing but "Attempt N failed after
+	# 0h 00m 02s". Every ansible-playbook startup error -- a role that cannot
+	# be found, an unparsable play, a vault secret that is missing, a bad
+	# --limit -- is written to STDERR, and the log is produced by piping this
+	# script's STDOUT into tee. So the log faithfully recorded THAT a deploy
+	# failed while structurally being unable to record WHY.
+	#
+	# Merging here rather than taking over logging with `exec > >(tee ...)`:
+	# the caller already owns the redirect, and a second writer to the same
+	# file interleaves badly.
+		if ansible-playbook $PLAYBOOK --forks $FORKS --limit @"$RETRY_FILE" "$@" 2>&1; then
 			echo "Success on attempt $i (retry scope) after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
 			DEPLOY_RESULT="SUCCESS on attempt $i (retry scope)"
 			break
 		fi
 	else
 		echo "=== Attempt $i (full sweep) ==="
-		if ansible-playbook $PLAYBOOK --forks $FORKS "$@"; then
+		if ansible-playbook $PLAYBOOK --forks $FORKS "$@" 2>&1; then
 			echo "Success on attempt $i after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
 			DEPLOY_RESULT="SUCCESS on attempt $i"
 			break
