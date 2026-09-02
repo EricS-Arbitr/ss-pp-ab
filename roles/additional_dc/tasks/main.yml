@@ -130,12 +130,21 @@
       # Every IPv4 DNS server configured on any interface, LOOPBACK LAST.
       #
       # The old form was `Select-Object -First 1`, which took whichever
-      # interface Windows happened to enumerate first. A loopback entry only
-      # reports on THIS host's own DNS service and says nothing about whether
-      # a peer DC is reachable -- and dcpromo puts 127.0.0.1 at the FRONT of
-      # the list, so on any already-promoted host the old selector picked
-      # precisely the uninformative one. Ordering peers first means the probe
-      # answers the question it claims to answer.
+      # interface Windows happened to enumerate first. A loopback entry
+      # reports only on the DNS service running here, which says nothing
+      # about whether a peer DC is reachable -- and dcpromo puts 127.0.0.1 at
+      # the FRONT of the list, so on any already-promoted host the old
+      # selector picked precisely the uninformative one. Ordering peers first
+      # means the probe answers the question it claims to answer.
+      #
+      # NO APOSTROPHES ANYWHERE IN THIS SCRIPT, INCLUDING IN COMMENTS.
+      # win_shell takes free-form arguments, so Ansible runs split_args over
+      # this entire string and counts quotes -- it does not know PowerShell
+      # has comments. A single possessive, "the host" plus s, is an
+      # unterminated string to that parser, and the play fails to LOAD with
+      # "failed at splitting arguments, either an unbalanced jinja2 block or
+      # quotes". ss-pp-stacked 2026-09-02: exactly that, from one apostrophe.
+      # build_tarball.sh now greps for this.
       $all = @(Get-DnsClientServerAddress -AddressFamily IPv4 |
                ForEach-Object { $_.ServerAddresses }) |
              Where-Object { $_ } | Select-Object -Unique

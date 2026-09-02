@@ -215,6 +215,26 @@ fi
 
 # --- Verify ----------------------------------------------------------------
 
+# HARD GATE, not a warning. A free-form shell argument with unbalanced quotes
+# makes the PLAY FAIL TO LOAD -- not one task, the whole run, before any host
+# is touched. ss-pp-stacked 2026-09-02 shipped a tarball whose additional_dc
+# role contained the PowerShell comment "THIS host's own DNS service"; the
+# apostrophe is an unterminated string to Ansible's split_args(), which is run
+# over free-form module arguments and does not know PowerShell has comments.
+#
+# The file was valid YAML and yaml.safe_load() accepted it, which is exactly
+# why this check is separate: the tree had been validated with a parser weaker
+# than the one that would reject it.
+if [ -x "$SS_PP_AB/verify_shell_args.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying free-form shell arguments ==="
+  if ! python3 "$SS_PP_AB/verify_shell_args.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball whose plays cannot load."
+    exit 1
+  fi
+fi
+
 if [ -x "$SS_PP_AB/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   echo ""
   echo "=== Verifying Jinja var references ==="
