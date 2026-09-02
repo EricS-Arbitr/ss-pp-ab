@@ -235,6 +235,20 @@ if [ -x "$SS_PP_AB/verify_shell_args.py" ] && command -v python3 >/dev/null 2>&1
   fi
 fi
 
+# HARD GATE. A Security Onion host that is in [so_all] but not in [linux] has
+# roles to run and no way to log in: every SO play reports ok=0 unreachable=1,
+# which is indistinguishable from a VM the range never built. ss-pp-stacked
+# 2026-09-02 lost three deploy attempts to exactly that.
+if [ -x "$SS_PP_AB/verify_so_inventory.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying Security Onion inventory membership ==="
+  if ! python3 "$SS_PP_AB/verify_so_inventory.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball whose SO hosts cannot be reached."
+    exit 1
+  fi
+fi
+
 if [ -x "$SS_PP_AB/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   echo ""
   echo "=== Verifying Jinja var references ==="
