@@ -1,6 +1,13 @@
 # Ansible Galaxy requirements for this overlay.
 # Install on the Ansible controller with:
-#   sudo HTTPS_PROXY=http://10.255.240.1:3128 ansible-galaxy collection install -r /etc/ansible/requirements.yml --force
+# deploy.sh installs these automatically. To do it by hand:
+#   HTTPS_PROXY=http://10.255.240.1:3128 ansible-galaxy collection install \
+#       -r /etc/ansible/requirements.yml -p "$HOME/.ansible/collections" --force
+#
+# DO NOT run this under sudo. It installs into root's home, which the deploy
+# account cannot read and the playbook run does not search -- galaxy reports
+# success and every module in the collection is then unresolvable. That cost
+# three failed deploy attempts on 2026-09-02.
 ---
 collections:
   - name: pfsensible.core

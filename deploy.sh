@@ -295,13 +295,72 @@ fi
 #     BOOT_DELAY=0 ./deploy.sh
 
 
+# THE COLLECTIONS PATH IS PINNED AND EXPORTED, so ansible-galaxy and
+# ansible-playbook cannot disagree about where collections live.
+#
+# ss-pp-stacked 2026-09-02, on a fresh controller. galaxy reported success:
+#     Installing 'pfsensible.core:0.7.1' to
+#     '/root/.ansible/collections/ansible_collections/pfsensible/core'
+# and then all three deploy attempts died in two seconds with
+#     ERROR! couldn't resolve module/action 'pfsensible.core.pfsense_setup'
+#
+# The install WORKED and the collection was still unusable, because the
+# directory it landed in is not one the playbook run searches -- and is not
+# readable by the deploy account anyway. "Installed" and "resolvable" are two
+# different claims and only the second one matters here. requirements.yml's
+# own header used to recommend `sudo ansible-galaxy ...`, which is precisely
+# how a collection ends up in root's home; that line is corrected too.
+#
+# The other four collections masked the fault for months: they ship inside the
+# ansible package in site-packages, so galaxy says "already installed,
+# skipping" and they resolve at runtime regardless of this path.
+# pfsensible.core is the only one that must actually be fetched, so it was the
+# only one that could break.
+#
+# /usr/share/ansible/collections is kept on the path so a site-wide install
+# still counts. Collections bundled in site-packages are found by the loader
+# independently of this variable.
+COLLECTIONS_DIR="${HOME}/.ansible/collections"
+export ANSIBLE_COLLECTIONS_PATH="${COLLECTIONS_DIR}:/usr/share/ansible/collections"
+
 echo "=== Checking for Ansible Galaxy collections ==="
 
 if [ -f requirements.yml ]; then
 	echo "=== Installing/refreshing Ansible Galaxy collections ==="
+	echo "    target: $COLLECTIONS_DIR"
 	HTTPS_PROXY="http://10.255.240.1:3128" \
-		ansible-galaxy collection install -r requirements.yml \
+		ansible-galaxy collection install -r requirements.yml -p "$COLLECTIONS_DIR" 2>&1 \
 		|| echo "WARN: galaxy install returned non-zero; continuing"
+fi
+
+# --- Prove the playbook PARSES before spending hours on it -------------------
+# This is the exact operation that failed on 2026-09-02, run here as a gate
+# instead of being discovered three attempts later. A parse failure is
+# deterministic -- it fails identically on attempts 2 and 3 -- so retrying it
+# is pure waste. That run burned three attempts plus a 180s BOOT_DELAY to
+# learn nothing, and the log could not even say what had gone wrong.
+#
+# Note the ordering: BEFORE the boot delay, so a broken tree costs seconds
+# rather than three minutes.
+echo "=== Syntax check ==="
+if ! ansible-playbook "$PLAYBOOK" --syntax-check 2>&1; then
+	cat <<-ERRMSG
+
+	ERROR: $PLAYBOOK does not parse. No hosts were touched, and retrying
+	       would fail identically, so this stops here.
+
+	If the message above is "couldn't resolve module/action", a collection
+	this repo needs is missing FROM THE SEARCH PATH -- which is not the same
+	as missing from the machine. Compare where it landed against where
+	ansible actually looks:
+
+	    ansible-galaxy collection list
+	    ansible-config dump | grep -i collections_path
+	    echo "\$ANSIBLE_COLLECTIONS_PATH"
+
+	requirements.yml lists every collection this repo needs.
+	ERRMSG
+	exit 1
 fi
 
 # --- Let a freshly provisioned range finish booting --------------------------
