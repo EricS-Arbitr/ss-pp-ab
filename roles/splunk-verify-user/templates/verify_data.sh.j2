@@ -23,6 +23,33 @@
 #      account can see the indexes that hold the data BEFORE any of the
 #      data-quality claims are believable.
 #
+#
+# ANCHORED ON sourcetype, NOT source. MEASURED 2026-09-04, ss-pp-stacked:
+#
+#   | tstats count where index=sysmon by source, sourcetype
+#   source     = "WinEventLog:Microsoft-Windows-Sysmon/Operational"
+#   sourcetype = "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+#   count      = 594880
+#
+# The Xml prefix is on the SOURCETYPE. `source` keeps the plain WinEventLog
+# form, because Splunk derives it from the input stanza name
+# ([WinEventLog://Microsoft-Windows-Sysmon/Operational]) while renderXml only
+# changes how events are rendered and typed. Every check in this file matched
+# source="XmlWinEventLog:..." -- a value that does not exist -- so all of them
+# returned zero against 594,880 indexed events, and section 10 of
+# verify_deployment.sh was reporting DNS_NO_EVENTS and PROC_NO_EVENTS on a
+# perfectly healthy Sysmon pipeline.
+#
+# sourcetype is also the RIGHT anchor rather than merely the working one: it is
+# the field roles/splunk-forwarder/templates/inputs.conf.j2 sets EXPLICITLY, so
+# it is ours to control. `source` is derived by Splunk and can change with the
+# input's spelling without anyone touching this file.
+#
+# HOW IT STAYED HIDDEN: check_visibility gates every other check in this file,
+# and it uses the same wrong predicate. Seeing zero, it compared against admin,
+# saw zero there too, and reported "nothing to be blind to (young range?)" --
+# offering an excuse for its own broken query. A gate that cannot distinguish
+# "no data" from "wrong question" will always choose the reassuring reading.
 # Usage: verify_data.sh {visibility|indexes|whatsee|apps|dns_src|proc_cim|dm_src|dns_server|all}
 
 set -u
@@ -92,7 +119,7 @@ run() {
 # It now runs a raw search over the exact source the data-quality checks use,
 # so if svc_verify cannot see those events, this cannot pass.
 check_visibility() {
-  run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+  run 'search index=* sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
        | stats count AS e
        | eval r=if(e>{{ splunk_verify_event_floor }},
                    "VISIBILITY_OK_" . e . "_raw_events",
@@ -111,7 +138,7 @@ check_visibility() {
 # Deliberately raw, not tstats: tstats bypasses search filters, which is how
 # the first version of the visibility gate passed while the account was blind.
 check_whatsee() {
-  run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+  run 'search index=* sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
        | stats count AS n, min(_time) AS oldest, max(_time) AS newest by index, host
        | eval oldest=strftime(oldest, "%Y-%m-%d %H:%M:%S"),
               newest=strftime(newest, "%Y-%m-%d %H:%M:%S")
@@ -144,7 +171,7 @@ check_apps() {
 # DNS panels group by src, so an unmapped src blanks every panel while event
 # counts still populate -- which is how this was originally missed.
 check_dns_src() {
-  run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=22
+  run 'search index=* sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=22
        | stats count AS e, count(src) AS s
        | eval r=case(e==0, "DNS_NO_EVENTS",
                      s==e, "DNS_SRC_OK_" . e . "_events",
@@ -154,7 +181,7 @@ check_dns_src() {
 
 # --- ProcessCreate must carry the four fields the two add-ons collided on -
 check_proc_cim() {
-  run 'search index=* source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1
+  run 'search index=* sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1
        | stats count AS e, count(process) AS p, count(parent_process_path) AS pp,
                count(parent_process_guid) AS pg, count(parent_process_id) AS pi
        | eval r=case(e==0, "PROC_NO_EVENTS",
