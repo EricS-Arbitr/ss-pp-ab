@@ -24,32 +24,41 @@
 #      data-quality claims are believable.
 #
 #
-# ANCHORED ON sourcetype, NOT source. MEASURED 2026-09-04, ss-pp-stacked:
+# THE PREDICATE IS `source`, AND THE VALUE HAS NO Xml PREFIX.
+# Measured as admin over REST on ss-pp-stacked, 2026-09-04, before changing it:
 #
-#   | tstats count where index=sysmon by source, sourcetype
-#   source     = "WinEventLog:Microsoft-Windows-Sysmon/Operational"
-#   sourcetype = "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
-#   count      = 594880
+#   search index=sysmon source="WinEventLog:Microsoft-Windows-Sysmon/Operational"
+#     -> 623,448 events
 #
-# The Xml prefix is on the SOURCETYPE. `source` keeps the plain WinEventLog
-# form, because Splunk derives it from the input stanza name
-# ([WinEventLog://Microsoft-Windows-Sysmon/Operational]) while renderXml only
-# changes how events are rendered and typed. Every check in this file matched
-# source="XmlWinEventLog:..." -- a value that does not exist -- so all of them
-# returned zero against 594,880 indexed events, and section 10 of
-# verify_deployment.sh was reporting DNS_NO_EVENTS and PROC_NO_EVENTS on a
-# perfectly healthy Sysmon pipeline.
+# Three values are in play and only one of them works here:
 #
-# sourcetype is also the RIGHT anchor rather than merely the working one: it is
-# the field roles/splunk-forwarder/templates/inputs.conf.j2 sets EXPLICITLY, so
-# it is ours to control. `source` is derived by Splunk and can change with the
-# input's spelling without anyone touching this file.
+#   source                  WinEventLog:Microsoft-Windows-Sysmon/Operational
+#                           <- what a raw search must filter on
+#   sourcetype (indexed)    XmlWinEventLog:Microsoft-Windows-Sysmon/Operational
+#                           <- what `| tstats ... by sourcetype` reports
+#   sourcetype (search-time) xmlwineventlog
+#                           <- what a raw search would actually compare against,
+#                              because Splunk_TA_windows renames it
 #
-# HOW IT STAYED HIDDEN: check_visibility gates every other check in this file,
-# and it uses the same wrong predicate. Seeing zero, it compared against admin,
-# saw zero there too, and reported "nothing to be blind to (young range?)" --
-# offering an excuse for its own broken query. A gate that cannot distinguish
-# "no data" from "wrong question" will always choose the reassuring reading.
+# The original check asked for source="XmlWinEventLog:..." -- the source field
+# with the sourcetype spelling -- and matched nothing against 594,880 events.
+#
+# I THEN BROKE IT FURTHER, and the reason is worth more than the fix. I read
+# the sourcetype from `| tstats count where index=sysmon by source, sourcetype`,
+# saw XmlWinEventLog:... and switched the predicate to sourcetype=. tstats
+# reports the INDEXED value; a raw search filters the SEARCH-TIME value, and a
+# props.conf rename makes those differ. The measurement was taken with a tool
+# that reports something adjacent to what the check uses -- the same class of
+# error as every other one in this file.
+#
+# THE RULE, EARNED TWICE: before changing a search predicate, RUN THE CORRECTED
+# SEARCH and confirm the count. Do not infer it from a different query shape.
+#
+# NOTE ON WHAT STILL FAILS: dns_src and proc_cim gate on EventCode, and
+# EventCode is EMPTY on every event -- the Sysmon add-on extractions are keyed
+# on the pre-rename sourcetype and never fire. Those checks failing now is
+# CORRECT: they are reporting a real normalisation defect rather than a broken
+# query. check_visibility will pass, which is how you tell the two apart.
 # Usage: verify_data.sh {visibility|indexes|whatsee|apps|dns_src|proc_cim|dm_src|dns_server|all}
 
 set -u
@@ -119,7 +128,7 @@ run() {
 # It now runs a raw search over the exact source the data-quality checks use,
 # so if svc_verify cannot see those events, this cannot pass.
 check_visibility() {
-  run 'search index=* sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+  run 'search index=* source="WinEventLog:Microsoft-Windows-Sysmon/Operational"
        | stats count AS e
        | eval r=if(e>{{ splunk_verify_event_floor }},
                    "VISIBILITY_OK_" . e . "_raw_events",
@@ -138,7 +147,7 @@ check_visibility() {
 # Deliberately raw, not tstats: tstats bypasses search filters, which is how
 # the first version of the visibility gate passed while the account was blind.
 check_whatsee() {
-  run 'search index=* sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"
+  run 'search index=* source="WinEventLog:Microsoft-Windows-Sysmon/Operational"
        | stats count AS n, min(_time) AS oldest, max(_time) AS newest by index, host
        | eval oldest=strftime(oldest, "%Y-%m-%d %H:%M:%S"),
               newest=strftime(newest, "%Y-%m-%d %H:%M:%S")
@@ -171,7 +180,7 @@ check_apps() {
 # DNS panels group by src, so an unmapped src blanks every panel while event
 # counts still populate -- which is how this was originally missed.
 check_dns_src() {
-  run 'search index=* sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=22
+  run 'search index=* source="WinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=22
        | stats count AS e, count(src) AS s
        | eval r=case(e==0, "DNS_NO_EVENTS",
                      s==e, "DNS_SRC_OK_" . e . "_events",
@@ -181,7 +190,7 @@ check_dns_src() {
 
 # --- ProcessCreate must carry the four fields the two add-ons collided on -
 check_proc_cim() {
-  run 'search index=* sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1
+  run 'search index=* source="WinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1
        | stats count AS e, count(process) AS p, count(parent_process_path) AS pp,
                count(parent_process_guid) AS pg, count(parent_process_id) AS pi
        | eval r=case(e==0, "PROC_NO_EVENTS",
