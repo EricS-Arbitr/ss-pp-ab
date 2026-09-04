@@ -826,7 +826,7 @@ else
   # separate, and a floor cannot separate them. Asking admin the same question
   # through the same interface can.
   admin_events=$(A pp-splunk -m ansible.builtin.shell -a \
-    "printf 'user = \"$SPLUNK_AUTH\"\n' | curl -sS -k -K - --url https://127.0.0.1:8089/services/search/jobs/export --data-urlencode 'search=search index=* source=\"XmlWinEventLog:Microsoft-Windows-Sysmon/Operational\" | stats count AS e | fields e' --data-urlencode earliest_time=-7d --data-urlencode latest_time=now --data-urlencode output_mode=csv 2>/dev/null | tail -1 | tr -dc '0-9'" \
+    "printf 'user = \"$SPLUNK_AUTH\"\n' | curl -sS -k -K - --url https://127.0.0.1:8089/services/search/jobs/export --data-urlencode 'search=search index=* source=\"WinEventLog:Microsoft-Windows-Sysmon/Operational\" | stats count AS e | fields e' --data-urlencode earliest_time=-7d --data-urlencode latest_time=now --data-urlencode output_mode=csv 2>/dev/null | tail -1 | tr -dc '0-9'" \
     --one-line | grep -oE 'stdout\) *[0-9]+' | grep -oE '[0-9]+' | head -1)
   admin_events=${admin_events:-0}
 
