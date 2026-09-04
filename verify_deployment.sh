@@ -371,7 +371,7 @@ check_ps pp-dc01 \
 # A records for hostnames from AD DNS. Verify no A records in voltgrid.com
 # zone still point into the mgmt subnet.
 check_ps pp-dc01 \
-  '$c=(Get-DnsServerResourceRecord -ZoneName voltgrid.com -RRType A | Where-Object {$_.RecordData.IPv4Address -match "^10\.255\.24"}).Count; if ($c -eq 0) {"OK_CLEAN"} else {"LEAK_$c"}' \
+  '$c=(Get-DnsServerResourceRecord -ZoneName voltgrid.com -RRType A | Where-Object {$_.RecordData.IPv4Address -match "^10\.255\.2(4[0-9]|5[0-5])\."}).Count; if ($c -eq 0) {"OK_CLEAN"} else {"LEAK_$c"}' \
   '\(stdout\)[[:space:]]+OK_CLEAN' \
   "pp-dc01: no 10.255.240.x A records in voltgrid.com zone (mgmt DDNS scrubbed)"
 

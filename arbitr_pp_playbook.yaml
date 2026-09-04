@@ -1252,6 +1252,49 @@
           {{ inventory_hostname }}: DNS server will publish {{ dc_prod_ip }} only
           (management address withheld).
 
+    # ASSERT THE OUTCOME, NOT THAT THE REGISTRY WRITE SUCCEEDED.
+    # Restricting what a DNS server publishes is exactly the kind of change
+    # that can take a DC off the air, and a DC that cannot resolve through
+    # itself fails every later domain operation with an error naming DNS
+    # rather than this play. PublishAddresses governs what is ADVERTISED, not
+    # what is LISTENED on, so this should always pass -- which is the point:
+    # if it ever fails, something other than this play changed too.
+    #
+    # Verified on pp-dc02 2026-09-04: after the restart the management record
+    # was withdrawn and did not return across a second restart, while
+    # Resolve-DnsName via 127.0.0.1 still answered and the _ldap._tcp SRV
+    # lookup returned 8 records.
+    - name: Prove the DC still resolves through itself after the restart
+      ansible.windows.win_powershell:
+        script: |
+          $self = (Resolve-DnsName -Name "{{ domain_name }}" -Server 127.0.0.1 -ErrorAction SilentlyContinue |
+                   Select-Object -First 1).IPAddress
+          $srv  = @(Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.{{ domain_name }}" -Type SRV -ErrorAction SilentlyContinue).Count
+          if ($self -and $srv -gt 0) { Write-Output ("SELFDNS_OK " + $self + " srv=" + $srv) }
+          else { Write-Output ("SELFDNS_FAIL self=" + $self + " srv=" + $srv) }
+      register: dc_selfdns
+      changed_when: false
+
+    - name: Fail if the DC lost the ability to resolve through itself
+      ansible.builtin.fail:
+        msg: |
+          {{ inventory_hostname }}: {{ dc_selfdns.output[0] | default('(no output)') }}
+
+          PublishAddresses was set to {{ dc_prod_ip }} and this DC can no
+          longer resolve via 127.0.0.1. That setting governs what the server
+          ADVERTISES, not what it listens on, so something else changed too.
+          Check what it is bound to:
+
+            (Get-DnsServerSetting -All).ListenAddresses
+
+          Empty is correct and means all interfaces. If populated, remove the
+          restriction and restart the DNS service.
+
+          To revert this play:
+            Remove-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\DNS\Parameters" PublishAddresses
+            Restart-Service DNS -Force
+      when: "'SELFDNS_OK' not in (dc_selfdns.output[0] | default(''))"
+
 - name: Management plane — purge AD records and PROVE none remain
   hosts: pdc
   gather_facts: false
