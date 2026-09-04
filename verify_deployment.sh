@@ -50,7 +50,37 @@ A() { ansible "$@" 2>&1; }
 
 # Splunk admin auth for the cluster-status checks in section 7. Read from
 # group_vars rather than hardcoded, so it follows a credential change.
-SPLUNK_AUTH="admin:$(grep -m1 '^splunk_admin_password:' group_vars/all.yml 2>/dev/null | cut -d'"' -f2)"
+#
+# SEARCHES BOTH LAYOUTS, AND REFUSES TO RUN WITH AN EMPTY PASSWORD.
+#
+# This read only group_vars/all.yml. ss-pp-stacked keeps group_vars/all/ as a
+# DIRECTORY -- the same conversion that broke verify_vars.py until it was
+# switched to rglob -- so the grep found nothing, SPLUNK_AUTH became the string
+# "admin:" with no password, and every curl-based check in section 7
+# authenticated as nobody.
+#
+# Three of them failed, which was survivable. The fourth PASSED: the
+# duplicate-license check counts occurrences of "same license" in the response
+# and expects zero, and an auth error contains no such string. It scored zero
+# and printed a green tick. A check that passes BECAUSE its query failed is
+# worse than one that fails, because nobody goes looking.
+#
+# Hence the hard exit below. An empty credential can only produce noise.
+SPLUNK_ADMIN_PW="$(
+  { grep -hm1 '^splunk_admin_password:' group_vars/all.yml 2>/dev/null
+    grep -rhm1 '^splunk_admin_password:' group_vars/all/ 2>/dev/null
+  } | head -1 | cut -d'"' -f2
+)"
+if [ -z "$SPLUNK_ADMIN_PW" ] || case "$SPLUNK_ADMIN_PW" in *'{{'*) true;; *) false;; esac; then
+  echo "ERROR: could not read splunk_admin_password from group_vars/all.yml"
+  echo "       or group_vars/all/. Section 7 would authenticate as nobody and"
+  echo "       report false passes, so this refuses to run."
+  echo
+  echo "       If the value is vaulted (a {{ ... }} reference), export the"
+  echo "       password instead:  SPLUNK_ADMIN_PW=... ./verify_deployment.sh"
+  [ -n "${SPLUNK_ADMIN_PW_OVERRIDE:-}" ] || exit 1
+fi
+SPLUNK_AUTH="admin:$SPLUNK_ADMIN_PW"
 
 n_hosts() {
   ansible "$1" --list-hosts 2>/dev/null | tail -n +2 | sed '/^$/d' | wc -l | tr -d ' '
@@ -575,7 +605,7 @@ check_ps pp-bp-wkstn-1 \
 # rather than against the symptom that happened to get reported.
 
 check_pf_shell pp-splunk-cm \
-  'ls /opt/splunk/etc/licenses/enterprise/ 2>/dev/null | grep -cE "\.(lic|license|xml)$"' \
+  'sudo ls /opt/splunk/etc/licenses/enterprise/ 2>/dev/null | grep -cE "\.(lic|license|xml)$" || true' \
   '\(stdout\)[[:space:]]+[1-9]' \
   "pp-splunk-cm: holds the deployment's license (license manager)"
 
@@ -585,7 +615,7 @@ check_pf_shell pp-splunk-cm \
 # re-compares. "No symptom" is not the same as "correct".
 for h in pp-splunk-idx01 pp-splunk-idx02 pp-splunk; do
   check_pf_shell "$h" \
-    'ls /opt/splunk/etc/licenses/enterprise/ 2>/dev/null | grep -cE "\.(lic|license|xml)$"' \
+    'sudo ls /opt/splunk/etc/licenses/enterprise/ 2>/dev/null | grep -cE "\.(lic|license|xml)$" || true' \
     '\(stdout\)[[:space:]]+0' \
     "$h: holds no local license (defers to pp-splunk-cm)"
 done
@@ -605,10 +635,18 @@ done
 # clears, so this is the check that actually answers "is the 72-hour clock
 # still running?" -- the only one of these that a human would recognise as the
 # original problem.
+# A ZERO COUNT IS ONLY MEANINGFUL IF THE QUERY RAN.
+# This used to be `grep -ci 'same license' || true` expecting 0, which an auth
+# failure satisfies perfectly -- an error response contains no such string. It
+# reported green for the entire time SPLUNK_AUTH was empty. Assert the response
+# actually looks like the licenser API before counting anything in it.
 check_pf_shell pp-splunk-cm \
-  "curl -sS -k -u '$SPLUNK_AUTH' 'https://127.0.0.1:8089/services/licenser/messages?output_mode=json&count=0' | grep -ci 'same license' || true" \
-  '\(stdout\)[[:space:]]+0' \
-  "no active duplicate-license warning"
+  "r=\$(curl -sS -k -u '$SPLUNK_AUTH' 'https://127.0.0.1:8089/services/licenser/messages?output_mode=json&count=0' 2>&1); \
+   if ! printf '%s' \"\$r\" | grep -q '\"entry\"'; then echo LICWARN_QUERY_FAILED; \
+   elif printf '%s' \"\$r\" | grep -qi 'same license'; then echo LICWARN_PRESENT; \
+   else echo LICWARN_NONE; fi" \
+  '\(stdout\)[[:space:]]+LICWARN_NONE' \
+  "no active duplicate-license warning (query proven to have run)"
 
 # =========================================================================
 # 8. Enterprise services — root certs, AUE lockdown, autologin, squid, DNS
