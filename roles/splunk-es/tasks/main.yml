@@ -290,44 +290,67 @@
     dest: "/opt/splunk/etc/apps/Splunk_TA_microsoft_sysmon/local/props.conf"
     mode: '0644'
 
+# --- ES / CIM content, vendored 2026-09-04 ------------------------------
+# These seven files used to be read from /etc/ansible/templates/splunkapps/ on
+# the CONTROLLER -- a path this repo never shipped. They arrived via the
+# RC_NG_Ansible base image, so every deploy silently bet on that image still
+# carrying them, unchanged, at the version we expect. The controller is rebuilt
+# fresh for every range, so that bet was placed every single time.
+#
+# Same class of failure as the pfsensible collection installing to
+# /root/.ansible: "present on the controller" is not "present in the artifact
+# we ship". They also could not be diffed or reviewed, and they define ES saved
+# searches, CIM macros and data models -- the detection content itself. A base
+# image refresh would have changed range behaviour with nothing to show for it.
+#
+# THE .j2 SUFFIX WAS DECORATIVE and has been dropped. All seven were read with
+# ansible.builtin.copy, not template, and measured to contain ZERO Jinja
+# references -- so nothing was ever rendered. Keeping the extension would keep
+# inviting someone to "fix" the module to `template:` and change behaviour.
+#
+# Verified before vendoring: the three local copies of range-development-ansible
+# are byte-identical to each other AND match the controller file sizes exactly.
+# The only environment-specific value anywhere is LOGSTASH_HOST = 10.255.240.1
+# in stack_op_forwarder.py, which is the SimSpace management gateway and
+# constant across ranges -- hence static files, not templates.
 - name: Copy Content Update Saved Searches
   ansible.builtin.copy:
-    src: "/etc/ansible/templates/splunkapps/cu-savedsearches.conf.j2"
+    src: "cu-savedsearches.conf"
     dest: "/opt/splunk/etc/apps/DA-ESS-ContentUpdate/local/savedsearches.conf"
     mode: '0644'
   notify: Restart Splunk Service
 
 - name: Copy Endpoint Protection Saved Searches
   ansible.builtin.copy:
-    src: "/etc/ansible/templates/splunkapps/ep-savedsearches.conf.j2"
+    src: "ep-savedsearches.conf"
     dest: "/opt/splunk/etc/apps/SA-EndpointProtection/local/savedsearches.conf"
     mode: '0644'
   notify: Restart Splunk Service
 
 - name: Copy CIM Macros
   ansible.builtin.copy:
-    src: "/etc/ansible/templates/splunkapps/cim-macros.conf.j2"
+    src: "cim-macros.conf"
     dest: "/opt/splunk/etc/apps/Splunk_SA_CIM/local/macros.conf"
     mode: '0644'
   notify: Restart Splunk Service
 
 - name: Copy CIM Datamodels
   ansible.builtin.copy:
-    src: "/etc/ansible/templates/splunkapps/cim-datamodels.conf.j2"
+    src: "cim-datamodels.conf"
     dest: "/opt/splunk/etc/apps/Splunk_SA_CIM/local/datamodels.conf"
     mode: '0644'
   notify: Restart Splunk Service
 
 - name: Copy ES Saved Searches
   ansible.builtin.copy:
-    src: "/etc/ansible/templates/splunkapps/es-savedsearches.conf.j2"
+    src: "es-savedsearches.conf"
     dest: "/opt/splunk/etc/apps/SplunkEnterpriseSecuritySuite/local/savedsearches.conf"
     mode: '0644'
   notify: Restart Splunk Service
 
 - name: Copy Forwarding Script
   ansible.builtin.copy:
-    src: "/etc/ansible/templates/splunkapps/stack_op_forwarder.py.j2"
+    src: "stack_op_forwarder.py"
     dest: "/opt/splunk/bin/scripts/stack_op_forwarder.py"
     mode: '0755'
   notify: Restart Splunk Service
@@ -341,7 +364,7 @@
 
 - name: Copy Alert Action
   ansible.builtin.copy:
-    src: "/etc/ansible/templates/splunkapps/alert-savedsearches.conf.j2"
+    src: "alert-savedsearches.conf"
     dest: "/opt/splunk/etc/users/admin/search/local/savedsearches.conf"
     mode: '0644'
   notify: Restart Splunk Service
