@@ -605,8 +605,8 @@ check_ps pp-bp-wkstn-1 \
 # rather than against the symptom that happened to get reported.
 
 check_pf_shell pp-splunk-cm \
-  'sudo ls /opt/splunk/etc/licenses/enterprise/ 2>/dev/null | grep -cE "\.(lic|license|xml)$" || true' \
-  '\(stdout\)[[:space:]]+[1-9]' \
+  'd=/opt/splunk/etc/licenses/enterprise; if ! sudo test -d "$d"; then echo LICDIR_UNREADABLE; else echo "LIC_$(sudo ls "$d" | grep -cE "\.(lic|license|xml)$")"; fi' \
+  '\(stdout\)[[:space:]]+LIC_[1-9]' \
   "pp-splunk-cm: holds the deployment's license (license manager)"
 
 # Asserting the ABSENCE on every other node. A license peer ignores a local
@@ -615,8 +615,8 @@ check_pf_shell pp-splunk-cm \
 # re-compares. "No symptom" is not the same as "correct".
 for h in pp-splunk-idx01 pp-splunk-idx02 pp-splunk; do
   check_pf_shell "$h" \
-    'sudo ls /opt/splunk/etc/licenses/enterprise/ 2>/dev/null | grep -cE "\.(lic|license|xml)$" || true' \
-    '\(stdout\)[[:space:]]+0' \
+    'd=/opt/splunk/etc/licenses/enterprise; if ! sudo test -d "$d"; then echo LICDIR_UNREADABLE; else echo "LIC_$(sudo ls "$d" | grep -cE "\.(lic|license|xml)$")"; fi' \
+    '\(stdout\)[[:space:]]+LIC_0' \
     "$h: holds no local license (defers to pp-splunk-cm)"
 done
 
@@ -828,10 +828,21 @@ else
   admin_events=$(A pp-splunk -m ansible.builtin.shell -a \
     "printf 'user = \"$SPLUNK_AUTH\"\n' | curl -sS -k -K - --url https://127.0.0.1:8089/services/search/jobs/export --data-urlencode 'search=search index=* source=\"WinEventLog:Microsoft-Windows-Sysmon/Operational\" | stats count AS e | fields e' --data-urlencode earliest_time=-7d --data-urlencode latest_time=now --data-urlencode output_mode=csv 2>/dev/null | tail -1 | tr -dc '0-9'" \
     --one-line | grep -oE 'stdout\) *[0-9]+' | grep -oE '[0-9]+' | head -1)
-  admin_events=${admin_events:-0}
+  admin_events=${admin_events:-EMPTY}
 
-  if [ "$admin_events" -eq 0 ]; then
-    note "verifier visibility: skipped — admin sees 0 events too, so there is nothing to be blind to (young range?)"
+  # A FAILED QUERY IS NOT A ZERO. This read `admin_events=${admin_events:-0}`
+  # and then skipped on zero with a reassuring note -- so an auth error, an
+  # unreachable endpoint or a wrong predicate all produced "nothing to be blind
+  # to (young range?)". It offered an excuse for its own broken query, and did
+  # so for as long as the Sysmon predicate was wrong. Audit 2026-09-04.
+  if [ "$admin_events" = "EMPTY" ]; then
+    fail "verifier visibility: baseline query returned NOTHING" \
+         "The admin-side count could not be read, so there is no baseline to
+          compare the verifier account against. This is a broken check, not a
+          quiet range -- distinguish it from a genuine zero before believing
+          any result in this section."
+  elif [ "$admin_events" -eq 0 ]; then
+    note "verifier visibility: skipped — admin genuinely sees 0 events (query ran, count was zero)"
   else
     check_pf_shell_token pp-splunk \
       "$VERIFY_DATA visibility" \
