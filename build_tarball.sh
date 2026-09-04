@@ -206,6 +206,18 @@ if [ -f "$SS_PP_AB/requirements.yml" ]; then
   cp "$SS_PP_AB/requirements.yml" "$STAGE/"
 fi
 
+# Vendored Galaxy collection artifacts. deploy.sh installs these from disk
+# before falling back to galaxy.ansible.com, so a range never depends on
+# reaching the internet or on whatever version galaxy is serving that day.
+#
+# NOTE THE TWO ALLOWLISTS warning above: this copy AND the TAR_PATHS entry are
+# both required. Adding only TAR_PATHS packs nothing, because the directory
+# never reaches $STAGE -- which is exactly what happened on the first attempt
+# at this change.
+if [ -d "$SS_PP_AB/collections" ]; then
+  cp -R "$SS_PP_AB/collections" "$STAGE/"
+fi
+
 # Pre-staged installers (referenced via win_copy with bare filename)
 if [ -d "$SS_PP_AB/files" ]; then
   cp -R "$SS_PP_AB/files" "$STAGE/"
@@ -259,6 +271,7 @@ fi
 
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts arbitr_pp_playbook.yaml deploy.sh)
+[ -d "collections" ] && TAR_PATHS+=(collections)
 [ -f "verify_deployment.sh" ] && TAR_PATHS+=(verify_deployment.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
 [ -d "files" ] && TAR_PATHS+=(files)

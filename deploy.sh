@@ -325,8 +325,33 @@ export ANSIBLE_COLLECTIONS_PATH="${COLLECTIONS_DIR}:/usr/share/ansible/collectio
 
 echo "=== Checking for Ansible Galaxy collections ==="
 
+# VENDORED ARTIFACTS FIRST. Galaxy is a FALLBACK, not the primary path.
+#
+# Every deploy used to fetch pfsensible.core from galaxy.ansible.com through
+# the corp proxy. That is a bet re-placed on every single deploy: if galaxy is
+# unreachable, or ships a different version with changed module behaviour, the
+# deploy fails or behaves differently -- and the controller is rebuilt fresh
+# for every range, so the bet is never amortised.
+#
+# It already cost three attempts on 2026-09-02, when the fetch SUCCEEDED and
+# installed into a directory the playbook could not read.
+#
+# collections/ ships pinned artifacts in the tarball. Installing from a local
+# file is offline, version-locked and reproducible. The galaxy call below still
+# runs for anything not vendored; on a healthy controller that is a no-op
+# ("already installed, skipping") because vyos.vyos, ansible.netcommon and
+# ansible.posix come with the ansible package itself.
+if compgen -G "collections/*.tar.gz" > /dev/null 2>&1; then
+	echo "=== Installing VENDORED collections (offline, version-pinned) ==="
+	for _c in collections/*.tar.gz; do
+		echo "    $_c"
+		ansible-galaxy collection install "$_c" -p "$COLLECTIONS_DIR" 2>&1 \
+			|| echo "WARN: could not install $_c; continuing"
+	done
+fi
+
 if [ -f requirements.yml ]; then
-	echo "=== Installing/refreshing Ansible Galaxy collections ==="
+	echo "=== Galaxy fallback for anything not vendored ==="
 	echo "    target: $COLLECTIONS_DIR"
 	HTTPS_PROXY="http://10.255.240.1:3128" \
 		ansible-galaxy collection install -r requirements.yml -p "$COLLECTIONS_DIR" 2>&1 \
