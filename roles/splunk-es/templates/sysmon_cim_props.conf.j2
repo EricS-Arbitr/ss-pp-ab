@@ -1,0 +1,77 @@
+### Managed by Ansible — roles/splunk-es. Do not edit on the host.
+#
+# Overrides Splunk_TA_microsoft_sysmon so Sysmon events are actually usable.
+#
+# ss-pp-stacked 2026-09-04: 623,448 Sysmon events were indexed with NOT ONE
+# extracted field. EventCode, process, src -- all empty, while the raw XML sat
+# there intact. ES dashboards fed by Sysmon were empty and hunt workstations
+# could not search process ancestry. Every other check passed throughout.
+#
+# TWO INDEPENDENT FAULTS, both measured on the range.
+#
+# 1. THE RENAME TARGET IS ORPHANED.
+#    The TA renames its sourcetype to LOWERCASE `xmlwineventlog`.
+#    Splunk_TA_windows renames every other Windows channel to CAPITAL
+#    `XmlWinEventLog`. props.conf stanza matching is case-sensitive and nothing
+#    defines [xmlwineventlog], so no extraction fired at all. Splunk `rename`
+#    means only the TARGET sourcetype search-time settings apply -- the TA
+#    orphaned its own extractions.
+#
+#    Proof the other path works: index=windows carries 471,118 events on
+#    sourcetype XmlWinEventLog with EventCode populated. Redirecting the rename
+#    there took EventCode from empty to 412,273 ProcessCreate + 9,353 DnsQuery.
+#
+# 2. THE TA KEYS EVERYTHING ON A SOURCE WE DO NOT PRODUCE.
+#    All of its real work lives in
+#    [source::XmlWinEventLog:Microsoft-Windows-Sysmon/Operational].
+#    Our UF input is [WinEventLog://...] with renderXml, which yields source
+#    `WinEventLog:...` -- no Xml prefix -- so that stanza never matched either.
+#    Changing the input to [XmlWinEventLog://...] was TRIED on pp-bp-wkstn-1
+#    and did NOT change the source. The host was reverted. Do not re-attempt.
+#
+# WHY A source:: STANZA. Source stanzas are immune to sourcetype renames, scope
+# to Sysmon alone so nothing bleeds onto other Windows channels, and outrank
+# sourcetype stanzas in Splunk precedence, so these beat anything
+# Splunk_TA_windows sets for XmlWinEventLog.
+#
+# WHY ONLY NINE LINES rather than a copy of the TA transforms: the raw fields
+# are already extracted generically by Splunk_TA_windows once the rename lands.
+# Measured at 100% coverage BEFORE this was written -- CommandLine,
+# ParentImage, ParentProcessGuid and ParentProcessId each present on all
+# 412,273 ProcessCreate events; Computer and QueryName on all 9,353 DnsQuery
+# events. Only the CIM aliases were missing.
+#
+# NO RESTART REQUIRED. Search-time props are read per search from the knowledge
+# bundle. Verified: splunkd had been up 11 hours when the rename took effect.
+# This also applies retroactively to every event ALREADY INDEXED -- no reindex,
+# no cluster bundle push.
+#
+# BUT THE BUNDLE TAKES A MINUTE OR TWO TO REACH THE SEARCH PEERS. Search-time
+# extraction runs on the indexers, so a check run immediately after this file
+# lands reads as FAILED and then passes on the next attempt. That cost a round
+# of wrong diagnosis; do not read a zero here as a broken mapping without
+# re-running a couple of minutes later.
+#
+# VERIFIED END TO END, 2026-09-04, against live data:
+#   EventCode=1   e=418,903  process=418,903  parent_process_path=418,903
+#                            parent_process_guid=418,903  parent_process_id=418,903
+#   EventCode=22  e=9,496    src=9,496
+#
+# ON TA UPGRADE: re-check whether it still renames to lowercase. If upstream
+# ever fixes that, the first stanza becomes a no-op and can go; the source::
+# stanza is still required while our input form differs from what the TA
+# assumes.
+
+[XmlWinEventLog:Microsoft-Windows-Sysmon/Operational]
+rename = XmlWinEventLog
+
+[source::WinEventLog:Microsoft-Windows-Sysmon/Operational]
+FIELDALIAS-process_path     = Image AS process_path
+FIELDALIAS-parent_proc_path = ParentImage AS parent_process_path
+FIELDALIAS-parent_proc_guid = ParentProcessGuid AS parent_process_guid
+FIELDALIAS-parent_proc_id   = ParentProcessId AS parent_process_id
+FIELDALIAS-process_guid_cim = ProcessGuid AS process_guid
+FIELDALIAS-user_cim         = User AS user
+FIELDALIAS-dest_cim         = Computer AS dest
+EVAL-process                = coalesce(CommandLine, Image)
+EVAL-src                    = if(EventCode="22", Computer, null())

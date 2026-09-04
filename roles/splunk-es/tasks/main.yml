@@ -269,6 +269,27 @@
     state: directory
     mode: '0755'
 
+# --- Sysmon CIM normalisation -------------------------------------------
+# Without this, Sysmon is indexed and unusable: 623,448 events with no
+# extracted fields on ss-pp-stacked 2026-09-04. Full diagnosis, the two faults
+# it corrects, and the measured before/after are in the template itself.
+#
+# Deliberately NO `notify: Restart Splunk Service`, unlike the tasks around it.
+# Search-time props are read per search from the knowledge bundle; restarting
+# the search head to apply this would be a pointless outage. Verified on the
+# range -- splunkd had been up 11 hours when the change took effect.
+- name: Check Sysmon add-on local directory
+  ansible.builtin.file:
+    path: "/opt/splunk/etc/apps/Splunk_TA_microsoft_sysmon/local/"
+    state: directory
+    mode: '0755'
+
+- name: Install Sysmon CIM normalisation props
+  ansible.builtin.template:
+    src: sysmon_cim_props.conf.j2
+    dest: "/opt/splunk/etc/apps/Splunk_TA_microsoft_sysmon/local/props.conf"
+    mode: '0644'
+
 - name: Copy Content Update Saved Searches
   ansible.builtin.copy:
     src: "/etc/ansible/templates/splunkapps/cu-savedsearches.conf.j2"
