@@ -37,7 +37,28 @@
 PLAYBOOK="arbitr_pp_playbook.yaml"
 RETRY_FILE="retry/$PLAYBOOK.retry"
 MAX_ATTEMPTS=3
-FORKS=52
+# FORKS is DERIVED, not chosen: it is the largest single play target plus a
+# small margin. Recomputed 2026-09-08.
+#
+#   largest play target : 52  (windows,linux)
+#   FORKS               : 54
+#
+# Sized so the widest play runs in ONE batch. This repo was already exact at
+# 52; the +2 is headroom so adding a single host does not silently cost a
+# whole extra round.
+# The margin is free: Ansible never spawns more workers than the play has
+# hosts, so excess forks cost nothing, while being one short costs a whole
+# extra round.
+#
+# TRADEOFF: each fork is a separate Python process, so this is a memory
+# question rather than a CPU one -- workers are almost always blocked on
+# WinRM/SSH I/O, not computing. The controller has ~32 GB; 54 forks is a
+# few GB resident. If it starts swapping during a full sweep, drop this
+# rather than assuming the deploy is slow for another reason.
+#
+# RECOUNT, do not increment, when hosts are added or removed. Adding a host
+# to [windows] or [linux] moves the target this is derived from.
+FORKS=54
 
 # --- Speed knobs -------------------------------------------------------------
 # Trims 5-10 minutes off a full-fleet run vs Ansible defaults.
