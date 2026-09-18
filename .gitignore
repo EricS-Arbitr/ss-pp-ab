@@ -206,3 +206,18 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- secrets: never commit these ------------------------------------------
+# .vault_pass was committed to ss-pp-stacked and ss-pp-ab and the repos are
+# public. deploy.sh reads the password from /home/simspace/.vault_pass on the
+# controller and it is not in TAR_PATHS, so the repo copy is never needed.
+.vault_pass
+.vault_pass*
+vault_pass
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_rsa*
+id_ed25519*
+.ssh/
