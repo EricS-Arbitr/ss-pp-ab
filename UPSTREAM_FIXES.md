@@ -9,6 +9,28 @@ Severity key:
 
 ---
 
+## 2026-09-20 · bug · roles/init — the WinRM wait is far too short for a cold boot
+
+**Symptom.** On a freshly provisioned range, a Windows host fails having run nothing at all:
+
+```
+pp-bp-wkstn-4  : ok=0  changed=0  unreachable=0  failed=1  skipped=0
+```
+
+Zero tasks ok, zero skipped, and **not** unreachable — it failed its very first task, `init : wait for Windows systems to be online`, and was dropped from every play after it. The deploy then ran for seven more hours and failed at the Fleet coverage gate naming that one host.
+
+**Root cause.** The base role waits `delay: 30` + `timeout: 60` — the `elapsed: 90` seen in failed runs. Sixty seconds is nowhere near a cold Windows boot on freshly provisioned hardware. Overlays have been raising it locally for months and still landing short: `ss-pp-stacked` sat at 900 and hit this; `airfield-range` went 900 → 1800 → 2400, the last step after four Windows hosts were still silent at the thirty-minute mark.
+
+**Fix (upstream).** The default should be minutes-scale, not seconds-scale. A generous ceiling is nearly free: `wait_for_connection` returns the instant the connection succeeds, so a healthy host never pays it. It is spent only on hosts that are genuinely slow or genuinely down.
+
+**Workaround (overlay).** `init_wait_timeout: 2400` in each range's `roles/init/defaults/main.yml`. `ss-pp-stacked` raised 900 → 2400 on 2026-09-20; `airfield-range` has run at 2400 since 2026-09-15.
+
+**The prerequisite, which matters more than the number.** A forty-minute ceiling is only safe when the Init play does **not** carry `any_errors_fatal`. Under that flag a host sitting in this wait for forty minutes and then failing marks *every* host in the play failed and drops all of them from every later play — measured on airfield 2026-09-15, where four slow hosts took all 48 Windows hosts out of the run and the range built Linux-only. Raising the timeout without removing the flag converts one slow host into a range-wide outage.
+
+**Related lever, deliberately not used.** Raising `deploy.sh`'s `BOOT_DELAY` looks equivalent and is not: it delays *every* deploy including re-runs where everything is already up, while the wait costs a ready host nothing.
+
+---
+
 ## 2026-07-06 · gap · roles/syslog_server/templates — pfSense sources land in IP-named dirs, not hostname-named
 
 **Symptom.** `verify_deployment.sh` Section 6 flagged the 3 pfSense firewalls as not forwarding syslog. Investigation confirmed they ARE forwarding (packets caught via tcpdump on pp-syslog; matching per-source directories exist under `/var/log/remote/`) — but the directories are named by **source IP**, not hostname:
