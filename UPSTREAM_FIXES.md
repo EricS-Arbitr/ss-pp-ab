@@ -19,7 +19,16 @@ pp-bp-wkstn-4  : ok=0  changed=0  unreachable=0  failed=1  skipped=0
 
 Zero tasks ok, zero skipped, and **not** unreachable — it failed its very first task, `init : wait for Windows systems to be online`, and was dropped from every play after it. The deploy then ran for seven more hours and failed at the Fleet coverage gate naming that one host.
 
-**Root cause.** The base role waits `delay: 30` + `timeout: 60` — the `elapsed: 90` seen in failed runs. Sixty seconds is nowhere near a cold Windows boot on freshly provisioned hardware. Overlays have been raising it locally for months and still landing short: `ss-pp-stacked` sat at 900 and hit this; `airfield-range` went 900 → 1800 → 2400, the last step after four Windows hosts were still silent at the thirty-minute mark.
+**Root cause — and a correction.** This entry originally called it a slow cold boot. It is not. The full error is:
+
+```
+timed out waiting for ping module test: ntlm: HTTPConnectionPool(host='10.255.240.122', port=5985):
+... [Errno 113] No route to host
+```
+
+`EHOSTUNREACH`. A booting Windows host *refuses* the connection or times out; no-route means ARP never resolved and there is nothing on that address to answer. It repeated **identically across all three attempts of a 7h25m build** — attempt 3 ran five hours after attempt 1. That VM was never on the network, which is a platform-side fault, not a timing one.
+
+Separately and genuinely: the base role's `delay: 30` + `timeout: 60` — the `elapsed: 90` seen in failed runs — is nowhere near a cold Windows boot on freshly provisioned hardware. Overlays have been raising it locally for months and still landing short: `airfield-range` went 900 → 1800 → 2400 after four Windows hosts were still silent at the thirty-minute mark. Both things are true; only the second one is what this timeout is for.
 
 **Fix (upstream).** The default should be minutes-scale, not seconds-scale. A generous ceiling is nearly free: `wait_for_connection` returns the instant the connection succeeds, so a healthy host never pays it. It is spent only on hosts that are genuinely slow or genuinely down.
 
@@ -28,6 +37,8 @@ Zero tasks ok, zero skipped, and **not** unreachable — it failed its very firs
 **The prerequisite, which matters more than the number.** A forty-minute ceiling is only safe when the Init play does **not** carry `any_errors_fatal`. Under that flag a host sitting in this wait for forty minutes and then failing marks *every* host in the play failed and drops all of them from every later play — measured on airfield 2026-09-15, where four slow hosts took all 48 Windows hosts out of the run and the range built Linux-only. Raising the timeout without removing the flag converts one slow host into a range-wide outage.
 
 **Related lever, deliberately not used.** Raising `deploy.sh`'s `BOOT_DELAY` looks equivalent and is not: it delays *every* deploy including re-runs where everything is already up, while the wait costs a ready host nothing.
+
+**A longer ceiling needs a fast path out.** Raising the timeout to 2400 without distinguishing the two failure modes makes an absent host cost 40 minutes per attempt instead of 15 — over an hour added to a run that was doomed either way. `ss-pp-stacked` now probes from the controller before waiting, reads the errno, and fails immediately on EHOSTUNREACH while leaving the long ceiling intact for hosts that are merely slow. The failure message says the VM is not on the network and names what to check in the blueprint, rather than implying Ansible timed out.
 
 ---
 
