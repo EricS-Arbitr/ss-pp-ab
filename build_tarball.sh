@@ -261,6 +261,62 @@ if [ -x "$SS_PP_AB/verify_so_inventory.py" ] && command -v python3 >/dev/null 2>
   fi
 fi
 
+# HARD GATE. A task with two `when:` keys loses the first one -- YAML keeps the
+# last value and discards the earlier one without complaint, so a condition you
+# wrote is simply not running, and the file reads correctly because both lines
+# are right there. roles/dcpromo shipped an AD-services gate whose service
+# condition had been dead for months; the probe feeding it ran every deploy and
+# was read by nothing.
+#
+# yaml.safe_load() accepts duplicates silently, so no checker built on it can
+# see this. Ansible warns at RUN time, on stderr, one line deep in a
+# 26,000-line log. That is not a gate. This is.
+if [ -x "$SS_PP_AB/verify_dup_keys.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying no duplicate YAML keys ==="
+  if ! python3 "$SS_PP_AB/verify_dup_keys.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball with logic that silently does not run."
+    exit 1
+  fi
+fi
+
+# HARD GATE. A task keyword indented one level too deep becomes a module
+# ARGUMENT instead: the keyword is never applied, so a `when` never gates, a
+# `loop` never loops, a `register` never registers.
+#
+# ss-pp-stacked 2026-09-20 nearly shipped a `when` indented under
+# ansible.builtin.fail, which would have fired that fail task on every host in
+# the play -- a targeted guard turned into a range-wide outage. Valid YAML, no
+# duplicate keys, balanced quotes, so nothing else could see it, and it reads
+# correctly at a glance: both lines spelled right, only the column wrong.
+if [ -x "$SS_PP_AB/verify_task_keywords.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying task keywords are not module arguments ==="
+  if ! python3 "$SS_PP_AB/verify_task_keywords.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball with keywords that will not apply."
+    exit 1
+  fi
+fi
+
+# HARD GATE. so_defend_exclusions is static group_vars data, so every check the
+# so_manager role makes at deploy time can be made here in a second.
+#
+# On 2026-09-19 a 485-character description -- against Kibana's 256 limit --
+# was caught by the role assert 1h 31m into deploy.sh attempt 3, after six
+# hours of wall clock. The assert is in the right place to protect Kibana and
+# the wrong place to protect the deploy.
+if [ -x "$SS_PP_AB/verify_defend_filters.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying Elastic Defend filters ==="
+  if ! python3 "$SS_PP_AB/verify_defend_filters.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball with Defend filters the deploy will reject."
+    exit 1
+  fi
+fi
+
 if [ -x "$SS_PP_AB/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
   echo ""
   echo "=== Verifying Jinja var references ==="
