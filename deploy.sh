@@ -130,6 +130,26 @@ report_elapsed() {
 	printf '  total wall clock : %s\n' "$(fmt_elapsed $((now - SCRIPT_START)))"
 	printf '  outcome          : %s\n' "$DEPLOY_RESULT"
 	echo "====================================================="
+
+	# Printed for EVERY attempt that produced failures, including on a run that
+	# ultimately succeeded. A build that passes on attempt 3 still failed twice,
+	# and those two failures are the only evidence of what is not yet reliable.
+	# Suppressing them on success is how "succeeds on attempt 3" became normal.
+	#
+	# Runs inside the EXIT trap, so it also prints when a run is interrupted --
+	# which is the case where knowing what had already gone wrong matters most
+	# and where the summary would otherwise never be reached.
+	if [ -d "${ATTEMPT_LOG_DIR:-/nonexistent}" ]; then
+		summary="$(summarize_failures 2>/dev/null)"
+		if [ -n "$summary" ]; then
+			echo
+			echo "================== failures by attempt =============="
+			printf '%s\n' "$summary"
+			echo
+			echo "  Full output per attempt: $ATTEMPT_LOG_DIR/deploy-attempt-N.log"
+			echo "====================================================="
+		fi
+	fi
 	exit $rc
 }
 trap report_elapsed EXIT
@@ -417,6 +437,56 @@ if [ "$BOOT_DELAY" -gt 0 ]; then
 	sleep "$BOOT_DELAY"
 fi
 
+# --- Per-attempt logs and the end-of-run failure summary ---------------------
+# WHY. Every failed build so far has ended with a PLAY RECAP that names which
+# hosts failed and nothing about why, so diagnosing one costs a round trip to
+# grep /var/log/playbook_run.log -- after an 8-hour deploy. The information was
+# in the log the whole time. This puts it in the output.
+#
+# Written to a directory proven writable first. deploy.sh runs as root from
+# cron via /tmp/deploy-script.sh, where /var/log is fine, but it is also run by
+# hand as simspace, where it is not -- and a tee that cannot open its file
+# would spray errors through the whole run.
+ATTEMPT_LOG_DIR="${ATTEMPT_LOG_DIR:-/var/log}"
+if ! { mkdir -p "$ATTEMPT_LOG_DIR" 2>/dev/null && [ -w "$ATTEMPT_LOG_DIR" ]; }; then
+	ATTEMPT_LOG_DIR="${TMPDIR:-/tmp}"
+fi
+rm -f "$ATTEMPT_LOG_DIR"/deploy-attempt-*.log
+
+# Groups identical (task, kind, message) across hosts, so 13 Create Users items
+# failing the same way are one line and not thirteen. UNREACHABLE is called out
+# separately from FAILED because they are different faults: an unreachable host
+# left the play and never ran the task, a failed one ran it and it did not
+# work, and `until:` retries only ever help the second.
+summarize_failures() {
+	local f attempt
+	for f in "$ATTEMPT_LOG_DIR"/deploy-attempt-*.log; do
+		[ -f "$f" ] || continue
+		attempt="${f##*-attempt-}"; attempt="${attempt%.log}"
+		awk -v att="$attempt" '
+			/^TASK \[/ { t=$0; sub(/^TASK \[/,"",t); sub(/\].*$/,"",t) }
+			/^fatal:|^failed:/ {
+				h=$0; sub(/^[a-z]+: \[/,"",h); sub(/ *->.*/,"",h); sub(/\].*/,"",h)
+				k=(index($0,"UNREACHABLE")>0)?"UNREACHABLE":"FAILED"
+				m=""
+				if (match($0, /"msg": "[^"]*/)) m=substr($0, RSTART+8, RLENGTH-8)
+				key=k "\t" t "\t" substr(m,1,160)
+				if (!(key in hosts)) { ord[++n]=key; hosts[key]=h }
+				else if (index(" " hosts[key] " ", " " h " ")==0) hosts[key]=hosts[key] ", " h
+			}
+			END {
+				if (n==0) exit
+				printf "\n  --- attempt %s ---\n", att
+				for (i=1;i<=n;i++) {
+					split(ord[i], p, "\t")
+					printf "  [%s] %s\n", p[1], p[2]
+					printf "        hosts: %s\n", hosts[ord[i]]
+					if (p[3] != "") printf "        msg  : %s\n", p[3]
+				}
+			}' "$f"
+	done
+}
+
 ANSIBLE_START=$(date +%s)
 DEPLOY_RESULT="INCOMPLETE — interrupted mid-run"
 
@@ -441,14 +511,25 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
 	# Merging here rather than taking over logging with `exec > >(tee ...)`:
 	# the caller already owns the redirect, and a second writer to the same
 	# file interleaves badly.
-		if ansible-playbook $PLAYBOOK --forks $FORKS --limit @"$RETRY_FILE" "$@" 2>&1; then
+		# PIPESTATUS[0], NOT the pipeline status. A pipeline reports the exit
+		# code of its LAST command, which here is tee and is essentially always
+		# 0 -- so `if ansible-playbook ... | tee ...; then` would declare every
+		# deploy a success. The status must come from ansible-playbook itself.
+		ansible-playbook $PLAYBOOK --forks $FORKS --limit @"$RETRY_FILE" "$@" 2>&1 \
+			| tee "$ATTEMPT_LOG_DIR/deploy-attempt-$i.log"
+		ANSIBLE_RC=${PIPESTATUS[0]}
+		if [ "$ANSIBLE_RC" -eq 0 ]; then
 			echo "Success on attempt $i (retry scope) after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
 			DEPLOY_RESULT="SUCCESS on attempt $i (retry scope)"
 			break
 		fi
 	else
 		echo "=== Attempt $i (full sweep) ==="
-		if ansible-playbook $PLAYBOOK --forks $FORKS "$@" 2>&1; then
+		# See the PIPESTATUS note above: tee's exit code is not ansible's.
+	ansible-playbook $PLAYBOOK --forks $FORKS "$@" 2>&1 \
+		| tee "$ATTEMPT_LOG_DIR/deploy-attempt-$i.log"
+	ANSIBLE_RC=${PIPESTATUS[0]}
+	if [ "$ANSIBLE_RC" -eq 0 ]; then
 			echo "Success on attempt $i after $(fmt_elapsed $(($(date +%s) - ATTEMPT_START)))"
 			DEPLOY_RESULT="SUCCESS on attempt $i"
 			break
