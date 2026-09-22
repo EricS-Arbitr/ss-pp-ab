@@ -9,6 +9,18 @@ Severity key:
 
 ---
 
+## Open — knowingly not fixed
+
+Things left in place on purpose, so they read as a decision rather than an oversight. Each points at the entry that explains it.
+
+| Item | Where | Why it is open |
+|---|---|---|
+| `win_reboot` relies on the `reboot_timeout: 600` default | `roles/common/tasks/hostname.yml`, via the base role, in **all four** PowerPlant range repos | 600s has failed hosts three times in four days in other roles — see **2026-09-22** below. Fixing it means forking a 231-line, 8-file base role in four repos to change one line, and **this particular** reboot has not failed in any captured run. It is a hostname-change reboot, so it lands early when hosts are at their slowest: unproven rather than safe. Raise it the first time it costs a deploy. |
+
+airfield-range is not affected — it copies every role locally and is entirely at 1800.
+
+---
+
 ## 2026-09-22 · bug · reboot_timeout 600 is not a cold Windows boot
 
 **Symptom.** Hosts fail outright with the reboot having worked:
