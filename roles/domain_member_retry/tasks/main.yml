@@ -1,0 +1,81 @@
+---
+- name: Check if already domain joined
+  ansible.windows.win_powershell:
+    script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
+  register: initial_status
+  failed_when: false
+
+- name: Domain join with connection loss tolerance
+  when: initial_status.output[0] == false
+  block:
+    - name: Join Domain (expect connection loss)
+      microsoft.ad.membership:
+        dns_domain_name: "{{ domain_name }}"
+        hostname: "{{ inventory_hostname }}"
+        domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+        domain_admin_password: "{{ domain_admin_password }}"
+        state: domain
+      ignore_unreachable: true
+      ignore_errors: true
+      register: join_attempt
+
+    - name: Wait for network reconfiguration to complete
+      pause:
+        seconds: 45
+
+    - name: Reconnect to host after domain join
+      wait_for_connection:
+        timeout: 300
+        delay: 10
+
+    - name: Verify domain membership
+      ansible.windows.win_powershell:
+        script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
+      register: join_verification
+      failed_when: false
+
+    - name: Retry if domain join failed
+      when: join_verification.output[0] == false
+      block:
+        # OVERLAY. Upstream is 600. That value has now failed hosts on two
+        # ranges (airfield strip_apipa 2026-09-22, ss-pp-stacked via the
+        # Reboot Windows handler the same day) and it is worse here than
+        # elsewhere: a host that times out on this reboot loses its remaining
+        # join attempt, so a slow boot becomes an unjoined member.
+        #
+        # A ceiling, not a delay -- win_reboot returns as soon as the host
+        # answers. See roles/handlers and UPSTREAM_FIXES.md.
+        - name: Reboot before retry
+          ansible.windows.win_reboot:
+            reboot_timeout: 1800
+
+        - name: Retry domain join
+          microsoft.ad.membership:
+            dns_domain_name: "{{ domain_name }}"
+            hostname: "{{ inventory_hostname }}"
+            domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+            domain_admin_password: "{{ domain_admin_password }}"
+            state: domain
+          ignore_unreachable: true
+          ignore_errors: true
+
+        - name: Wait after retry
+          pause:
+            seconds: 45
+
+        - name: Reconnect after retry
+          wait_for_connection:
+            timeout: 300
+            delay: 10
+
+        - name: Final verification
+          ansible.windows.win_powershell:
+            script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
+          register: final_check
+          failed_when: final_check.output[0] == false
+
+    - name: Trigger reboot for successfully joined hosts
+      debug:
+        msg: "Domain join successful for {{ inventory_hostname }}"
+      changed_when: true
+      notify: Reboot Windows

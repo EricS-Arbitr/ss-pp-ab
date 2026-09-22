@@ -1,0 +1,36 @@
+---
+- name: Join domain role with automatic failure recovery
+  block:
+    - name: Join Domain
+      microsoft.ad.membership:
+        dns_domain_name: "{{ domain_name }}"
+        hostname: "{{ inventory_hostname }}"
+        domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+        domain_admin_password: "{{ domain_admin_password }}"
+        state: domain
+      notify: Reboot Windows
+
+  rescue:
+    - name: Domain join failed - rebooting failed hosts
+      debug:
+        msg: "Domain join failed, rebooting {{ inventory_hostname }}"
+
+    - name: Reboot failed hosts
+      ansible.windows.win_reboot:
+        msg: Rebooting to resolve domain join connectivity
+        reboot_timeout: 600
+
+    - name: Stabilization pause
+      pause:
+        seconds: 45
+
+    - name: Join Domain
+      microsoft.ad.membership:
+        dns_domain_name: "{{ domain_name }}"
+        hostname: "{{ inventory_hostname }}"
+        domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+        domain_admin_password: "{{ domain_admin_password }}"
+        state: domain
+      notify: Reboot Windows
+
+

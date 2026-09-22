@@ -9,6 +9,38 @@ Severity key:
 
 ---
 
+## 2026-09-22 · bug · reboot_timeout 600 is not a cold Windows boot
+
+**Symptom.** Hosts fail outright with the reboot having worked:
+
+```
+[FAILED] handler: handlers : Reboot Windows
+      hosts: pp-bp-wkstn-5, pp-bp-wkstn-8
+      msg  : Timed out waiting for last boot time check (timeout=600.0)
+```
+
+`"rebooted": true, "elapsed": 608`. The reboot completed; the task stopped waiting. Affected hosts drop from the run and surface hours later at the Fleet coverage gate, where the message points at agent enrollment rather than a boot.
+
+**Measured three times, on two ranges.**
+
+| | |
+|---|---|
+| 2026-09-19 | airfield, `handlers : Reboot Windows`, both DCs |
+| 2026-09-22 | airfield, `strip_apipa`, `fops-ops05` + `fops-ops08` |
+| 2026-09-22 | ss-pp-stacked, `secpol` → `handlers : Reboot Windows`, two workstations |
+
+**Root cause.** `win_reboot` defaults to `reboot_timeout: 600`, and several base roles set it explicitly to the same value. Ten minutes is not a cold Windows boot on freshly provisioned hardware — particularly early in a run, when every host is booting at once.
+
+**Fix (upstream).** Raise the default in `roles/handlers`, `roles/strip_apipa`, `roles/domain_member_retry` and `roles/common/tasks/hostname.yml`. A generous ceiling is nearly free: `win_reboot` returns as soon as the host answers, so a machine back in 90 seconds costs 90 seconds regardless. The ceiling is spent only on hosts that are genuinely slow, which are exactly the hosts a short one converts into failures.
+
+**Workaround (overlay).** `roles/handlers` and `roles/domain_member_retry` are now overlaid in all four PowerPlant range repos solely to carry `reboot_timeout: 1800`; `strip_apipa` and `splunk-forwarder` overlays already existed and were raised. airfield-range copies all roles locally and is entirely at 1800.
+
+**Still on 600, deliberately.** `roles/common/tasks/hostname.yml` relies on the module default. Overlaying it means forking a 231-line, 8-file base role in four repos to change one line, and that reboot has not failed in any captured run. Recorded here rather than fixed.
+
+**A note on finding these.** The first audit of reboot ceilings, on 2026-09-19, ran against the range repos' own `roles/` directories and reported them clean. Base roles are pulled from `range-development-ansible` at build time and are not in those directories, so every one of these was invisible. Audit the STAGED bundle, the way the build gates do.
+
+---
+
 ## 2026-09-20 · bug · roles/init — the WinRM wait is far too short for a cold boot
 
 **Symptom.** On a freshly provisioned range, a Windows host fails having run nothing at all:

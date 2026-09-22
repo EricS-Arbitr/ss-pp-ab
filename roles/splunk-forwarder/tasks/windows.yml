@@ -129,6 +129,9 @@
   set_fact:
     splunk_service: "SplunkForwarder"
 
+# Explicit ceiling; win_reboot defaults to 600 and that value has now failed
+# hosts on two ranges. See roles/handlers.
 - name: "Reboot after install when needed"
   ansible.windows.win_reboot:
+    reboot_timeout: 1800
   when: splunk_install_result is changed

@@ -8,9 +8,11 @@
     state: present
   register: autoconf_reg
 
+# 1800, not 600 -- see roles/handlers. airfield lost fops-ops05 and fops-ops08
+# to this exact value on 2026-09-22.
 - name: Reboot if autoconfig setting changed
   ansible.windows.win_reboot:
-    reboot_timeout: 600
+    reboot_timeout: 1800
   when: autoconf_reg.changed
 
 - name: Remove APIPA addresses from configured interfaces

@@ -1,0 +1,116 @@
+---
+- name: Restart NetworkManager
+  listen: Restart NetworkManager
+  become: true
+  ansible.builtin.service:
+    name: NetworkManager
+    state: restarted
+
+- name: Restart squid
+  listen: Restart squid
+  become: true
+  ansible.builtin.service:
+    name: squid
+    enabled: true
+    state: restarted
+
+- name: Restart apache2
+  listen: Restart apache2
+  become: true
+  ansible.builtin.service:
+    name: apache2
+    enabled: true
+    state: restarted
+
+- name: Reboot Linux
+  become: true
+  ansible.builtin.reboot:
+    reboot_timeout: 120
+
+# OVERLAY. Upstream is reboot_timeout: 600, and 600 is not a cold Windows boot
+# on freshly provisioned hardware. Measured twice:
+#   2026-09-19  airfield  bs-dc01 and bs-dc02, "Timed out waiting for last boot
+#               time check (timeout=600.0)" with "rebooted": true -- the reboot
+#               worked, the handler stopped waiting
+#   2026-09-22  ss-pp-stacked  pp-bp-wkstn-5 and pp-bp-wkstn-8, same message,
+#               via secpol notifying this handler. Both dropped from the run
+#               and surfaced hours later at the Fleet coverage gate.
+#
+# A CEILING, NOT A DELAY. win_reboot returns as soon as the host answers, so a
+# machine back in 90 seconds costs 90 seconds whatever this says. It is spent
+# only on hosts that are genuinely slow -- which are exactly the hosts a short
+# ceiling converts into failures.
+#
+# This role is overlaid in full because an overlay REPLACES the base role; only
+# the timeout differs from upstream. See UPSTREAM_FIXES.md.
+- name: Reboot Windows
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+
+- name: Initialize Splunk
+  ansible.builtin.shell: >
+    /opt/splunk/bin/splunk enable boot-start --accept-license --no-prompt
+    --answer-yes --seed-passwd {{ splunk_admin_password }}
+  listen: Initialize Splunk
+  changed_when: false
+
+- name: Start Splunk After Installing and Initializing
+  ansible.builtin.systemd:
+    name: splunk
+    enabled: true
+    state: started
+  register: splunk_status
+  listen: Initialize Splunk
+
+- name: Restart Splunk Service
+  ansible.builtin.systemd:
+    name: splunk
+    state: restarted
+  listen: Restart Splunk Service
+
+- name: reload unbound
+  community.docker.docker_container_exec:
+    container: "{{ global_dns_container_name }}"
+    command: unbound-control reload
+  ignore_errors: yes
+
+- name: Update CA Certificates
+  ansible.builtin.command:
+    cmd: /usr/sbin/update-ca-certificates
+
+- name: Recreate email container
+  listen: Recreate email container
+  # Preserve the original Compose project identity when the login user changes.
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -p
+      - simspace
+      - -f
+      - /home/simspace/docker-compose.yml
+      - up
+      - -d
+      - --no-deps
+      - outlook
+
+- name: Run add_users in email container
+  listen: Run add_users in email container
+  community.docker.docker_container_exec:
+    container: email
+    command: /bin/bash /add_users.sh
+
+- name: Restart email container
+  listen: Restart email container
+  ansible.builtin.shell: docker restart email
+
+- name: Reload systemd
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart network_mgr
+  become: true
+  ansible.builtin.systemd:
+    name: network_mgr.service
+    state: restarted

@@ -1,0 +1,49 @@
+---
+- name: Start domain join (detached from connection)
+  microsoft.ad.membership:
+    dns_domain_name: "{{ domain_name }}"
+    hostname: "{{ inventory_hostname }}"
+    domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+    domain_admin_password: "{{ domain_admin_password }}"
+    state: domain
+  async: 180
+  poll: 0
+  register: domain_join_job
+
+- name: Wait for network to stabilize
+  pause:
+    seconds: 45
+
+- name: Reconnect to host
+  wait_for_connection:
+    timeout: 300
+    delay: 15
+
+- name: Check if domain joined
+  ansible.windows.win_powershell:
+    script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
+  register: domain_status
+  failed_when: false
+
+- name: Retry if not joined
+  when: domain_status.output[0] == false
+  block:
+    - name: Reboot for retry
+      ansible.windows.win_reboot:
+        reboot_timeout: 600
+
+    - name: Join domain (retry)
+      microsoft.ad.membership:
+        dns_domain_name: "{{ domain_name }}"
+        hostname: "{{ inventory_hostname }}"
+        domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+        domain_admin_password: "{{ domain_admin_password }}"
+        state: domain
+      notify: Reboot Windows
+
+- name: Trigger reboot for successful joins
+  debug:
+    msg: "Domain join successful"
+  changed_when: true
+  notify: Reboot Windows
+  when: domain_status.output[0] == true

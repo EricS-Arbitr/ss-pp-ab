@@ -464,7 +464,15 @@ summarize_failures() {
 		[ -f "$f" ] || continue
 		attempt="${f##*-attempt-}"; attempt="${attempt%.log}"
 		awk -v att="$attempt" '
+			# Handlers too, not just TASK. A handler failure printed under the
+			# last TASK name is actively misleading: on 2026-09-22 a win_reboot
+			# timeout in the shared Reboot Windows handler was reported as
+			#   [FAILED] secpol : Set secpol
+			# and secpol cannot time out waiting for a boot. That name sends you
+			# to the wrong role, the same defect as a task name naming the wrong
+			# host. Prefixed "handler: " so the two are never confused.
 			/^TASK \[/ { t=$0; sub(/^TASK \[/,"",t); sub(/\].*$/,"",t) }
+			/^RUNNING HANDLER \[/ { t=$0; sub(/^RUNNING HANDLER \[/,"handler: ",t); sub(/\].*$/,"",t) }
 			/^fatal:|^failed:/ {
 				h=$0; sub(/^[a-z]+: \[/,"",h); sub(/ *->.*/,"",h); sub(/\].*/,"",h)
 				k=(index($0,"UNREACHABLE")>0)?"UNREACHABLE":"FAILED"
