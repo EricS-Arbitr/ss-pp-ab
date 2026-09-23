@@ -11,7 +11,7 @@
 # EVERY deploy including re-runs where everything is already up. A longer wait
 # costs nothing when the host is ready -- wait_for_connection returns as soon
 # as the connection succeeds.
-init_wait_timeout: 900
+init_wait_timeout: 2400
 init_wait_delay: 15
 init_wait_sleep: 10
 
@@ -25,3 +25,16 @@ init_gw_arp_blocklist:
   - "00-50-56-98-7D-D7"
 # How many flush/re-probe cycles before giving up and reporting INIT_GW_FAIL.
 init_gw_arp_attempts: 6
+
+# --- Stability gate (see tasks/wait_stable.yml) ---------------------------
+# How long a host must have been up before the run configures it. A host that
+# has been up three minutes when init reaches it waits zero seconds.
+init_stable_uptime: 180
+# Budget for a host that is REACHABLE but still rebooting or servicing.
+init_stable_retries: 80
+# Budget for one that vanished mid-probe.
+init_stable_recover_timeout: 1800
+# Budget for a host that never appeared on the network at all. Matches the
+# recover timeout deliberately: a host that never showed up is the case where
+# something visibly needs fixing, so it should not get the SHORTER window.
+init_noroute_retries: 120

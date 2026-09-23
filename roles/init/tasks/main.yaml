@@ -1,4 +1,75 @@
 ---
+# Tell "still booting" apart from "not on the network" BEFORE spending the
+# long wait on it.
+#
+# wait_for_connection cannot distinguish them: it retries until the ceiling
+# whatever the reason. But the reasons are different states with different
+# outcomes. A host that is booting refuses the connection or times out, and
+# will be ready if you wait. A host with no route is not there at all, and no
+# amount of waiting changes that.
+#
+# MEASURED, 2026-09-20. pp-bp-wkstn-4 failed all three attempts of a 7h25m
+# build with the identical error:
+#
+#   [Errno 113] No route to host -- 10.255.240.122:5985
+#
+# Identical in attempt 3, five hours after attempt 1. That VM was never on the
+# network. Raising init_wait_timeout from 900 to 2400 -- which is correct for
+# hosts that are genuinely slow -- would have made this host burn 40 minutes
+# per attempt instead of 15, adding over an hour to a run that was going to
+# fail regardless.
+#
+# So: probe from the controller first, read the ERRNO, and fail fast on
+# EHOSTUNREACH while leaving the long ceiling intact for everything else.
+- name: Classify reachability from the controller before waiting
+  ansible.builtin.shell: |
+    python3 - <<'PROBE'
+    import socket
+    s = socket.socket()
+    s.settimeout(5)
+    try:
+        s.connect(("{{ ansible_host }}", 5985))
+        print("WINRM_OPEN")
+    except ConnectionRefusedError:
+        print("WINRM_REFUSED")
+    except socket.timeout:
+        print("WINRM_TIMEOUT")
+    except OSError as e:
+        print("WINRM_NOROUTE" if e.errno == 113 else "WINRM_ERR errno=%s" % e.errno)
+    finally:
+        s.close()
+    PROBE
+  delegate_to: localhost
+  become: false
+  register: winrm_reach
+  until: "'WINRM_NOROUTE' not in winrm_reach.stdout"
+  retries: "{{ init_noroute_retries }}"
+  delay: 15
+  changed_when: false
+  failed_when: false
+
+# WINRM_REFUSED and WINRM_TIMEOUT both mean the host is ON the network and not
+# answering yet, which is exactly what the long wait below is for. Only
+# EHOSTUNREACH gets stopped here.
+- name: Fail fast if this host is not on the network at all
+  ansible.builtin.fail:
+    msg: |
+      {{ inventory_hostname }} ({{ ansible_host }}) has no route from the
+      controller after {{ (init_noroute_retries | int) * 15 }}s.
+
+      Probe said: {{ winrm_reach.stdout | default('(no output)') | trim }}
+
+      This is NOT a slow boot. A booting host refuses the connection or times
+      out; EHOSTUNREACH means ARP never resolved, so there is nothing on that
+      address to answer. Waiting longer will not help -- on 2026-09-20 this
+      exact error repeated identically across three attempts spanning 7h25m.
+
+      This is a platform-side problem, not an Ansible one. Check, in order:
+        1. that the VM exists in the blueprint and is powered on
+        2. that its mgmt NIC is attached to the right network
+        3. that its mgmt address really is {{ ansible_host }}
+  when: "'WINRM_NOROUTE' in (winrm_reach.stdout | default(''))"
+
 # Overlay of the base `init` role. Task names deliberately unchanged so log
 # output stays comparable with the base role; only the timings differ.
 # See defaults/main.yml for why, and UPSTREAM_FIXES 2026-08-07.
@@ -50,6 +121,12 @@
 # different VMware MAC block (:98:) from every real router interface (:A8:) and
 # recurs across independent ranges, so only the platform vendor can remove the
 # cause.
+# Between "it answered" and "we start configuring it". wait_for_connection
+# returns on the FIRST successful connection, which a host mid-provisioning can
+# give while still about to reboot.
+- name: Require the host to be stably up before configuring it
+  ansible.builtin.include_tasks: wait_stable.yml
+
 - name: Repair and pin the default-gateway ARP entry
   ansible.windows.win_shell: |
     $ErrorActionPreference = 'SilentlyContinue'
