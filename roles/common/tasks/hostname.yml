@@ -1,0 +1,19 @@
+---
+- name: Apply Hostnames
+  hosts: windows
+  block:
+    - name: Change the hostname to sample-hostname
+      ansible.windows.win_hostname:
+        name: "{{ inventory_hostname }}"
+      register: res
+
+    # OVERLAY. Upstream relies on win_reboot's 600s default. Recorded as a
+    # knowingly-open item on 2026-09-22 -- 600 had failed hosts three times in
+    # other roles but not in this one -- with the trigger "raise it the first
+    # time it costs a deploy". Its Linux sibling in this same role, `reboot
+    # when changed`, cost one the next day. Closing both together rather than
+    # waiting for this half to prove the point separately.
+    - name: Reboot
+      ansible.windows.win_reboot:
+        reboot_timeout: 1800
+      when: res.reboot_required

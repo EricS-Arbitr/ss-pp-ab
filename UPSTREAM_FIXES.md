@@ -15,9 +15,38 @@ Things left in place on purpose, so they read as a decision rather than an overs
 
 | Item | Where | Why it is open |
 |---|---|---|
-| `win_reboot` relies on the `reboot_timeout: 600` default | `roles/common/tasks/hostname.yml`, via the base role, in **all four** PowerPlant range repos | 600s has failed hosts three times in four days in other roles — see **2026-09-22** below. Fixing it means forking a 231-line, 8-file base role in four repos to change one line, and **this particular** reboot has not failed in any captured run. It is a hostname-change reboot, so it lands early when hosts are at their slowest: unproven rather than safe. Raise it the first time it costs a deploy. |
+| _(none open)_ | | |
+
+**Closed 2026-09-23** — `roles/common` reboot ceilings. The open item above said to raise the Windows hostname reboot "the first time it costs a deploy". Its **Linux sibling in the same role** cost one the next day: `common : reboot when changed` timed out on `so-search` at `ansible.builtin.reboot`'s bare 600s default. `roles/common` is now overlaid in all four PowerPlant repos with both reboots at 1800. See the 2026-09-23 entry.
 
 airfield-range is not affected — it copies every role locally and is entirely at 1800.
+
+---
+
+## 2026-09-23 · bug · Linux reboots were never audited, and two of them were far too short
+
+**Symptom.** A Security Onion search node fails mid-build:
+
+```
+[FAILED] common : reboot when changed
+      hosts: so-search
+      msg  : Timed out waiting for last boot time check (timeout=600)
+```
+
+**Root cause — and a blind spot, not a new bug.** The 2026-09-22 audit that raised every Windows ceiling matched `win_reboot`. Linux uses `ansible.builtin.reboot`, so no Linux reboot was examined at all. Two were badly short:
+
+| | |
+|---|---|
+| `roles/common/tasks/linux.yml` — `reboot when changed` | bare module default, **600s** |
+| `roles/handlers` — `Reboot Linux` | **120s** |
+
+Two minutes is not a Linux reboot on a busy hypervisor, let alone a Security Onion node. And `reboot when changed` fires immediately after netplan changes, so the machine is bringing its network back up while the clock runs — the worst possible moment for a short ceiling.
+
+**Fix (upstream).** Both should be minutes-scale. The asymmetry that makes a generous ceiling nearly free applies identically to `ansible.builtin.reboot`: it returns as soon as the host answers.
+
+**Workaround (overlay).** Every reboot in every range repo is now **1800**, whichever module it uses — including the SO node reboots that sat at 900. One ceiling to reason about rather than four. `roles/common` is overlaid in the four PowerPlant repos to carry this and the Windows hostname reboot together.
+
+**The lesson is about the audit, not the number.** Two audits reported these repos clean: the first scanned repo-local `roles/` and could not see base roles, the second scanned the staged bundle but matched one module name. A check scoped narrower than its claim reports a clean result it has not earned — the same shape as the Splunk coverage query that asked `logs-*` and the one that ran unprivileged.
 
 ---
 

@@ -1,0 +1,64 @@
+- name: Ensure xNetworking DSC module is installed
+  community.windows.win_psmodule:
+    name: xNetworking
+    state: present
+
+- name: Set power plan to high performance - disable sleep
+  community.windows.win_power_plan:
+    name: "high performance"
+
+- name: Set windows hostname
+  ansible.windows.win_hostname:
+    name: "{{ inventory_hostname }}"
+  notify: Reboot Windows
+
+- name: Configure IP Address, Netmask, and Gateway
+  ansible.windows.win_dsc:
+    resource_name: xIPAddress
+    InterfaceAlias: "{{ item.name }}"
+    IPAddress: "{{ item.ipv4.address }}/{{ (item.ipv4.address ~ '/' ~ item.ipv4.netmask) | ipaddr('prefix') }}"
+    AddressFamily: "IPv4"
+  with_items: "{{ network_interfaces }}"
+
+- name: Configure Default Gateway
+  ansible.windows.win_dsc:
+    resource_name: xDefaultGatewayAddress
+    InterfaceAlias: "{{ item.name }}"
+    AddressFamily: "IPv4"
+    Address: "{{ item.ipv4.gateway }}"
+  with_items: "{{ network_interfaces }}"
+  when: item.ipv4.gateway is defined
+
+- name: Configure DNS Servers
+  ansible.windows.win_dsc:
+    resource_name: xDNSServerAddress
+    InterfaceAlias: "{{ item.name }}"
+    AddressFamily: "IPv4"
+    Address: "{{ item.dns }}"
+  with_items: "{{ network_interfaces }}"
+  when: item.dns is defined
+
+- name: Disable IPv6 using DSC
+  ansible.windows.win_dsc:
+    resource_name: Registry
+    key: HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters
+    ValueName: DisabledComponents
+    ValueData: 0xFF
+    ValueType: Dword
+    Ensure: Present
+  notify: Reboot Windows
+
+- name: Disable control net DNS registration
+  ansible.windows.win_powershell:
+    script: |
+      Get-NetAdapter {{ item }} | set-DnsClient -RegisterThisConnectionAddress $false
+  loop:
+    - Ethernet0
+    - Ethernet2
+
+- name: Set DNS search suffix 
+  ansible.windows.win_powershell:
+    script: |
+     set-dnsclientglobalsetting -suffixsearchlist {{ domain_name }}
+  when: domain_name is defined
+
