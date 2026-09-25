@@ -1,5 +1,5 @@
 ---
-# Admit a host to the run only once it is STABLY up, not merely answering.
+# Admit a host to the run only once it is settled, not merely answering.
 #
 # WHY THIS EXISTS. wait_for_connection returns on the FIRST successful
 # connection. A workstation still finishing provisioning answers WinRM once,
@@ -8,50 +8,31 @@
 # unreachable host from every remaining task and play, so the range finishes
 # without it and the Fleet coverage gate fails hours later.
 #
-# MEASURED. In two of the three most recent attempt-1 failures the host had
-# already passed wait_for_connection and died within seconds:
+# MEASURED. In two of the three attempt-1 failures that prompted this, the host
+# had already passed wait_for_connection and died within seconds:
 #   2026-09-22  airfield  soc-analyst03    died on init task 2
 #   2026-09-22  stacked   5 workstations   died on the first task of `common`
 # Nothing timed out. The gate let them in too early. init_wait_timeout was
 # already 2400s and was never the constraint.
 #
 # So this asks a different question: has this host been up long enough to be
-# past its boot storm, and is it not about to reboot again?
+# past its boot storm?
 #
-# It is a PROXY, not a proof. Uptime plus the servicing flags catch Windows
-# reboots; they cannot see a provisioning agent that is about to restart the
-# machine for its own reasons. It is the best signal available from inside the
-# guest, and it covers the case we have actually observed.
-- name: Probe whether this host is stably up
-  ansible.windows.win_powershell:
-    script: |
-      $os = Get-CimInstance Win32_OperatingSystem
-      $up = ((Get-Date) - $os.LastBootUpTime).TotalSeconds
-      $pending = @()
-      if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $pending += 'CBS' }
-      if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $pending += 'WU' }
-      if ($up -lt {{ init_stable_uptime }}) {
-        Write-Output ("HOST_SETTLING uptime=" + [int]$up + "s")
-      } elseif ($pending.Count -gt 0) {
-        Write-Output ("HOST_SETTLING reboot-pending=" + ($pending -join ','))
-      } else {
-        Write-Output ("HOST_STABLE uptime=" + [int]$up + "s")
-      }
-  register: init_stable
-  # ignore_unreachable so a host that drops DURING this probe is not evicted.
-  # Verified on the controller 2026-09-22: with this set the host stays in the
-  # play and the registered result is inspectable by later tasks. `until` alone
-  # cannot do it -- it does NOT retry an unreachable result, with or without
-  # this flag, which the same test confirmed.
-  ignore_unreachable: true
-  until: "'HOST_STABLE' in (init_stable.output | default([]) | join(' '))"
-  retries: "{{ init_stable_retries }}"
-  delay: 15
-  changed_when: false
-  failed_when: false
+# It is a PROXY, not a proof. Uptime catches a host still inside its boot
+# storm; it cannot see a provisioning agent about to restart the machine for
+# its own reasons. It is the best signal available from inside the guest and it
+# covers the case actually observed.
+#
+# The probe lives in stable_probe.yml, which documents exactly which of its
+# signals blocks and which is only reported, and why that distinction is what
+# keeps this gate passable.
+- name: Wait until this host is settled
+  ansible.builtin.include_tasks: stable_probe.yml
+  vars:
+    init_probe_name: Probe whether this host is stably up
 
 # The half `until` cannot handle: the host went away rather than answering
-# unstably. Wait for it to come back, then ask again.
+# unsettled. Wait for it to come back, then ask again.
 - name: Host vanished while settling — wait for it, then re-probe
   when: init_stable is unreachable
   block:
@@ -61,37 +42,25 @@
         delay: 15
         sleep: 10
 
-    - name: Re-probe whether this host is stably up
-      ansible.windows.win_powershell:
-        script: |
-          $os = Get-CimInstance Win32_OperatingSystem
-          $up = ((Get-Date) - $os.LastBootUpTime).TotalSeconds
-          $pending = @()
-          if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $pending += 'CBS' }
-          if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $pending += 'WU' }
-          if ($up -lt {{ init_stable_uptime }}) {
-            Write-Output ("HOST_SETTLING uptime=" + [int]$up + "s")
-          } elseif ($pending.Count -gt 0) {
-            Write-Output ("HOST_SETTLING reboot-pending=" + ($pending -join ','))
-          } else {
-            Write-Output ("HOST_STABLE uptime=" + [int]$up + "s")
-          }
-      register: init_stable
-      # ignore_unreachable HERE TOO, and this was missing until 2026-09-23.
-      # Without it the task that exists to RECOVER a vanished host evicts it
-      # the moment it is still flaky -- which is precisely the case the whole
-      # gate was written for. Measured on ss-pp-stacked: win-hunt-2, win-hunt-3
-      # and pp-dmz-dns each reached this re-probe, went unreachable again, and
-      # were dropped from every later play by the recovery step itself.
-      ignore_unreachable: true
-      until: "'HOST_STABLE' in (init_stable.output | default([]) | join(' '))"
-      retries: "{{ init_stable_retries }}"
-      delay: 15
-      changed_when: false
-      failed_when: false
+    - name: Re-probe once the host is back
+      ansible.builtin.include_tasks: stable_probe.yml
+      vars:
+        init_probe_name: Re-probe whether this host is stably up
 
 - name: Report stability
   ansible.builtin.debug:
     msg: >-
       {{ inventory_hostname }}:
       {{ (init_stable.output | default(['(unreachable throughout)'])) | join(' ') }}
+
+# Admitting an unsettled host is the deliberate choice above, but it must never
+# be a SILENT one -- an exhausted gate and a satisfied gate looked identical in
+# the log until this task existed, which is why the 2026-09-25 [win11] stall
+# had to be diagnosed by hand. Grep a run for INIT_STABLE_ADVISORY.
+- name: Flag a host that was admitted without ever settling
+  when: "'HOST_STABLE' not in (init_stable.output | default([]) | join(' '))"
+  ansible.builtin.debug:
+    msg: >-
+      INIT_STABLE_ADVISORY {{ inventory_hostname }} never reported settled after
+      {{ init_stable_retries }} probes and was admitted anyway —
+      {{ (init_stable.output | default(['unreachable throughout'])) | join(' ') }}

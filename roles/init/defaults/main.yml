@@ -31,7 +31,7 @@ init_gw_arp_attempts: 6
 # has been up three minutes when init reaches it waits zero seconds.
 init_stable_uptime: 180
 # Budget for a host that is REACHABLE but still rebooting or servicing.
-init_stable_retries: 80
+init_stable_retries: 40
 # Budget for one that vanished mid-probe.
 init_stable_recover_timeout: 1800
 # Budget for a host that never appeared on the network at all. Matches the

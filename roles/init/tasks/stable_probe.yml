@@ -1,0 +1,88 @@
+---
+# The stability probe itself, included twice by wait_stable.yml -- once for the
+# initial wait, once after a vanished host comes back.
+#
+# WHY ITS OWN FILE. It used to be pasted into both places, and the two copies
+# drifted: the recovery copy was missing ignore_unreachable and so evicted the
+# very hosts it existed to recover (measured 2026-09-23 on ss-pp-stacked:
+# win-hunt-2, win-hunt-3, pp-dmz-dns). One copy cannot drift from itself.
+#
+# WHAT BLOCKS, AND WHAT ONLY GETS REPORTED
+# ----------------------------------------
+# The ONLY state that holds a host back is a low uptime, because it is the only
+# one guaranteed to clear on its own: it becomes false after
+# init_stable_uptime seconds, always, without anyone doing anything.
+#
+# A pending-reboot flag is REPORTED AND NEVER BLOCKS. CBS and Windows Update
+# set those registry keys and clear them only when the servicing transaction
+# completes at boot, so an image that ships with one set keeps it set through
+# every reboot. Blocking on it made this gate unpassable: on 2026-09-25 all 13
+# ss-pp-so [win11] hosts (global/RDP_Windows_11:1.2.4) retried for 20 minutes
+# and then went fatal, while every [win10] host and every server passed. The
+# hosts were healthy and online and their range agents had checked in.
+#
+# Losing that check costs little. A servicing reboot that actually fires makes
+# the host unreachable, and wait_stable.yml already recovers from that; a
+# deliberate reboot is domain_member_retry's job. Trading a rare real risk for
+# a guaranteed failure on a whole image is not a trade worth making.
+- name: "{{ init_probe_name }}"
+  ansible.windows.win_powershell:
+    script: |
+      # Uptime, from a clock-independent source where one is available.
+      # Win32_OperatingSystem.LastBootUpTime needs a WALL-CLOCK subtraction, so
+      # a time sync that jumps the clock FORWARD after boot yields a negative
+      # uptime -- permanently below any threshold, so that branch would never
+      # clear either. The perf counter counts from boot and no clock change can
+      # move it, so it is tried first.
+      $up  = -1
+      $src = 'none'
+      try {
+        $v = (Get-CimInstance Win32_PerfFormattedData_PerfOS_System -ErrorAction Stop).SystemUpTime
+        if ($null -ne $v -and $v -gt 0) { $up = [int]$v; $src = 'perf' }
+      } catch { }
+      if ($up -lt 0) {
+        try {
+          $b = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+          if ($null -ne $b) {
+            $t = [int](((Get-Date) - $b).TotalSeconds)
+            if ($t -ge 0) { $up = $t; $src = 'boottime' }
+          }
+        } catch { }
+      }
+
+      $pending = @()
+      if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $pending += 'CBS' }
+      if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $pending += 'WU' }
+      $flag = ''
+      if ($pending.Count -gt 0) { $flag = ' reboot-pending=' + ($pending -join ',') }
+
+      if ($up -lt 0) {
+        # Neither source answered, or both were nonsense. Do not wait on
+        # something unmeasurable: a host whose WMI or clock is broken fails a
+        # later task that names the real problem far better than a silent
+        # 10-minute stall here does.
+        Write-Output ("HOST_STABLE uptime=unknown src=none" + $flag)
+      } elseif ($up -lt {{ init_stable_uptime }}) {
+        Write-Output ("HOST_SETTLING uptime=" + $up + "s src=" + $src + $flag)
+      } else {
+        Write-Output ("HOST_STABLE uptime=" + $up + "s src=" + $src + $flag)
+      }
+  register: init_stable
+  # ignore_unreachable so a host that drops DURING the probe is not evicted.
+  # Verified on the controller 2026-09-22: with this set the host stays in the
+  # play and the registered result stays inspectable. `until` alone cannot do
+  # it -- it does NOT retry an unreachable result, with or without this flag,
+  # which the same test confirmed.
+  ignore_unreachable: true
+  # ignore_errors because an exhausted `until` is marked failed NO MATTER WHAT
+  # failed_when says -- failed_when is evaluated per attempt inside the retry
+  # loop, and Ansible overwrites `failed` after the loop ends unsatisfied. This
+  # is a settle gate, not a health gate, and it must never be the thing that
+  # throws a host out of the run. The no-route classifier ahead of it and the
+  # ping test behind it are the checks allowed to be fatal.
+  ignore_errors: true
+  until: "'HOST_STABLE' in (init_stable.output | default([]) | join(' '))"
+  retries: "{{ init_stable_retries }}"
+  delay: 15
+  changed_when: false
+  failed_when: false
