@@ -1,12 +1,13 @@
 ---
-# Tell "still booting" apart from "not on the network" BEFORE spending the
-# long wait on it.
+# Tell "still booting" apart from "not on the network" apart from "refusing our
+# credentials" BEFORE spending the long wait on it.
 #
-# wait_for_connection cannot distinguish them: it retries until the ceiling
-# whatever the reason. But the reasons are different states with different
-# outcomes. A host that is booting refuses the connection or times out, and
-# will be ready if you wait. A host with no route is not there at all, and no
-# amount of waiting changes that.
+# wait_for_connection cannot distinguish any of them: it retries until the
+# ceiling whatever the reason, then fails with the same message. But they are
+# different states with different owners. A host that is booting will be ready
+# if you wait. A host with no route is not there at all. A host that rejects the
+# credentials will never succeed no matter how long anyone waits, and it is an
+# inventory problem, not a platform one.
 #
 # MEASURED, 2026-09-20. pp-bp-wkstn-4 failed all three attempts of a 7h25m
 # build with the identical error:
@@ -19,34 +20,20 @@
 # per attempt instead of 15, adding over an hour to a run that was going to
 # fail regardless.
 #
-# So: probe from the controller first, read the ERRNO, and fail fast on
-# EHOSTUNREACH while leaving the long ceiling intact for everything else.
+# MEASURED, 2026-09-25. The five [winserver2022] hosts -- pp-dc01, pp-dc02,
+# pp-dcs-ctrl, pp-file, pp-sql -- were reported as "DID NOT COME ONLINE" while
+# they were powered on and answering. wait_for_connection simply cannot say
+# whether it never reached the port or reached it and was refused, so the
+# report sent the operator to the SimSpace console to check VMs that were fine.
+# That is what INIT_DROP_AUTH below exists to stop.
+#
+# So: probe the port from the controller, read the ERRNO, and let each outcome
+# fail with its own name.
 - name: Classify reachability from the controller before waiting
-  ansible.builtin.shell: |
-    python3 - <<'PROBE'
-    import socket
-    s = socket.socket()
-    s.settimeout(5)
-    try:
-        s.connect(("{{ ansible_host }}", 5985))
-        print("WINRM_OPEN")
-    except ConnectionRefusedError:
-        print("WINRM_REFUSED")
-    except socket.timeout:
-        print("WINRM_TIMEOUT")
-    except OSError as e:
-        print("WINRM_NOROUTE" if e.errno == 113 else "WINRM_ERR errno=%s" % e.errno)
-    finally:
-        s.close()
-    PROBE
-  delegate_to: localhost
-  become: false
-  register: winrm_reach
-  until: "'WINRM_NOROUTE' not in winrm_reach.stdout"
-  retries: "{{ init_noroute_retries }}"
-  delay: 15
-  changed_when: false
-  failed_when: false
+  ansible.builtin.include_tasks: winrm_port_probe.yml
+  vars:
+    init_port_probe_name: Classify reachability from the controller before waiting
+    init_port_probe_retries: "{{ init_noroute_retries }}"
 
 # WINRM_REFUSED and WINRM_TIMEOUT both mean the host is ON the network and not
 # answering yet, which is exactly what the long wait below is for. Only
@@ -54,8 +41,8 @@
 - name: Fail fast if this host is not on the network at all
   ansible.builtin.fail:
     msg: |
-      {{ inventory_hostname }} ({{ ansible_host }}) has no route from the
-      controller after {{ (init_noroute_retries | int) * 15 }}s.
+      INIT_DROP_NOROUTE {{ inventory_hostname }} ({{ ansible_host }}) has no
+      route from the controller after {{ (init_noroute_retries | int) * 15 }}s.
 
       Probe said: {{ winrm_reach.stdout | default('(no output)') | trim }}
 
@@ -73,11 +60,64 @@
 # Overlay of the base `init` role. Task names deliberately unchanged so log
 # output stays comparable with the base role; only the timings differ.
 # See defaults/main.yml for why, and UPSTREAM_FIXES 2026-08-07.
+#
+# Registered rather than left to fail on its own, so that the two tasks below
+# can say WHICH of its two causes applied. On its own this task reports only
+# that a connection never succeeded.
 - name: wait for Windows systems to be online
   ansible.builtin.wait_for_connection:
     timeout: "{{ init_wait_timeout }}"
     delay: "{{ init_wait_delay }}"
     sleep: "{{ init_wait_sleep }}"
+  register: init_online
+  ignore_errors: true
+
+# A fresh reading, not the one taken up to 40 minutes ago at the top of the
+# role. What the port is doing NOW is what distinguishes the two causes.
+- name: Re-probe the port to explain why the wait gave up
+  when: init_online is failed
+  ansible.builtin.include_tasks: winrm_port_probe.yml
+  vars:
+    init_port_probe_name: Re-probe the port to explain why the wait gave up
+    init_port_probe_retries: 1
+
+# THE DISTINCTION THAT MATTERS. If 5985 is OPEN, the host is on the network and
+# WinRM is listening and willing to talk -- so a connection that still never
+# succeeded was REFUSED, not missed, and credentials are the overwhelmingly
+# likely reason. Sending the operator to the console to check whether the VM is
+# powered on, as the old message did, wastes a whole test cycle.
+- name: Fail with the reason this host never came online
+  when: init_online is failed
+  ansible.builtin.fail:
+    msg: |
+      {% if 'WINRM_OPEN' in (winrm_reach.stdout | default('')) %}
+      INIT_DROP_AUTH {{ inventory_hostname }} ({{ ansible_host }}) is ON the
+      network and WinRM IS listening, but no session could be established in
+      {{ init_wait_timeout }}s.
+
+      TCP 5985 is open right now, so this is not a slow boot and not a missing
+      VM. The host is refusing us. In order of likelihood:
+
+        1. WRONG CREDENTIALS FOR THIS IMAGE. Ansible tried user
+           `{{ ansible_user | default('(unset)') }}`. Every SimSpace image
+           refresh has moved this: 1.1.0 ships `simspace`, 1.2.x ships
+           `xadmin`. Check this host's image version in the blueprint against
+           the group_vars file that sets ansible_user for its OS group.
+        2. The account exists but the password is stale in vault.
+        3. WinRM is listening but its listener or auth config rejects NTLM.
+
+      Do NOT check whether the VM is powered on. It is.
+      {% else %}
+      INIT_DROP_NOANSWER {{ inventory_hostname }} ({{ ansible_host }}) never
+      answered WinRM within {{ init_wait_timeout }}s.
+
+      Port probe says: {{ winrm_reach.stdout | default('(no output)') | trim }}
+
+      The host had a route when the run started, so the VM exists, but 5985 is
+      not accepting connections now. Usually still provisioning -- sysprep,
+      first-boot servicing or the range agent. Confirm in the SimSpace console
+      that it has finished booting, then re-run.
+      {% endif %}
 
 # =========================================================================
 # Repair AND PIN the default-gateway ARP entry before anything routes

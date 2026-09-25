@@ -1,0 +1,42 @@
+---
+# Ask the controller whether TCP 5985 is reachable on this host, and WHY NOT if
+# it is not. Included twice by main.yaml: once up front to classify the host,
+# and once again if the connection wait later gives up, so the failure message
+# can name a fresh cause instead of a twenty-minute-old one.
+#
+# WHY ITS OWN FILE: for the same reason stable_probe.yml is one. The moment a
+# probe is pasted in two places the two copies drift, and this repo has already
+# paid for that once.
+- name: "{{ init_port_probe_name }}"
+  ansible.builtin.shell: |
+    python3 - <<'PROBE'
+    import socket
+    s = socket.socket()
+    s.settimeout(5)
+    try:
+        s.connect(("{{ ansible_host }}", 5985))
+        print("WINRM_OPEN")
+    except ConnectionRefusedError:
+        print("WINRM_REFUSED")
+    except socket.timeout:
+        print("WINRM_TIMEOUT")
+    except OSError as e:
+        print("WINRM_NOROUTE" if e.errno == 113 else "WINRM_ERR errno=%s" % e.errno)
+    finally:
+        s.close()
+    PROBE
+  delegate_to: localhost
+  become: false
+  register: winrm_reach
+  until: "'WINRM_NOROUTE' not in winrm_reach.stdout"
+  retries: "{{ init_port_probe_retries }}"
+  delay: 15
+  changed_when: false
+  # ignore_errors because an exhausted `until` is marked failed no matter what
+  # failed_when says. Without it THIS task killed the host on a genuinely absent
+  # VM, and the carefully worded "has no route from the controller" failure
+  # below -- the whole point of classifying -- never ran. The report in
+  # playbooks/00-baseline.yml told operators to grep for a string that could not
+  # be printed.
+  ignore_errors: true
+  failed_when: false

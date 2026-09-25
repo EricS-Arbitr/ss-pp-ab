@@ -2,9 +2,56 @@
 - name: Init
   hosts: windows
   gather_facts: false
-  any_errors_fatal: true
+  # NO any_errors_fatal HERE, AND THAT IS THE POINT. One host that never comes
+  # online used to abort the play for every other host, so a single absent VM
+  # cost the whole run. Each host now fails on its own and the report below
+  # names the survivors and the casualties. Matches the other five range repos
+  # (2026-09-15).
   roles:
     - init
+  tasks:
+    # ansible_play_hosts_all is every host the play started with;
+    # ansible_play_hosts is those still alive. The difference is exactly the
+    # set that went unreachable or failed inside init.
+    - name: Report Windows hosts that never came online
+      ansible.builtin.debug:
+        msg: |
+          ===================================================================
+          {{ (ansible_play_hosts_all | difference(ansible_play_hosts)) | length }} of {{ ansible_play_hosts_all | length }} WINDOWS HOSTS DID NOT COME ONLINE
+
+            {{ (ansible_play_hosts_all | difference(ansible_play_hosts)) | sort | join(', ') }}
+
+          They are excluded from every later play, so they will have no AD
+          join, no Sysmon and no Elastic Agent.
+
+          WHY EACH ONE DROPPED IS NOT THE SAME, and this list does not say.
+          Grep the log for the marker naming the host:
+
+            "INIT_DROP_NOROUTE"
+                never on the network at all -- ARP never resolved. A
+                platform-side problem: check the VM exists, is powered on, and
+                has its mgmt NIC on the right network.
+            "INIT_DROP_AUTH"
+                on the network with WinRM listening, and refusing us. Almost
+                always the wrong ansible_user for that host's image version --
+                1.1.0 images ship `simspace`, 1.2.x ship `xadmin`. The VM is
+                fine. Do not check the console; check the blueprint against the
+                group_vars file that sets ansible_user for its OS group.
+            "INIT_DROP_NOANSWER"
+                had a route when the run started, but 5985 never accepted a
+                connection within {{ init_wait_timeout }}s. Usually still
+                provisioning.
+
+          The settle gate is NOT in that list. It admits a host it cannot prove
+          settled rather than dropping it, and says so as INIT_STABLE_ADVISORY.
+
+          The deploy CONTINUES for the {{ ansible_play_hosts | length }} hosts that did come up, and
+          will fail at the end-of-run coverage checks naming exactly what is
+          missing. Act on the marker above -- it names the owner of each
+          failure -- then re-run.
+          ===================================================================
+      run_once: true
+      when: (ansible_play_hosts_all | difference(ansible_play_hosts)) | length > 0
   tags:
     - init
 
