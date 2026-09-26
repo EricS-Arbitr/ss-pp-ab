@@ -23,6 +23,66 @@ airfield-range is not affected — it copies every role locally and is entirely 
 
 ---
 
+## 2026-09-25 · bug · roles/dns/tasks/main.yml — hardcoded `replication: forest` migrates the zone dcpromo already created
+
+**Symptom.** The `dns` play fails on the PDC with:
+
+```
+TASK [dns : Create Forward Lookup Zones]
+fatal: [pp-dc01]: FAILED! => Failed to set properties on the zone voltgrid.com:
+Failed to reset the directory partition for zone voltgrid.com on server PP-DC01.
+```
+
+Measured on ss-pp-so 2026-09-25: identical on all three deploy attempts and the
+only failure in a 65-host run, with every other host at `failed=0`.
+
+**Root cause.** `dcpromo` auto-creates the forward zone for the new AD domain and
+stores it in the **domain** directory partition
+(`CN=MicrosoftDNS,DC=DomainDnsZones,...`). The role then runs
+`community.windows.win_dns_zone` with `state: present` and `replication: forest`
+hardcoded. Because the zone already exists, the module does not create it — it
+tries to **migrate** its replication scope to the forest partition via
+`Set-DnsServerPrimaryZone -ReplicationScope Forest`, and on a brand-new
+single-domain forest that call fails with the message above. Retrying cannot help:
+the zone exists identically on every attempt.
+
+**Detection.** The zone is present and AD-integrated but at domain scope:
+
+```powershell
+Get-DnsServerZone -Name voltgrid.com | Select-Object ZoneName,IsDsIntegrated,ReplicationScope
+# ReplicationScope : Domain
+```
+
+**Fix (upstream).** Replace the hardcoded `replication: forest` in both zone tasks
+with a variable defaulting to the value compatible with the most common
+deployment shape, a single-domain forest:
+
+```yaml
+replication: "{{ dns_zone_replication | default('domain') }}"
+```
+
+On a single-domain forest, domain scope and forest scope reach the same set of DNS
+servers, so nothing is given up. Ranges with a genuinely multi-domain forest set
+`dns_zone_replication: forest` in `group_vars`. The literal comment
+`# or 'domain' or 'none' based on your needs` already in the role file shows the
+original author intended this to be tunable; it never was.
+
+**Workaround (overlay).** `roles/dns` is now a full copy of the base role in this
+repo with that change, plus a 6 × 15s `until: ... is succeeded` belt on both zone
+tasks for the window where the application partition is still being enlisted
+asynchronously after promotion. The full copy is required because
+`build_tarball.sh`'s `resolve_role_path` selects one directory outright — a repo
+role replaces the base role entirely rather than merging file by file.
+
+**Propagation note.** airfield-range documented this same bug and fix on
+2026-06-25 and carries the overlay; the base role was never changed and the
+overlay was never ported, so every PowerPlant repo still shipped
+`replication: forest`. Now applied to ss-pp-so, ss-pp-so-mal, ss-pp-ab and
+ss-pp-stacked.
+
+---
+
+
 ## 2026-09-23 · bug · Linux reboots were never audited, and two of them were far too short
 
 **Symptom.** A Security Onion search node fails mid-build:

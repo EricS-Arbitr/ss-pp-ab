@@ -1,0 +1,90 @@
+---
+# The win_dns_record module supports the following record types: A, AAAA, CNAME, DHCID, NS, PTR, SRV, TXT
+- name: Identify unique zones from DNS records
+  set_fact:
+    unique_zones: "{{ internal_dns_records | map(attribute='zone') | unique | list }}"
+  when: internal_dns_records is defined
+
+- name: Create Forward Lookup Zones
+  community.windows.win_dns_zone:
+    name: "{{ item }}"
+    type: primary
+    state: present
+    # dcpromo ALREADY created the forward zone for the AD domain and put it in
+    # the DOMAIN directory partition. Asking for `forest` here does not create a
+    # zone -- it asks win_dns_zone to MIGRATE the existing one to the forest
+    # partition, via Set-DnsServerPrimaryZone -ReplicationScope Forest, which on
+    # a fresh single-domain forest fails with
+    #   Failed to set properties on the zone voltgrid.com: Failed to reset the
+    #   directory partition for zone voltgrid.com on server PP-DC01.
+    # Measured on ss-pp-so 2026-09-25: identical on all three attempts, the only
+    # failure in a 65-host run. `domain` matches where dcpromo already put it,
+    # so the task is a no-op on that zone and simply creates the reverse zones.
+    # On a single-domain forest domain scope and forest scope reach the same set
+    # of DNS servers, so nothing is given up. Set dns_zone_replication: forest
+    # in group_vars only for a genuinely multi-domain forest.
+    replication: "{{ dns_zone_replication | default('domain') }}"
+  loop: "{{ unique_zones }}"
+  when:
+    - internal_dns_records is defined
+    - not item.endswith('.in-addr.arpa')
+    - not item.endswith('.ip6.arpa')
+  # The application partition is enlisted asynchronously after promotion, so a
+  # zone created seconds later can still be refused. Retries are per loop item.
+  register: fwd_zone
+  until: fwd_zone is succeeded
+  retries: 6
+  delay: 15
+
+- name: Create Reverse Lookup Zones
+  community.windows.win_dns_zone:
+    name: "{{ item }}"
+    type: primary
+    state: present
+    replication: "{{ dns_zone_replication | default('domain') }}"
+    forwarder_timeout: 3
+  loop: "{{ unique_zones }}"
+  when:
+    - internal_dns_records is defined
+    - item.endswith('.in-addr.arpa') or item.endswith('.ip6.arpa')
+  register: rev_zone
+  until: rev_zone is succeeded
+  retries: 6
+  delay: 15
+
+- name: Manage Internal DNS Records
+  community.windows.win_dns_record:
+    name: "{{ item.name }}"
+    type: "{{ item.type }}"
+    value: "{{ item.value }}"
+    zone: "{{ item.zone }}"
+    ttl: "{{ item.ttl | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ internal_dns_records | default([]) }}"
+  when: 
+    - internal_dns_records is defined
+    - item.name is defined
+    - item.type is defined
+    - item.value is defined
+    - item.zone is defined
+
+- name: Add WPAD A record
+  community.windows.win_dns_record:
+    name: "wpad"
+    type: "A"
+    value: "{{ proxy_server }}"
+    zone: "{{ domain_name }}"
+  when: proxy_server is defined
+
+- name: Disable DNS Global Query Blocklist
+  ansible.windows.win_dsc:
+    resource_name: Script
+    GetScript: |
+      return @{
+          Result = (Get-DnsServerGlobalQueryBlockList).Enabled
+      }
+    SetScript: |
+      Set-DnsServerGlobalQueryBlockList -Enable $false
+    TestScript: |
+      $currentState = Get-DnsServerGlobalQueryBlockList
+      return -not $currentState.Enable
