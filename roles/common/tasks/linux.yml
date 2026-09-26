@@ -19,12 +19,22 @@
     name: network-manager
     state: present
 
-- name: Set Resolv.conf
+# Rendered ONCE from every interface's nameservers merged, not once per
+# interface. Looping the template over network_interfaces made each iteration
+# overwrite the whole file, so the LAST interface carrying `dns` won and the
+# file churned on every run when the lists differed. No host has two
+# dns-bearing interfaces today, so nothing is broken right now -- the day one
+# does, the loop silently discards the other interface's resolvers.
+- name: Set resolv.conf
   ansible.builtin.template:
     src: resolv.conf.j2
     dest: /etc/resolv.conf
-  loop: "{{ network_interfaces }}"
-  when: item.dns is defined
+    mode: "0644"
+  vars:
+    resolv_nameservers: >-
+      {{ (network_interfaces | default([])) | selectattr('dns', 'defined')
+         | map(attribute='dns') | flatten | unique | list }}
+  when: resolv_nameservers | length > 0
 
 - name: Configure NetworkManager settings
   community.general.ini_file:

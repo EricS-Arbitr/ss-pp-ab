@@ -6,7 +6,7 @@
   failed_when: false
 
 - name: Domain join with connection loss tolerance
-  when: initial_status.output[0] == false
+  when: not ((initial_status.output | default([false]))[0] | default(false) | bool)
   block:
     - name: Join Domain (expect connection loss)
       microsoft.ad.membership:
@@ -35,7 +35,7 @@
       failed_when: false
 
     - name: Retry if domain join failed
-      when: join_verification.output[0] == false
+      when: not ((join_verification.output | default([false]))[0] | default(false) | bool)
       block:
         # OVERLAY. Upstream is 600. That value has now failed hosts on two
         # ranges (airfield strip_apipa 2026-09-22, ss-pp-stacked via the
@@ -72,7 +72,7 @@
           ansible.windows.win_powershell:
             script: (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain
           register: final_check
-          failed_when: final_check.output[0] == false
+          failed_when: not ((final_check.output | default([false]))[0] | default(false) | bool)
 
     - name: Trigger reboot for successfully joined hosts
       debug:

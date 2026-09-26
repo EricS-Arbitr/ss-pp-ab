@@ -221,3 +221,9 @@ id_rsa
 id_rsa*
 id_ed25519*
 .ssh/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+*.bak
+*.bak.*

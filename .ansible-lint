@@ -1,0 +1,34 @@
+---
+# ansible-lint configuration. Written 2026-09-25 from an external lint run
+# (ansible-lint 26.9.0, production profile) so a future run reports on this
+# repo's code and not on its environment.
+#
+# THE ENVIRONMENT MUST BE SET UP OR MOST FINDINGS ARE BOGUS:
+#   1. ansible.cfg points vault_password_file at /home/simspace/.vault_pass.
+#      Without a readable file there, every playbook fails --syntax-check with
+#      internal-error. Point ANSIBLE_VAULT_PASSWORD_FILE at any readable file;
+#      syntax checking does not decrypt vault content.
+#   2. Many roles the playbooks call are base roles merged in at build time by
+#      build_tarball.sh and are NOT in source here. Extract them from ab_pp.tgz
+#      to a path OUTSIDE the repo and add it to ANSIBLE_ROLES_PATH, so lint
+#      reports only on this repo's own roles.
+profile: production
+
+exclude_paths:
+  - collections/
+  - rules/
+  - blueprints/
+  - "*.tgz"
+
+skip_list:
+  # Registered and role variables are referenced across roles, playbooks and
+  # host_vars. Renaming ~188 of them cannot be verified from a machine without
+  # ansible-lint, and buys no behaviour change.
+  - var-naming[no-role-prefix]
+  # wordpress-pv is referenced by the inventory group and build_tarball.sh.
+  - role-name
+  # Tasks gated on `when: x.changed` are deliberate. Handlers run at the END of
+  # a play, which would break sequences like "write netplan -> apply now ->
+  # continue".
+  - no-handler
+  - yaml[indentation]
