@@ -23,6 +23,64 @@ airfield-range is not affected — it copies every role locally and is entirely 
 
 ---
 
+## 2026-09-26 · bug · roles/ae_gpo — GPO edits need Domain Admins, which the refreshed image's local admin does not get
+
+**Symptom.** `ae_gpo` fails on the PDC, identically on all three deploy attempts:
+
+```
+TASK [ae_gpo : Disable Windows Security Center Action Center Notifications (Prevents UAC Popup)]
+fatal: [pp-dc01]: Set-GPRegistryValue : Access is denied.
+(Exception from HRESULT: 0x80070005 (E_ACCESSDENIED))
+```
+
+The two tasks ahead of it in the same role pass, which is what makes this
+confusing: `Set-ADDefaultDomainPasswordPolicy` writes the domain object and the
+`dns` role writes DNS zones, both minutes earlier on the same connection.
+
+**Root cause.** The `Default Domain Policy` ACL grants edit rights to **Domain
+Admins, Enterprise Admins and SYSTEM only**. `BUILTIN\Administrators` — which
+promotion does leave the connecting account holding — can write the domain object
+and manage DNS zones, but appears in no GPO ACL. So every AD operation succeeds
+and every GPO write is refused.
+
+It was invisible until the image refresh because `ansible_user` used to be
+`simspace`, and `simspace` is listed in `DomainUsers` with
+`groups: ["Domain Admins"]`; the `Create Users` play grants it two plays after
+promotion, long before `ae_gpo` runs. `RDP_Windows_Server_2022:1.2.5` renamed the
+server tier's local admin to `xadmin`, which gets no such grant.
+
+**Detection.** On the PDC, as the account Ansible connects with:
+
+```
+> whoami
+voltgrid\xadmin
+> whoami /groups | findstr /i Admins
+(no output — no Domain Admins, no Enterprise Admins, no DnsAdmins)
+```
+
+Note that `Administrators` does not contain the substring `Admins`, so
+`BUILTIN\Administrators` is still held and is why the AD writes worked.
+
+**Fix (upstream).** `roles/ae_gpo` should not silently depend on the connection
+holding Domain Admins. Either document the requirement in the role's README, or
+have `roles/dcpromo` ensure the account it was invoked with holds it — the role
+already knows the domain it just created.
+
+**Workaround (overlay).** A `Grant the Ansible account Domain Admins` play sits
+between `dcpromo` and `Create Users`, keyed on `{{ ansible_user }}` rather than a
+literal so the next image rename is covered without another failed cycle. It needs
+no second credential: the same run's `Group Assignment` added 40 users to Domain
+Admins as `xadmin`, because AdminSDHolder's default ACL does grant
+`BUILTIN\Administrators` write where GPO ACLs do not. The play reports
+`DOMAIN_ADMIN_GRANT DA_ADDED|DA_ALREADY|DA_NO_ACCOUNT <user>`, and
+`DA_NO_ACCOUNT` is deliberately non-fatal because where `ansible_user` is
+`simspace` the account is created with Domain Admins a play later. It ends with
+`meta: reset_connection`, since group membership is stamped into the access token
+at logon and the session that performed the grant is not itself elevated by it.
+
+---
+
+
 ## 2026-09-25 · bug · roles/dns/tasks/main.yml — hardcoded `replication: forest` migrates the zone dcpromo already created
 
 **Symptom.** The `dns` play fails on the PDC with:

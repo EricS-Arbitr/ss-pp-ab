@@ -400,6 +400,67 @@
     - dcpromo
   tags:
     - dcpromo
+# The account Ansible connects with must hold Domain Admins, because later plays
+# edit objects whose ACL grants only Domain Admins, Enterprise Admins and SYSTEM.
+# Default Domain Policy is the one that bites first.
+#
+# MEASURED 2026-09-26 on ss-pp-so. The RDP_Windows_Server_2022:1.2.5 image
+# refresh moved the server tier's local admin from `simspace` to `xadmin`.
+# `simspace` is listed in DomainUsers with groups: ["Domain Admins"], so
+# `Create Users` granted it well before the GPO play ran and this was invisible.
+# `xadmin` gets no such grant, so `ae_gpo` failed all three attempts on
+#   Set-GPRegistryValue : Access is denied. (E_ACCESSDENIED)
+# while the two AD writes ahead of it passed: promotion does leave the account in
+# BUILTIN\Administrators, which can write the domain object and manage DNS zones,
+# but that group is absent from every GPO ACL.
+#
+# KEYED ON ansible_user, not a literal, so the next image refresh that renames
+# the local admin is covered without another failed cycle.
+#
+# The connection can perform this grant itself -- no second credential. The same
+# run's `Group Assignment` added 40 users to Domain Admins as `xadmin`, because
+# AdminSDHolder's default ACL does grant BUILTIN\Administrators write where GPO
+# ACLs do not.
+- name: Grant the Ansible account Domain Admins
+  hosts: pdc
+  gather_facts: false
+  tasks:
+    - name: Ensure the Ansible connection account holds Domain Admins
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory
+        $u = "{{ ansible_user }}"
+        $acct = Get-ADUser -Filter "SamAccountName -eq '$u'" -ErrorAction SilentlyContinue
+        if (-not $acct) { Write-Output "DA_NO_ACCOUNT $u"; exit 0 }
+        $member = Get-ADGroupMember -Identity 'Domain Admins' -ErrorAction Stop |
+                  Where-Object { $_.SamAccountName -eq $u }
+        if ($member) { Write-Output "DA_ALREADY $u"; exit 0 }
+        Add-ADGroupMember -Identity 'Domain Admins' -Members $acct -ErrorAction Stop
+        Write-Output "DA_ADDED $u"
+      register: da_grant
+      changed_when: "'DA_ADDED' in da_grant.stdout"
+      # AD can still be settling in the first moments after promotion.
+      until: da_grant is succeeded
+      retries: 6
+      delay: 15
+
+    # DA_NO_ACCOUNT is deliberately not fatal. Where ansible_user is `simspace`,
+    # `Create Users` creates it WITH Domain Admins a play or two later, so a
+    # missing account here is not a problem -- but it must be visible, because if
+    # the account never appears the GPO plays fail much later for a reason this
+    # task already knew.
+    - name: Report the grant
+      ansible.builtin.debug:
+        msg: "DOMAIN_ADMIN_GRANT {{ da_grant.stdout | default('(no output)') | trim }}"
+
+    # Group membership is stamped into the access token at logon, so the session
+    # that performed the grant is not itself elevated by it. Force the next play
+    # to authenticate again rather than reuse a token that predates the change.
+    - name: Reset the connection so the new membership lands in the token
+      ansible.builtin.meta: reset_connection
+  tags:
+    - dcpromo
+    - domain_admin_grant
+
 
 - name: Create Users
   hosts: pdc
