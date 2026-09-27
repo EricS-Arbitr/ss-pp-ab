@@ -246,7 +246,23 @@
     - name: Promote to additional domain controller
       microsoft.ad.domain_controller:
         dns_domain_name: "{{ domain_name }}"
-        domain_admin_user: "{{ domain_admin }}@{{ domain_name }}"
+        # DOWN-LEVEL FORM, not UPN. `{{ domain_admin }}@{{ domain_name }}` is a
+        # UPN, and a UPN only resolves if the account HAS one. The base
+        # create_users role builds these accounts with New-ADUser and never
+        # passes -UserPrincipalName, so simspace has no UPN and
+        # simspace@voltgrid.com matches no principal. Windows reports that as
+        # "The user name or password is incorrect", which is indistinguishable
+        # from a wrong password and is what all 40 members failed with on
+        # 2026-09-27 while the password was provably correct.
+        #
+        # This was masked until the image refresh: the local admin used to BE
+        # simspace, promotion migrated it into the domain, and migrated accounts
+        # get a UPN. The 1.2.x images ship xadmin, so simspace is now created
+        # fresh by New-ADUser -- without one.
+        #
+        # VOLTGRID\simspace resolves on sAMAccountName, which every account has
+        # by construction, so this form works with or without a UPN.
+        domain_admin_user: '{{ short_domain_name }}\{{ domain_admin }}'
         domain_admin_password: "{{ domain_admin_password }}"
         safe_mode_password: "{{ domain_admin_password }}"
         install_dns: true
