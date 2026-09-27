@@ -421,10 +421,68 @@
 # run's `Group Assignment` added 40 users to Domain Admins as `xadmin`, because
 # AdminSDHolder's default ACL does grant BUILTIN\Administrators write where GPO
 # ACLs do not.
-- name: Grant the Ansible account Domain Admins
+- name: Make the accounts the deploy depends on usable
   hosts: pdc
   gather_facts: false
   tasks:
+    # CONVERGE THE domain_admin ACCOUNT, DO NOT ASSUME IT.
+    #
+    # The base create_users role is create-only:
+    #     if (-not $adUser) { New-ADUser ... -Enabled $true }
+    # so it does nothing at all to an account that already exists. MEASURED
+    # 2026-09-27: the 1.2.x image ships `simspace` PRESENT BUT DISABLED, because
+    # `xadmin` is now the live admin. Promotion migrated that disabled account
+    # into AD, create_users saw it existed and skipped, and every one of the 40
+    # domain joins failed:
+    #
+    #   "This user can't sign in because this account is currently disabled."
+    #
+    # Get-ADUser simspace confirmed it: Enabled False, UserPrincipalName blank.
+    # Before the down-level credential fix this presented as "The user name or
+    # password is incorrect" instead, because the UPN did not resolve either —
+    # two different messages, one broken account.
+    #
+    # So this asserts the three properties the rest of the run needs rather than
+    # trusting that whoever created the account left it usable: enabled, the
+    # password this deploy authenticates with, and a UPN so UPN-form logins work
+    # for anything that still uses one.
+    - name: Ensure the domain_admin account is enabled, has the deploy password and a UPN
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory
+        $u   = '{{ domain_admin }}'
+        $upn = '{{ domain_admin }}@{{ domain_name }}'
+        $pw  = ConvertTo-SecureString '{{ domain_admin_password }}' -AsPlainText -Force
+        $a = Get-ADUser -Filter "SamAccountName -eq '$u'" -Properties UserPrincipalName,Enabled
+        $did = @()
+        if (-not $a) {
+          New-ADUser -Name $u -SamAccountName $u -UserPrincipalName $upn `
+                     -AccountPassword $pw -PasswordNeverExpires $true -Enabled $true
+          $did += 'created'
+        } else {
+          if (-not $a.Enabled) { Enable-ADAccount -Identity $a; $did += 'enabled' }
+          if (-not $a.UserPrincipalName) { Set-ADUser -Identity $a -UserPrincipalName $upn; $did += 'upn' }
+          Set-ADAccountPassword -Identity $a -Reset -NewPassword $pw
+          Set-ADUser -Identity $a -PasswordNeverExpires $true
+          $did += 'password'
+        }
+        if (-not (Get-ADGroupMember -Identity 'Domain Admins' |
+                  Where-Object { $_.SamAccountName -eq $u })) {
+          Add-ADGroupMember -Identity 'Domain Admins' -Members $u
+          $did += 'domain-admins'
+        }
+        Write-Output ("DOMAIN_ADMIN_READY " + $u + " " + ($did -join ','))
+      register: da_account
+      # The password is interpolated into the script, so the task result is not
+      # echoed. The marker is surfaced by the debug below instead.
+      no_log: true
+      until: da_account is succeeded
+      retries: 6
+      delay: 15
+
+    - name: Report the domain_admin account convergence
+      ansible.builtin.debug:
+        msg: "{{ da_account.stdout | default('(no output)') | trim }}"
+
     - name: Ensure the Ansible connection account holds Domain Admins
       ansible.windows.win_shell: |
         Import-Module ActiveDirectory
