@@ -425,63 +425,106 @@
   hosts: pdc
   gather_facts: false
   tasks:
-    # CONVERGE THE domain_admin ACCOUNT, DO NOT ASSUME IT.
+    # CONVERGE THE domain_admin ACCOUNT, AND PROVE IT, DO NOT REPORT THE ATTEMPT.
     #
     # The base create_users role is create-only:
     #     if (-not $adUser) { New-ADUser ... -Enabled $true }
-    # so it does nothing at all to an account that already exists. MEASURED
-    # 2026-09-27: the 1.2.x image ships `simspace` PRESENT BUT DISABLED, because
-    # `xadmin` is now the live admin. Promotion migrated that disabled account
-    # into AD, create_users saw it existed and skipped, and every one of the 40
-    # domain joins failed:
+    # so it does nothing to an account that already exists. MEASURED 2026-09-27:
+    # the 1.2.x image ships `simspace` PRESENT BUT DISABLED, because `xadmin` is
+    # the live admin now. Promotion migrated that disabled account into AD,
+    # create_users saw it existed and skipped, and all 40 domain joins failed with
+    # "This user can't sign in because this account is currently disabled."
     #
-    #   "This user can't sign in because this account is currently disabled."
+    # THE FIRST VERSION OF THIS TASK LIED. It ran
+    #     if (-not $a.Enabled) { Enable-ADAccount -Identity $a; $did += 'enabled' }
+    # under PowerShell's default $ErrorActionPreference of Continue, so a
+    # non-terminating failure from Enable-ADAccount printed to stderr, the script
+    # continued, `$did += 'enabled'` ran anyway, rc was 0, and it reported
+    # "DOMAIN_ADMIN_READY simspace enabled,password" while Get-ADUser still showed
+    # Enabled: False. no_log then hid the stderr that would have said why.
     #
-    # Get-ADUser simspace confirmed it: Enabled False, UserPrincipalName blank.
-    # Before the down-level credential fix this presented as "The user name or
-    # password is incorrect" instead, because the UPN did not resolve either —
-    # two different messages, one broken account.
+    # So: ErrorActionPreference Stop, the PASSWORD IS RESET BEFORE THE ENABLE
+    # (a migrated account can carry a password that violates the domain policy,
+    # and Enable-ADAccount refuses while it does), and the task re-reads the
+    # account afterwards and throws unless it is genuinely enabled, has a UPN and
+    # holds Domain Admins.
     #
-    # So this asserts the three properties the rest of the run needs rather than
-    # trusting that whoever created the account left it usable: enabled, the
-    # password this deploy authenticates with, and a UPN so UPN-form logins work
-    # for anything that still uses one.
-    - name: Ensure the domain_admin account is enabled, has the deploy password and a UPN
+    # The verdict goes to a file rather than stdout because the password is
+    # interpolated into this script, so the task must stay no_log — and a no_log
+    # task that fails shows nothing at all. The next task reads the file, which
+    # contains no secret, so failures are legible.
+    - name: Converge the domain_admin account and record the outcome
       ansible.windows.win_shell: |
-        Import-Module ActiveDirectory
-        $u   = '{{ domain_admin }}'
-        $upn = '{{ domain_admin }}@{{ domain_name }}'
-        $pw  = ConvertTo-SecureString '{{ domain_admin_password }}' -AsPlainText -Force
-        $a = Get-ADUser -Filter "SamAccountName -eq '$u'" -Properties UserPrincipalName,Enabled
-        $did = @()
-        if (-not $a) {
-          New-ADUser -Name $u -SamAccountName $u -UserPrincipalName $upn `
-                     -AccountPassword $pw -PasswordNeverExpires $true -Enabled $true
-          $did += 'created'
-        } else {
-          if (-not $a.Enabled) { Enable-ADAccount -Identity $a; $did += 'enabled' }
-          if (-not $a.UserPrincipalName) { Set-ADUser -Identity $a -UserPrincipalName $upn; $did += 'upn' }
-          Set-ADAccountPassword -Identity $a -Reset -NewPassword $pw
-          Set-ADUser -Identity $a -PasswordNeverExpires $true
-          $did += 'password'
+        $ErrorActionPreference = 'Stop'
+        $state = 'C:\Windows\Temp\domain_admin_state.txt'
+        try {
+          Import-Module ActiveDirectory
+          $u   = '{{ domain_admin }}'
+          $upn = '{{ domain_admin }}@{{ domain_name }}'
+          $pw  = ConvertTo-SecureString '{{ domain_admin_password }}' -AsPlainText -Force
+          $a = Get-ADUser -Filter "SamAccountName -eq '$u'" -Properties UserPrincipalName,Enabled
+          $did = @()
+          if (-not $a) {
+            New-ADUser -Name $u -SamAccountName $u -UserPrincipalName $upn `
+                       -AccountPassword $pw -PasswordNeverExpires $true -Enabled $true
+            $did += 'created'
+          } else {
+            $dn = $a.DistinguishedName
+            if (-not $a.UserPrincipalName) { Set-ADUser -Identity $dn -UserPrincipalName $upn; $did += 'upn' }
+            # Password FIRST. Enable-ADAccount refuses while the existing password
+            # violates the domain policy, which is how a migrated account arrives.
+            Set-ADAccountPassword -Identity $dn -Reset -NewPassword $pw
+            Set-ADUser -Identity $dn -PasswordNeverExpires $true
+            $did += 'password'
+            if (-not $a.Enabled) { Enable-ADAccount -Identity $dn; $did += 'enabled' }
+          }
+          $after = Get-ADUser -Filter "SamAccountName -eq '$u'" -Properties UserPrincipalName,Enabled
+          if (-not $after)                   { throw "account $u does not exist after convergence" }
+          if (-not $after.Enabled)           { throw "account $u is STILL DISABLED after Enable-ADAccount" }
+          if (-not $after.UserPrincipalName) { throw "account $u has no UserPrincipalName after convergence" }
+          if (-not (Get-ADGroupMember -Identity 'Domain Admins' |
+                    Where-Object { $_.SamAccountName -eq $u })) {
+            Add-ADGroupMember -Identity 'Domain Admins' -Members $after
+            $did += 'domain-admins'
+          }
+          "READY $u applied=$($did -join ',') enabled=$($after.Enabled) upn=$($after.UserPrincipalName)" |
+            Set-Content -Path $state
+        } catch {
+          "FAILED $($_.Exception.Message)" | Set-Content -Path $state
+          throw
         }
-        if (-not (Get-ADGroupMember -Identity 'Domain Admins' |
-                  Where-Object { $_.SamAccountName -eq $u })) {
-          Add-ADGroupMember -Identity 'Domain Admins' -Members $u
-          $did += 'domain-admins'
-        }
-        Write-Output ("DOMAIN_ADMIN_READY " + $u + " " + ($did -join ','))
       register: da_account
-      # The password is interpolated into the script, so the task result is not
-      # echoed. The marker is surfaced by the debug below instead.
       no_log: true
-      until: da_account is succeeded
+      failed_when: false
+      until: da_account is defined
       retries: 6
       delay: 15
 
-    - name: Report the domain_admin account convergence
+    # Reads the verdict the task above could not print. Contains no secret.
+    - name: Read the domain_admin convergence verdict
+      ansible.windows.win_shell: Get-Content -Path 'C:\Windows\Temp\domain_admin_state.txt'
+      register: da_verdict
+      changed_when: false
+      failed_when: false
+
+    - name: Report the domain_admin convergence
       ansible.builtin.debug:
-        msg: "{{ da_account.stdout | default('(no output)') | trim }}"
+        msg: "DOMAIN_ADMIN {{ da_verdict.stdout | default('(no verdict file)') | trim }}"
+
+    # Hard stop. Every later play authenticates with this account, so letting the
+    # run continue past a failure here only moves the failure 200 plays downstream.
+    - name: Fail if the domain_admin account is not usable
+      ansible.builtin.fail:
+        msg: |
+          The account this deploy authenticates with is not usable, so every
+          domain join and every GPO edit will fail.
+
+          Verdict: {{ da_verdict.stdout | default('(no verdict file was written)') | trim }}
+
+          READY ... enabled=True  is the only acceptable outcome. Anything else,
+          including a FAILED line, names the reason directly — the previous
+          version of this task could only say "enabled" whether or not it was.
+      when: "'enabled=True' not in (da_verdict.stdout | default(''))"
 
     - name: Ensure the Ansible connection account holds Domain Admins
       ansible.windows.win_shell: |

@@ -1,0 +1,30 @@
+---
+# WHY THIS FILE EXISTS AT ALL.
+#
+# The base role ships its content as roles/group_assignment/main.yml — a full
+# PLAY (`hosts: pdc`, `tasks:`) sitting where a role's task list should be. A role
+# is loaded from roles/<name>/tasks/main.yml, so Ansible found no tasks,
+# contributed nothing, and said NOTHING. `- group_assignment` in the Create Users
+# play has always been a silent no-op.
+#
+# MEASURED 2026-09-27 on ss-pp-so: all 40 entries in DomainUsers declare `groups`,
+# and not one of those memberships had ever been applied on any range. That
+# includes simspace -> Domain Admins, which is the credential the whole deploy
+# authenticates with. It is also why ae_gpo could not edit Default Domain Policy:
+# the account was never in the group that is allowed to.
+#
+# A no-op role is worse than a missing one. A missing role is an error; this
+# produced a green task list and an unconfigured domain.
+#
+# The play wrapper is dropped — the Create Users play already targets pdc and
+# already includes this role.
+- name: Group Assignment
+  community.windows.win_domain_user:
+    name: "{{ item.name }}"
+    groups: "{{ item.groups }}"
+    state: present
+  loop: "{{ DomainUsers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - item.groups is defined
