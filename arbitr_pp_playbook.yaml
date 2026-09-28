@@ -425,6 +425,89 @@
   hosts: pdc
   gather_facts: false
   tasks:
+    - name: Ensure the Ansible connection account holds Domain Admins
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory
+        $u = "{{ ansible_user }}"
+        $acct = Get-ADUser -Filter "SamAccountName -eq '$u'" -ErrorAction SilentlyContinue
+        if (-not $acct) { Write-Output "DA_NO_ACCOUNT $u"; exit 0 }
+        $member = Get-ADGroupMember -Identity 'Domain Admins' -ErrorAction Stop |
+                  Where-Object { $_.SamAccountName -eq $u }
+        if ($member) { Write-Output "DA_ALREADY $u"; exit 0 }
+        Add-ADGroupMember -Identity 'Domain Admins' -Members $acct -ErrorAction Stop
+        Write-Output "DA_ADDED $u"
+      register: da_grant
+      changed_when: "'DA_ADDED' in da_grant.stdout"
+      # AD can still be settling in the first moments after promotion.
+      until: da_grant is succeeded
+      retries: 6
+      delay: 15
+
+    # DA_NO_ACCOUNT is deliberately not fatal. Where ansible_user is `simspace`,
+    # `Create Users` creates it WITH Domain Admins a play or two later, so a
+    # missing account here is not a problem -- but it must be visible, because if
+    # the account never appears the GPO plays fail much later for a reason this
+    # task already knew.
+    - name: Report the grant
+      ansible.builtin.debug:
+        msg: "DOMAIN_ADMIN_GRANT {{ da_grant.stdout | default('(no output)') | trim }}"
+
+    # Group membership is stamped into the access token at logon, so the session
+    # that performed the grant is not itself elevated by it. Force the next play
+    # to authenticate again rather than reuse a token that predates the change.
+    - name: Reset the connection so the new membership lands in the token
+      ansible.builtin.meta: reset_connection
+
+    # RELAX THE DOMAIN PASSWORD POLICY BEFORE SETTING ANY PASSWORD.
+    #
+    # A brand-new domain enforces complexity and a 7-character minimum. The
+    # accounts this deploy uses do not meet that — which is why the range's own
+    # roles turn complexity off. MEASURED 2026-09-28 on a FRESH ss-pp-so:
+    #
+    #   DOMAIN_ADMIN FAILED The password does not meet the length, complexity,
+    #   or history requirement of the domain.
+    #
+    # It had never appeared before because every earlier run was against a range
+    # where a PREVIOUS deploy had already relaxed the policy. On a fresh domain
+    # the relaxation has not happened yet.
+    #
+    # The only live task that relaxes it is in `ae_gpo`, eleven plays later
+    # (play 26 vs play 15). Waiting for it is not an option: nothing can
+    # authenticate until the account this play fixes is usable. So the policy is
+    # relaxed here, using the same call ae_gpo and set_gpo use, and ae_gpo then
+    # finds it already done.
+    #
+    # MinPasswordLength goes with it. The Windows error names length, complexity
+    # AND history in one string, so it cannot say which applied, and the password
+    # is vaulted — it cannot be inspected to find out. Relaxing both closes the
+    # two this play can control rather than guessing and spending another cycle.
+    # History and minimum age are handled by -Reset above, which bypasses them
+    # for a caller holding Domain Admins — which, after the grant above, it does.
+    #
+    # This is not a weakening of the range: these are lab credentials, ae_gpo
+    # disables complexity minutes later regardless, and the deploy cannot run at
+    # all without it.
+    - name: Relax the domain password policy so the deploy's passwords can be set
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory
+        $p = Get-ADDefaultDomainPasswordPolicy
+        Set-ADDefaultDomainPasswordPolicy -Identity (Get-ADDomain) `
+          -ComplexityEnabled $false -MinPasswordLength 1 -ErrorAction Stop
+        $a = Get-ADDefaultDomainPasswordPolicy
+        Write-Output ("PWPOLICY complexity=" + $p.ComplexityEnabled + "->" + $a.ComplexityEnabled +
+                      " minlen=" + $p.MinPasswordLength + "->" + $a.MinPasswordLength)
+      register: pw_policy
+      changed_when: >-
+        'complexity=True->False' in pw_policy.stdout or
+        ('minlen=' in pw_policy.stdout and not ('minlen=1->1' in pw_policy.stdout))
+      until: pw_policy is succeeded
+      retries: 6
+      delay: 15
+
+    - name: Report the password policy
+      ansible.builtin.debug:
+        msg: "{{ pw_policy.stdout | default('(no output)') | trim }}"
+
     # CONVERGE THE domain_admin ACCOUNT, AND PROVE IT, DO NOT REPORT THE ATTEMPT.
     #
     # The base create_users role is create-only:
@@ -525,39 +608,6 @@
           including a FAILED line, names the reason directly — the previous
           version of this task could only say "enabled" whether or not it was.
       when: "'enabled=True' not in (da_verdict.stdout | default(''))"
-
-    - name: Ensure the Ansible connection account holds Domain Admins
-      ansible.windows.win_shell: |
-        Import-Module ActiveDirectory
-        $u = "{{ ansible_user }}"
-        $acct = Get-ADUser -Filter "SamAccountName -eq '$u'" -ErrorAction SilentlyContinue
-        if (-not $acct) { Write-Output "DA_NO_ACCOUNT $u"; exit 0 }
-        $member = Get-ADGroupMember -Identity 'Domain Admins' -ErrorAction Stop |
-                  Where-Object { $_.SamAccountName -eq $u }
-        if ($member) { Write-Output "DA_ALREADY $u"; exit 0 }
-        Add-ADGroupMember -Identity 'Domain Admins' -Members $acct -ErrorAction Stop
-        Write-Output "DA_ADDED $u"
-      register: da_grant
-      changed_when: "'DA_ADDED' in da_grant.stdout"
-      # AD can still be settling in the first moments after promotion.
-      until: da_grant is succeeded
-      retries: 6
-      delay: 15
-
-    # DA_NO_ACCOUNT is deliberately not fatal. Where ansible_user is `simspace`,
-    # `Create Users` creates it WITH Domain Admins a play or two later, so a
-    # missing account here is not a problem -- but it must be visible, because if
-    # the account never appears the GPO plays fail much later for a reason this
-    # task already knew.
-    - name: Report the grant
-      ansible.builtin.debug:
-        msg: "DOMAIN_ADMIN_GRANT {{ da_grant.stdout | default('(no output)') | trim }}"
-
-    # Group membership is stamped into the access token at logon, so the session
-    # that performed the grant is not itself elevated by it. Force the next play
-    # to authenticate again rather than reuse a token that predates the change.
-    - name: Reset the connection so the new membership lands in the token
-      ansible.builtin.meta: reset_connection
   tags:
     - dcpromo
     - domain_admin_grant
