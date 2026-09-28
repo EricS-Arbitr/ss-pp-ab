@@ -471,25 +471,59 @@ summarize_failures() {
 			# and secpol cannot time out waiting for a boot. That name sends you
 			# to the wrong role, the same defect as a task name naming the wrong
 			# host. Prefixed "handler: " so the two are never confused.
+			#
+			# IGNORED ERRORS ARE NOT FAILURES. Ansible prints "...ignoring" on
+			# the line after a fatal the playbook chose to tolerate. This used to
+			# count those as failures, so every deliberate fallback appeared in
+			# the summary as something broken. Measured 2026-09-28 on
+			# airfield-stacked: dcpromo_child_heal probes four credentials in
+			# turn and the first two are EXPECTED to be rejected, yet both were
+			# reported as failures while the probe that succeeded was invisible.
+			# They are still shown, in their own section, because a tolerated
+			# error is worth seeing -- it just is not the reason a run failed.
+			function commit(bucket,   key) {
+				key = pk "\t" pt "\t" pm
+				if (bucket == "ign") {
+					if (!(key in ihosts)) { iord[++ni]=key; ihosts[key]=ph }
+					else if (index(" " ihosts[key] " ", " " ph " ")==0) ihosts[key]=ihosts[key] ", " ph
+				} else {
+					if (!(key in hosts)) { ord[++n]=key; hosts[key]=ph }
+					else if (index(" " hosts[key] " ", " " ph " ")==0) hosts[key]=hosts[key] ", " ph
+				}
+			}
+			pending && /^\.\.\.ignoring/ { commit("ign"); pending=0; next }
+			pending                      { commit("fail"); pending=0 }
 			/^TASK \[/ { t=$0; sub(/^TASK \[/,"",t); sub(/\].*$/,"",t) }
 			/^RUNNING HANDLER \[/ { t=$0; sub(/^RUNNING HANDLER \[/,"handler: ",t); sub(/\].*$/,"",t) }
 			/^fatal:|^failed:/ {
-				h=$0; sub(/^[a-z]+: \[/,"",h); sub(/ *->.*/,"",h); sub(/\].*/,"",h)
-				k=(index($0,"UNREACHABLE")>0)?"UNREACHABLE":"FAILED"
-				m=""
-				if (match($0, /"msg": "[^"]*/)) m=substr($0, RSTART+8, RLENGTH-8)
-				key=k "\t" t "\t" substr(m,1,160)
-				if (!(key in hosts)) { ord[++n]=key; hosts[key]=h }
-				else if (index(" " hosts[key] " ", " " h " ")==0) hosts[key]=hosts[key] ", " h
+				ph=$0; sub(/^[a-z]+: \[/,"",ph); sub(/ *->.*/,"",ph); sub(/\].*/,"",ph)
+				pk=(index($0,"UNREACHABLE")>0)?"UNREACHABLE":"FAILED"
+				pm=""
+				if (match($0, /"msg": "[^"]*/)) pm=substr($0, RSTART+8, RLENGTH-8)
+				pm=substr(pm,1,160)
+				pt=t
+				pending=1
+				next
 			}
 			END {
-				if (n==0) exit
+				if (pending) commit("fail")
+				if (n==0 && ni==0) exit
 				printf "\n  --- attempt %s ---\n", att
 				for (i=1;i<=n;i++) {
 					split(ord[i], p, "\t")
 					printf "  [%s] %s\n", p[1], p[2]
 					printf "        hosts: %s\n", hosts[ord[i]]
 					if (p[3] != "") printf "        msg  : %s\n", p[3]
+				}
+				if (n==0) printf "  (no failures — only tolerated errors below)\n"
+				if (ni>0) {
+					printf "\n  --- attempt %s: tolerated (ignored) errors, NOT why it failed ---\n", att
+					for (i=1;i<=ni;i++) {
+						split(iord[i], p, "\t")
+						printf "  [ignored %s] %s\n", p[1], p[2]
+						printf "        hosts: %s\n", ihosts[iord[i]]
+						if (p[3] != "") printf "        msg  : %s\n", p[3]
+					}
 				}
 			}' "$f"
 	done
