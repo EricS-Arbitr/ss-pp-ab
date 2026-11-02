@@ -1,8 +1,8 @@
 ansible_connection: ssh
 ansible_user: simspace
-ansible_ssh_pass: simspace1
+ansible_ssh_pass: "{{ vault_linux_password }}"
 ansible_become_method: sudo
-ansible_become_pass: simspace1
+ansible_become_pass: "{{ vault_linux_password }}"
 staging_dir_linux: "/var/tmp"
 cert_dir_linux: "/usr/local/share/ca-certificates"
 ansible_installers: "/var/share/installers/"

@@ -2,9 +2,8 @@
 # pfsensible.core modules drive pfSense via SSH + PHP, so we use plain SSH
 # (not winrm). pfSense 2.8.1 ships Python at /usr/local/bin/python3.11.
 #
-# Custom SimSpace pfSense image (2.8.1) provisions two interactive users:
-#   admin:simspace1
-#   simspace:simspace1
+# Custom SimSpace pfSense image (2.8.1) provisions two interactive users,
+# `admin` and `simspace` (password vaulted as vault_pfsense_password).
 # We use `admin` because pfsensible.core writes /cf/conf/config.xml directly
 # (no sudo), and only admin has write access on that root-owned file. With
 # `simspace` the module fails on the rename-then-copy fallback that the
@@ -12,7 +11,7 @@
 # (which they always are on pfSense): `PermissionError: '/cf/conf/config.xml'`.
 ansible_connection: ssh
 ansible_user: admin
-ansible_ssh_pass: simspace1
+ansible_ssh_pass: "{{ vault_pfsense_password }}"
 ansible_become: false
 ansible_python_interpreter: /usr/local/bin/python3.11
 

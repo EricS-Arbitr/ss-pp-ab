@@ -13,5 +13,5 @@
 # init_wait_timeout (900s) before saying so -- with any_errors_fatal: true on
 # that play, one such host holds all 45.
 ansible_user: xadmin
-ansible_password: "ConfigingInTheNameOf1!"
+ansible_password: "{{ vault_windows_xadmin_password }}"
 ansible_become_user: xadmin

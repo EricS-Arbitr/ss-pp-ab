@@ -13,4 +13,4 @@ network_interfaces:
     dns:
       - "172.16.2.7"
 logon_user: "michelle.blanchard"
-logon_user_password: "Simspace1!Simspace1!"
+logon_user_password: "{{ vault_domain_user_password }}"

@@ -268,7 +268,7 @@ fi
 # so a MISSING vault made the whole test false and it passed on every run,
 # having never once fired. An explicit flag cannot fail that way -- set it to
 # true and every check below becomes fatal again.
-REPO_USES_VAULT="${REPO_USES_VAULT:-false}"
+REPO_USES_VAULT="${REPO_USES_VAULT:-true}"
 
 if [ "$REPO_USES_VAULT" = "true" ]; then
 	VAULT_FILE="group_vars/all/vault.yml"

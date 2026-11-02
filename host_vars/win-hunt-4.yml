@@ -24,4 +24,4 @@ network_interfaces:
 # been a silent no-op on the hunt boxes. DefaultDomainName resolves from
 # `domain_name`, which these hosts now get via [voltgrid].
 logon_user: "helena.vogt"
-logon_user_password: "Simspace1!Simspace1!"
+logon_user_password: "{{ vault_domain_user_password }}"
